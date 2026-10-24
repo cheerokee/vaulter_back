@@ -1,31 +1,24 @@
-# syntax=docker/dockerfile:1
+FROM node:24-slim
 
-FROM node:24-alpine AS base
-WORKDIR /app
-RUN chown node:node /app
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    git \
+    ca-certificates \
+    curl \
+    procps \
+    bash \
+    nano \
+    sudo && \
+    rm -rf /var/lib/apt/lists/* && \
+    npm install -g @nestjs/cli && \
+    npm cache clean --force
+
+RUN echo "node ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers
+
 USER node
 
-# Dependências completas (dev + prod)
-FROM base AS deps
-COPY --chown=node:node package.json package-lock.json ./
-RUN npm ci
+WORKDIR /home/node/app
 
-# Desenvolvimento: código montado via volume, API em modo watch
-FROM deps AS development
-ENV NODE_ENV=development
-EXPOSE 3000
-CMD ["npm", "run", "start:dev"]
+# Histórico do bash persiste no host (pasta montada)
+RUN echo 'HISTFILE=/home/node/app/.docker/bash/.bash_history' >> ~/.bashrc
 
-# Build da aplicação
-FROM deps AS build
-COPY --chown=node:node . .
-RUN npm run build
-
-# Produção: só dependências de runtime + dist
-FROM base AS production
-ENV NODE_ENV=production
-COPY --chown=node:node package.json package-lock.json ./
-RUN npm ci --omit=dev && npm cache clean --force
-COPY --chown=node:node --from=build /app/dist ./dist
-EXPOSE 3000
-CMD ["node", "dist/main.js"]
+CMD [ "tail", "-f", "/dev/null" ]

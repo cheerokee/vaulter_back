@@ -48,3 +48,5 @@ coverage/
 Thumbs.db
 
 CLAUDE.local.md
+# Docker (histórico do bash do container)
+.docker/bash/

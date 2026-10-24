@@ -14,7 +14,7 @@ API backend do Vaulter, em **NestJS 12** + **TypeScript 6** (modo `strict`), rod
 ## Comandos
 ```bash
 npm install          # dependências
-npm run start:dev    # API em modo watch (porta: env PORT, padrão 3000)
+npm run start:dev    # API em modo watch — rodar DENTRO do container (veja Docker)
 npm run build        # compila para dist/
 npm test             # testes unitários (Vitest)
 npm run test:e2e     # testes e2e (Vitest + supertest, config em vitest.config.e2e.ts)
@@ -24,19 +24,25 @@ npm run format       # Prettier em src/ e test/
 Antes de dizer que algo está pronto: `npm run build && npm test && npm run lint` precisam passar.
 
 ## Docker
-O ambiente de desenvolvimento roda com **Docker Engine + Compose** (`docker-compose.yaml`).
+O ambiente de desenvolvimento roda com **Docker Engine + Compose** (`docker-compose.yaml`), no mesmo modelo
+do `salte/back`: o container fica **sempre de pé, ocioso**, e a API é iniciada manualmente de dentro dele.
 ```bash
-cp .env.example .env     # primeira vez; ajuste API_PORT se a 3000 estiver ocupada
-docker compose up -d     # sobe a API em modo watch (código montado como volume)
-docker compose logs -f api
-docker compose down
+docker compose up -d                 # sobe o container (vaulter-back-app); ele não inicia a API
+docker exec -it vaulter-back-app bash
+npm run start:dev                    # dentro do container: API em live reload
 ```
-- O `Dockerfile` é multi-stage: `development` (usado pelo compose) e `production` (`dist/` + deps de runtime).
+- **Primeira subida:** `.docker/start.sh` cria o `.env` a partir do `.env.example` (se não existir), roda
+  `npm install` e deixa o container ocioso (`tail -f /dev/null`). Se a porta 3000 do host estiver ocupada,
+  ajuste `API_PORT` no `.env` e rode `docker compose up -d` de novo.
+- **A pasta inteira é montada** em `/home/node/app`, inclusive `node_modules`: `npm install` pode ser rodado
+  no host ou no container, e os dois enxergam o mesmo resultado. Por isso a imagem é `node:24-slim` (glibc,
+  igual ao host) — não trocar por alpine, senão os binários nativos (oxlint, vite) quebram de um lado.
+- O usuário do container é `node` (uid 1000) e tem `sudo` sem senha. Histórico do bash fica em
+  `.docker/bash/` (fora do git).
 - `API_PORT` define só a porta no **host**; dentro do container a API sempre escuta na 3000.
 - O compose tem `name: vaulter-back` fixo — não remover: sem ele o projeto se chamaria `back` (nome da pasta)
   e colidiria com outros projetos compose de mesmo nome na máquina.
-- `node_modules` fica num volume nomeado; depois de mudar dependências, recrie-o:
-  `docker compose down -v && docker compose up -d --build`.
+- Não há imagem de produção ainda — o `Dockerfile` é só para desenvolvimento.
 - Novo serviço (banco, cache, fila) entra no `docker-compose.yaml`, com suas variáveis no `.env.example`.
 
 ## Stack e convenções
