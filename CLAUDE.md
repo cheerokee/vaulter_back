@@ -17,11 +17,13 @@ npm install          # dependências
 npm run start:dev    # API em modo watch — rodar DENTRO do container (veja Docker)
 npm run build        # compila para dist/
 npm test             # testes unitários (Vitest)
-npm run test:e2e     # testes e2e (Vitest + supertest, config em vitest.config.e2e.ts)
+npm run test:e2e     # testes e2e (Vitest + supertest) — sobem o AppModule, precisam do banco
+npm run migration:show                 # status das migrations (veja Banco de dados)
 npm run lint         # oxlint com checagem de tipos
 npm run format       # Prettier em src/ e test/
 ```
-Antes de dizer que algo está pronto: `npm run build && npm test && npm run lint` precisam passar.
+Antes de dizer que algo está pronto: `npm run build && npm test && npm run lint` precisam passar
+(e `npm run test:e2e`, dentro do container, quando mexer em módulos/banco).
 
 ## Docker
 O ambiente de desenvolvimento roda com **Docker Engine + Compose** (`docker-compose.yaml`), no mesmo modelo
@@ -69,6 +71,28 @@ npm run start:dev                    # dentro do container: API em live reload
 - **Formatação:** Prettier com aspas simples e trailing comma (`.prettierrc`).
 - **Estrutura:** organizar por módulo de domínio do Nest (`src/<modulo>/` com module, controller, service e
   specs). Use o CLI para gerar: `npx nest g resource <nome>`.
+
+## Banco de dados (TypeORM + migrations)
+- **TypeORM 1.x** + `@nestjs/typeorm`, driver `pg`. Config de conexão em `src/database/typeorm.options.ts`,
+  compartilhada entre a aplicação (`DatabaseModule`) e o CLI (`src/database/data-source.ts`). Variáveis do
+  `.env` (`DB_*`) são carregadas pelo `ConfigModule` (app) e por `process.loadEnvFile` (CLI).
+- **`synchronize` é sempre `false`** — o schema só muda por migration, nunca ligar sincronização automática.
+- **Entidades:** arquivos `*.entity.ts` dentro do módulo de domínio, registrados com
+  `TypeOrmModule.forFeature([...])` no módulo (a app usa `autoLoadEntities`). O CLI acha as entidades pelo
+  glob `**/*.entity.js`, então o sufixo `.entity.ts` é obrigatório.
+- **Migrations** ficam em `src/database/migrations/` e são versionadas. Rodar **dentro do container**
+  (o host `db` só resolve lá):
+  ```bash
+  npm run migration:generate -- NomeDaMudanca   # gera a partir da diferença entidades × banco
+  npm run migration:create -- NomeDaMudanca     # cria migration vazia (SQL manual, ex.: índices pgvector)
+  npm run migration:run                         # aplica pendentes
+  npm run migration:revert                      # desfaz a última
+  npm run migration:show                        # lista e status
+  ```
+- O CLI roda sobre código **compilado**: os scripts compilam `src/` para `dist/typeorm/` antes de chamar o
+  `typeorm` (o projeto é ESM e as entidades dependem de `emitDecoratorMetadata`, que só o `tsc` gera).
+  Migrations geradas já saem formatadas pelo Prettier.
+- Sempre revisar o SQL gerado antes de rodar, e escrever o `down` de migrations manuais.
 
 ## Git
 - **Todo o desenvolvimento acontece na `develop`** (branch padrão). Não criar branches de feature nem trocar
