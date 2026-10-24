@@ -23,6 +23,22 @@ npm run format       # Prettier em src/ e test/
 ```
 Antes de dizer que algo está pronto: `npm run build && npm test && npm run lint` precisam passar.
 
+## Docker
+O ambiente de desenvolvimento roda com **Docker Engine + Compose** (`docker-compose.yaml`).
+```bash
+cp .env.example .env     # primeira vez; ajuste API_PORT se a 3000 estiver ocupada
+docker compose up -d     # sobe a API em modo watch (código montado como volume)
+docker compose logs -f api
+docker compose down
+```
+- O `Dockerfile` é multi-stage: `development` (usado pelo compose) e `production` (`dist/` + deps de runtime).
+- `API_PORT` define só a porta no **host**; dentro do container a API sempre escuta na 3000.
+- O compose tem `name: vaulter-back` fixo — não remover: sem ele o projeto se chamaria `back` (nome da pasta)
+  e colidiria com outros projetos compose de mesmo nome na máquina.
+- `node_modules` fica num volume nomeado; depois de mudar dependências, recrie-o:
+  `docker compose down -v && docker compose up -d --build`.
+- Novo serviço (banco, cache, fila) entra no `docker-compose.yaml`, com suas variáveis no `.env.example`.
+
 ## Stack e convenções
 - **ESM puro** (`"type": "module"`, `module: nodenext`): imports relativos levam a extensão `.js`, mesmo
   apontando para arquivos `.ts` — ex.: `import { AppModule } from './app.module.js'`.

@@ -29,7 +29,9 @@
 |  |  |  |
 
 ## Execução local
-- Porta da API (`PORT`): <!-- padrão 3000 -->
+- Docker / Compose: <!-- saída de `docker --version` e `docker compose version` -->
+- Porta da API no host (`API_PORT` no `.env`): <!-- padrão 3000; mude se estiver ocupada -->
+- Portas já ocupadas por outros projetos na máquina: <!-- evita conflito ao adicionar serviços -->
 - Serviços que precisam estar rodando (banco, filas, etc.): <!-- preencher quando existirem -->
 - Onde fica o `.env` e de onde copiar: <!-- nunca colar valores secretos aqui -->
 
