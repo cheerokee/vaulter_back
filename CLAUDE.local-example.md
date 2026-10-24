@@ -31,6 +31,8 @@
 ## Execução local
 - Docker / Compose: <!-- saída de `docker --version` e `docker compose version` -->
 - Porta da API no host (`API_PORT` no `.env`): <!-- padrão 3000; mude se estiver ocupada -->
+- Porta do Postgres no host (`DB_EXTERNAL_PORT` no `.env`): <!-- padrão 5432 -->
+- Porta do pgAdmin no host (`PGADMIN_PORT` no `.env`): <!-- padrão 8080 -->
 - Portas já ocupadas por outros projetos na máquina: <!-- evita conflito ao adicionar serviços -->
 - Serviços que precisam estar rodando (banco, filas, etc.): <!-- preencher quando existirem -->
 - Onde fica o `.env` e de onde copiar: <!-- nunca colar valores secretos aqui -->

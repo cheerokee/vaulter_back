@@ -48,5 +48,6 @@ coverage/
 Thumbs.db
 
 CLAUDE.local.md
-# Docker (histórico do bash do container)
+# Docker (histórico do bash e dados do Postgres)
 .docker/bash/
+.docker/pgdata/

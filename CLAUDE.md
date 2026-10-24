@@ -42,6 +42,20 @@ npm run start:dev                    # dentro do container: API em live reload
 - `API_PORT` define só a porta no **host**; dentro do container a API sempre escuta na 3000.
 - O compose tem `name: vaulter-back` fixo — não remover: sem ele o projeto se chamaria `back` (nome da pasta)
   e colidiria com outros projetos compose de mesmo nome na máquina.
+- **Serviços do compose:**
+  | Serviço | Container | Do app (dentro do Docker) | Do host |
+  |---|---|---|---|
+  | `app` | `vaulter-back-app` | — | `localhost:${API_PORT}` |
+  | `db` (PostgreSQL 18 + pgvector) | `vaulter-back-db` | `db:5432` | `localhost:${DB_EXTERNAL_PORT}` |
+  | `pgadmin` | `vaulter-back-pgadmin` | — | `localhost:${PGADMIN_PORT}` |
+- **Banco único:** o Postgres guarda tanto os dados relacionais quanto os embeddings de RAG (extensão
+  **pgvector**, já habilitada na criação do banco por `.docker/postgres/init/01-extensions.sql`). Não criar
+  outro banco para vetores sem uma razão forte.
+- Credenciais e portas vêm do `.env` (`DB_*`, `PGADMIN_PORT`); os valores padrão estão no `.env.example`.
+- O pgAdmin roda em modo desktop (sem login) e já abre com o servidor `vaulter-back` cadastrado
+  (`.docker/pgadmin/servers.json`); só pede a senha do banco (`DB_PASSWORD`) na primeira conexão.
+- Os dados do Postgres ficam em `.docker/pgdata/` (fora do git e do contexto de build). Para zerar o banco
+  (e rodar de novo os scripts de init): `docker compose down && sudo rm -rf .docker/pgdata && docker compose up -d`.
 - Não há imagem de produção ainda — o `Dockerfile` é só para desenvolvimento.
 - Novo serviço (banco, cache, fila) entra no `docker-compose.yaml`, com suas variáveis no `.env.example`.
 

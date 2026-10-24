@@ -12,3 +12,40 @@ services:
       - .:/home/node/app
     ports:
       - "${API_PORT:-3000}:3000"
+    depends_on:
+      - db
+
+  db:
+    image: pgvector/pgvector:pg18
+    container_name: vaulter-back-db
+    restart: always
+    environment:
+      POSTGRES_DB: ${DB_DATABASE:-vaulter}
+      POSTGRES_USER: ${DB_USERNAME:-vaulter}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-vaulter}
+    volumes:
+      - ./.docker/pgdata:/var/lib/postgresql
+      - ./.docker/postgres/init:/docker-entrypoint-initdb.d:ro
+    ports:
+      - "${DB_EXTERNAL_PORT:-5432}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  pgadmin:
+    image: dpage/pgadmin4:9
+    container_name: vaulter-back-pgadmin
+    restart: always
+    environment: # modo desktop: abre sem login no pgAdmin; servidor "db" já cadastrado
+      PGADMIN_DEFAULT_EMAIL: dev@vaulter.com
+      PGADMIN_DEFAULT_PASSWORD: vaulter
+      PGADMIN_CONFIG_SERVER_MODE: "False"
+      PGADMIN_CONFIG_MASTER_PASSWORD_REQUIRED: "False"
+    volumes:
+      - ./.docker/pgadmin/servers.json:/pgadmin4/servers.json:ro
+    ports:
+      - "${PGADMIN_PORT:-8080}:80"
+    depends_on:
+      - db
