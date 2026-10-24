@@ -75,15 +75,51 @@ npm run start:dev                    # dentro do container: API em live reload
 - **Lint:** oxlint (não ESLint), regras em `.oxlintrc.json`. `no-floating-promises` é erro — sempre `await`
   ou trate a promise.
 - **Formatação:** Prettier com aspas simples e trailing comma (`.prettierrc`).
-- **Estrutura:** organizar por módulo de domínio do Nest (`src/<modulo>/` com module, controller, service e
-  specs). Use o CLI para gerar: `npx nest g resource <nome>`.
+- **Estrutura:** veja [Arquitetura](#arquitetura).
+
+## Arquitetura
+Monólito modular: **uma aplicação Nest só**, um módulo por contexto (`identity`, `organizations`, `spaces`,
+`hubs`, `storage`...), e **dentro de cada módulo** as camadas `domain`, `application` e `infra`. Inspirado no
+`salte/back`, **sem** a separação em pacote `@core` + `nestjs` (build duplo, aliases e barrels gerados,
+`providers.ts` com `useFactory`) — não reintroduzir.
+```
+src/
+  shared/                          # base comum: Entity, erros de domínio, paginação
+  spaces/
+    domain/                        # puro: sem @nestjs/*, sem typeorm, sem nada de infra/
+      space.ts                     #   entidade/agregado com as regras
+      space.repository.ts          #   contrato: classe abstrata (serve de token de DI)
+    application/
+      add-member.use-case.ts       # uma classe por caso de uso, @Injectable()
+      dto/
+    infra/
+      db/space.entity.ts           # entidade TypeORM (sufixo .entity.ts: o CLI acha por esse glob)
+      db/space.mapper.ts           # domínio <-> TypeORM
+      db/space.typeorm-repository.ts
+      http/spaces.controller.ts
+    spaces.module.ts
+```
+- **Domínio é puro.** `domain/` não importa `@nestjs/*`, `typeorm` nem `infra/`. Entidade de domínio e entidade
+  TypeORM são classes diferentes, ligadas por um mapper.
+- **Aplicação pode usar `@Injectable()`.** Casos de uso dependem do contrato do repositório (classe abstrata),
+  e o módulo liga a implementação: `{ provide: SpaceRepository, useClass: SpaceTypeormRepository }`.
+  Sem tokens em string e sem `useFactory` para casos de uso.
+- **Fronteira entre módulos:** um módulo nunca importa a `infra/` de outro nem acessa o repositório dele; usa
+  o que o outro exporta da `application/`.
+- **Imports relativos** com `.js` (ESM), sem aliases nem barrels gerados.
+- **Testes:** unitários no domínio e nos casos de uso (`*.spec.ts`, com o contrato do repositório simulado
+  pelo `vi`); integração contra o Postgres do compose. Não criar repositório em memória para cada entidade.
+- **Sem cerimônia onde não há regra:** módulos de cadastro simples mantêm a mesma estrutura, com domínio fino.
+- O modelo de dados e as regras de negócio vêm da spec
+  `valter-valt-ai/docs/superpowers/specs/2026-10-24-organizacoes-espacos-e-nuvem-design.md` e do DER em
+  `docs/der_model.sql`.
 
 ## Banco de dados (TypeORM + migrations)
 - **TypeORM 1.x** + `@nestjs/typeorm`, driver `pg`. Config de conexão em `src/database/typeorm.options.ts`,
   compartilhada entre a aplicação (`DatabaseModule`) e o CLI (`src/database/data-source.ts`). Variáveis do
   `.env` (`DB_*`) são carregadas pelo `ConfigModule` (app) e por `process.loadEnvFile` (CLI).
 - **`synchronize` é sempre `false`** — o schema só muda por migration, nunca ligar sincronização automática.
-- **Entidades:** arquivos `*.entity.ts` dentro do módulo de domínio, registrados com
+- **Entidades:** arquivos `*.entity.ts` em `infra/db/` do módulo (só a entidade TypeORM usa esse sufixo), registrados com
   `TypeOrmModule.forFeature([...])` no módulo (a app usa `autoLoadEntities`). O CLI acha as entidades pelo
   glob `**/*.entity.js`, então o sufixo `.entity.ts` é obrigatório.
 - **Migrations** ficam em `src/database/migrations/` e são versionadas. Rodar **dentro do container**
