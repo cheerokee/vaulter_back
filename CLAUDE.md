@@ -118,6 +118,12 @@ src/
 - **TypeORM 1.x** + `@nestjs/typeorm`, driver `pg`. Config de conexão em `src/database/typeorm.options.ts`,
   compartilhada entre a aplicação (`DatabaseModule`) e o CLI (`src/database/data-source.ts`). Variáveis do
   `.env` (`DB_*`) são carregadas pelo `ConfigModule` (app) e por `process.loadEnvFile` (CLI).
+- **Toda tabela tem `created_at`, `updated_at` e `deleted_at`**, vindos de uma entidade base (`@CreateDateColumn`,
+  `@UpdateDateColumn`, `@DeleteDateColumn`). **Offline-first:** o que o hub/app sincronizam nunca sofre
+  `DELETE` físico — excluir é `softDelete()` (lápide); tabela de ligação que volta a existir tem o
+  `deleted_at` limpo, não uma linha nova. Essas tabelas têm também `sync_version` (sequência global do
+  servidor, por trigger); o endpoint de sincronização usa `withDeleted` para mandar as lápides. Regras
+  completas no cabeçalho de `docs/der_model.sql`.
 - **`synchronize` é sempre `false`** — o schema só muda por migration, nunca ligar sincronização automática.
 - **Entidades:** arquivos `*.entity.ts` em `infra/db/` do módulo (só a entidade TypeORM usa esse sufixo), registrados com
   `TypeOrmModule.forFeature([...])` no módulo (a app usa `autoLoadEntities`). O CLI acha as entidades pelo

@@ -21,6 +21,8 @@
 -- campos pessoais e deixa só id + deleted_at.
 --
 -- Convenção: tabelas de entidade no plural; tabelas de ligação com os dois nomes no singular.
+-- Toda tabela tem created_at, updated_at e deleted_at (uma entidade base no TypeORM: @CreateDateColumn,
+-- @UpdateDateColumn, @DeleteDateColumn); sync_version só nas que o hub/app sincronizam.
 
 CREATE SCHEMA IF NOT EXISTS vaulter;
 USE vaulter;
@@ -68,6 +70,8 @@ CREATE TABLE user_platform_role (
   user_id CHAR(36) NOT NULL,
   platform_role_id CHAR(36) NOT NULL,
   created_at DATETIME NOT NULL,
+  updated_at DATETIME NULL,
+  deleted_at DATETIME NULL,
   PRIMARY KEY (user_id, platform_role_id),
   INDEX fk_user_platform_role_platform_roles_idx (platform_role_id),
   CONSTRAINT fk_user_platform_role_users FOREIGN KEY (user_id) REFERENCES users (id),
@@ -155,6 +159,8 @@ CREATE TABLE spaces (
 CREATE TABLE space_keys (
   id CHAR(36) NOT NULL,
   created_at DATETIME NOT NULL,
+  updated_at DATETIME NULL,
+  deleted_at DATETIME NULL,
   space_id CHAR(36) NOT NULL,
   version INT NOT NULL,
   recovery_wrapped_key TEXT NOT NULL COMMENT 'trancada com organizations.recovery_public_key (kit)',
@@ -169,6 +175,7 @@ CREATE TABLE space_keys (
 CREATE TABLE space_key_grants (
   id CHAR(36) NOT NULL,
   created_at DATETIME NOT NULL,
+  updated_at DATETIME NULL,
   deleted_at DATETIME NULL,
   space_key_id CHAR(36) NOT NULL,
   user_id CHAR(36) NULL,
@@ -196,6 +203,7 @@ CREATE TABLE hub_organization (
   approved_at DATETIME NULL,
   created_at DATETIME NOT NULL,
   updated_at DATETIME NULL,
+  deleted_at DATETIME NULL,
   sync_version BIGINT NOT NULL COMMENT 'versão de sincronização: sequência global do servidor, muda a cada insert/update/exclusão',
   PRIMARY KEY (hub_id, organization_id),
   INDEX fk_hub_organization_organizations_idx (organization_id),
@@ -233,6 +241,7 @@ CREATE TABLE hub_space (
 CREATE TABLE permissions (
   id CHAR(36) NOT NULL,
   created_at DATETIME NOT NULL COMMENT 'permissão nova não entra sozinha em papel próprio: o app compara com roles.permissions_reviewed_at',
+  updated_at DATETIME NULL,
   deleted_at DATETIME NULL,
   `key` VARCHAR(100) NOT NULL COMMENT 'ex.: memory.read, memory.write, chat.live, camera.view, nodes.control, mesh.dispatch',
   scope_type ENUM('organization', 'space', 'hub') NOT NULL,
@@ -248,6 +257,8 @@ CREATE TABLE permissions (
 CREATE TABLE permission_dependency (
   permission_id CHAR(36) NOT NULL,
   requires_permission_id CHAR(36) NOT NULL,
+  created_at DATETIME NOT NULL,
+  updated_at DATETIME NULL,
   deleted_at DATETIME NULL,
   sync_version BIGINT NOT NULL COMMENT 'versão de sincronização: sequência global do servidor, muda a cada insert/update/exclusão',
   PRIMARY KEY (permission_id, requires_permission_id),
@@ -283,6 +294,8 @@ CREATE TABLE roles (
 CREATE TABLE role_permission (
   role_id CHAR(36) NOT NULL,
   permission_id CHAR(36) NOT NULL,
+  created_at DATETIME NOT NULL,
+  updated_at DATETIME NULL,
   deleted_at DATETIME NULL,
   sync_version BIGINT NOT NULL COMMENT 'versão de sincronização: sequência global do servidor, muda a cada insert/update/exclusão',
   PRIMARY KEY (role_id, permission_id),
@@ -300,6 +313,7 @@ CREATE TABLE role_permission (
 CREATE TABLE role_assignments (
   id CHAR(36) NOT NULL,
   created_at DATETIME NOT NULL,
+  updated_at DATETIME NULL,
   deleted_at DATETIME NULL,
   role_id CHAR(36) NOT NULL,
   user_id CHAR(36) NULL,
