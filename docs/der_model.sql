@@ -17,7 +17,7 @@ CREATE SCHEMA IF NOT EXISTS vaulter;
 USE vaulter;
 
 -- ---------------------------------------------------------------------------------------------------
--- Usuários e papéis da plataforma (ex.: equipe Vaulter)
+-- Usuários e papéis da plataforma
 -- ---------------------------------------------------------------------------------------------------
 
 CREATE TABLE users (
@@ -40,7 +40,9 @@ CREATE TABLE users (
   UNIQUE INDEX uq_users_email (email)
 );
 
-CREATE TABLE roles (
+-- Papéis da plataforma (equipe Vaulter: suporte, financeiro...). Separados dos papéis de cliente (roles), que
+-- têm escopo de organização/espaço/hub e chegam ao hub; estes ficam só no backend.
+CREATE TABLE platform_roles (
   id CHAR(36) NOT NULL,
   created_at DATETIME NOT NULL,
   updated_at DATETIME NULL,
@@ -48,17 +50,17 @@ CREATE TABLE roles (
   `key` VARCHAR(50) NOT NULL COMMENT 'código fixo usado pelo backend (ex.: support); name é só exibição',
   name VARCHAR(255) NOT NULL,
   PRIMARY KEY (id),
-  UNIQUE INDEX uq_roles_key (`key`)
+  UNIQUE INDEX uq_platform_roles_key (`key`)
 );
 
-CREATE TABLE user_role (
+CREATE TABLE user_platform_role (
   user_id CHAR(36) NOT NULL,
-  role_id CHAR(36) NOT NULL,
+  platform_role_id CHAR(36) NOT NULL,
   created_at DATETIME NOT NULL,
-  PRIMARY KEY (user_id, role_id),
-  INDEX fk_user_role_roles_idx (role_id),
-  CONSTRAINT fk_user_role_users FOREIGN KEY (user_id) REFERENCES users (id),
-  CONSTRAINT fk_user_role_roles FOREIGN KEY (role_id) REFERENCES roles (id)
+  PRIMARY KEY (user_id, platform_role_id),
+  INDEX fk_user_platform_role_platform_roles_idx (platform_role_id),
+  CONSTRAINT fk_user_platform_role_users FOREIGN KEY (user_id) REFERENCES users (id),
+  CONSTRAINT fk_user_platform_role_platform_roles FOREIGN KEY (platform_role_id) REFERENCES platform_roles (id)
 );
 
 -- ---------------------------------------------------------------------------------------------------
@@ -80,30 +82,17 @@ CREATE TABLE organizations (
   PRIMARY KEY (id)
 );
 
-CREATE TABLE organization_roles (
-  id CHAR(36) NOT NULL,
-  created_at DATETIME NOT NULL,
-  updated_at DATETIME NULL,
-  deleted_at DATETIME NULL,
-  `key` VARCHAR(50) NOT NULL COMMENT 'admin | member',
-  name VARCHAR(255) NOT NULL,
-  PRIMARY KEY (id),
-  UNIQUE INDEX uq_organization_roles_key (`key`)
-);
-
+-- Ser membro da organização. O que o membro pode fazer vem de role_assignments (escopo organização).
 CREATE TABLE user_organization (
   organization_id CHAR(36) NOT NULL,
   user_id CHAR(36) NOT NULL,
-  role_id CHAR(36) NOT NULL,
   created_at DATETIME NOT NULL,
   updated_at DATETIME NULL,
   deleted_at DATETIME NULL COMMENT 'saiu da organização; os dados ficam nos espaços',
   PRIMARY KEY (organization_id, user_id),
   INDEX fk_user_organization_users_idx (user_id),
-  INDEX fk_user_organization_organization_roles_idx (role_id),
   CONSTRAINT fk_user_organization_organizations FOREIGN KEY (organization_id) REFERENCES organizations (id),
-  CONSTRAINT fk_user_organization_users FOREIGN KEY (user_id) REFERENCES users (id),
-  CONSTRAINT fk_user_organization_organization_roles FOREIGN KEY (role_id) REFERENCES organization_roles (id)
+  CONSTRAINT fk_user_organization_users FOREIGN KEY (user_id) REFERENCES users (id)
 );
 
 -- ---------------------------------------------------------------------------------------------------
@@ -141,21 +130,6 @@ CREATE TABLE spaces (
   PRIMARY KEY (id),
   INDEX fk_spaces_organizations_idx (organization_id),
   CONSTRAINT fk_spaces_organizations FOREIGN KEY (organization_id) REFERENCES organizations (id)
-);
-
--- Membro do espaço: quem enxerga o conteúdo. O admin da organização só entra se alguém de dentro o adicionar.
-CREATE TABLE space_user (
-  space_id CHAR(36) NOT NULL,
-  user_id CHAR(36) NOT NULL,
-  added_by_user_id CHAR(36) NOT NULL,
-  created_at DATETIME NOT NULL,
-  deleted_at DATETIME NULL,
-  PRIMARY KEY (space_id, user_id),
-  INDEX fk_space_user_users_idx (user_id),
-  INDEX fk_space_user_added_by_idx (added_by_user_id),
-  CONSTRAINT fk_space_user_spaces FOREIGN KEY (space_id) REFERENCES spaces (id),
-  CONSTRAINT fk_space_user_users FOREIGN KEY (user_id) REFERENCES users (id),
-  CONSTRAINT fk_space_user_added_by FOREIGN KEY (added_by_user_id) REFERENCES users (id)
 );
 
 -- Uma linha por versão da chave do espaço (troca quando alguém sai). A chave em si nunca fica aberta aqui.
@@ -208,15 +182,106 @@ CREATE TABLE hub_organization (
   CONSTRAINT fk_hub_organization_approved_by FOREIGN KEY (approved_by_user_id) REFERENCES users (id)
 );
 
--- Quais espaços estão num hub, e se ficam abertos na sala (respondem por voz sem login).
+-- Quais espaços estão num hub. Quem usa o quê nele (inclusive a "sala", sem login) vem de role_assignments.
 CREATE TABLE hub_space (
   hub_id CHAR(36) NOT NULL,
   space_id CHAR(36) NOT NULL,
-  open_in_room TINYINT NOT NULL DEFAULT 0,
   created_at DATETIME NOT NULL,
   updated_at DATETIME NULL,
   PRIMARY KEY (hub_id, space_id),
   INDEX fk_hub_space_spaces_idx (space_id),
   CONSTRAINT fk_hub_space_hubs FOREIGN KEY (hub_id) REFERENCES hubs (id),
   CONSTRAINT fk_hub_space_spaces FOREIGN KEY (space_id) REFERENCES spaces (id)
+);
+
+-- ---------------------------------------------------------------------------------------------------
+-- Permissões: RBAC com escopo (organização, espaço, hub)
+-- Catálogo de permissões fixo (só o Vaulter cria, cada uma é uma checagem no código). Papéis de fábrica
+-- (organization_id nulo, imutáveis) para o modo simples; papéis próprios da organização (cópias editáveis)
+-- para o modo avançado. O hub guarda uma cópia para checar offline.
+-- ---------------------------------------------------------------------------------------------------
+
+CREATE TABLE permissions (
+  id CHAR(36) NOT NULL,
+  created_at DATETIME NOT NULL COMMENT 'permissão nova não entra sozinha em papel próprio: o app compara com roles.permissions_reviewed_at',
+  `key` VARCHAR(100) NOT NULL COMMENT 'ex.: memory.read, memory.write, chat.live, camera.view, nodes.control, mesh.dispatch',
+  scope_type ENUM('organization', 'space', 'hub') NOT NULL,
+  name VARCHAR(255) NOT NULL,
+  description VARCHAR(500) NULL,
+  PRIMARY KEY (id),
+  UNIQUE INDEX uq_permissions_key (`key`)
+);
+
+-- Uma permissão que exige outra (ex.: camera.live exige camera.view). O editor de papéis marca sozinho.
+CREATE TABLE permission_dependency (
+  permission_id CHAR(36) NOT NULL,
+  requires_permission_id CHAR(36) NOT NULL,
+  PRIMARY KEY (permission_id, requires_permission_id),
+  INDEX fk_permission_dependency_requires_idx (requires_permission_id),
+  CONSTRAINT fk_permission_dependency_permissions FOREIGN KEY (permission_id) REFERENCES permissions (id),
+  CONSTRAINT fk_permission_dependency_requires FOREIGN KEY (requires_permission_id) REFERENCES permissions (id)
+);
+
+-- Papéis de cliente. organization_id nulo = papel de fábrica (key preenchida, imutável, unique por key no
+-- Postgres com índice parcial WHERE organization_id IS NULL). Preenchido = papel próprio da organização.
+CREATE TABLE roles (
+  id CHAR(36) NOT NULL,
+  created_at DATETIME NOT NULL,
+  updated_at DATETIME NULL,
+  deleted_at DATETIME NULL,
+  organization_id CHAR(36) NULL,
+  scope_type ENUM('organization', 'space', 'hub') NOT NULL,
+  `key` VARCHAR(50) NULL COMMENT 'só papéis de fábrica: org_admin, org_member, space_reader, space_editor, space_manager, hub_owner, hub_operator, hub_user, hub_room',
+  name VARCHAR(255) NOT NULL,
+  description VARCHAR(500) NULL COMMENT 'frase simples para a tela (ex.: "Pode ver e conversar")',
+  copied_from_role_id CHAR(36) NULL COMMENT 'papel próprio criado duplicando outro; cópia, não herança',
+  permissions_reviewed_at DATETIME NULL,
+  PRIMARY KEY (id),
+  UNIQUE INDEX uq_roles_organization_key (organization_id, `key`),
+  INDEX fk_roles_copied_from_idx (copied_from_role_id),
+  CONSTRAINT fk_roles_organizations FOREIGN KEY (organization_id) REFERENCES organizations (id),
+  CONSTRAINT fk_roles_copied_from FOREIGN KEY (copied_from_role_id) REFERENCES roles (id)
+);
+
+CREATE TABLE role_permission (
+  role_id CHAR(36) NOT NULL,
+  permission_id CHAR(36) NOT NULL,
+  PRIMARY KEY (role_id, permission_id),
+  INDEX fk_role_permission_permissions_idx (permission_id),
+  CONSTRAINT fk_role_permission_roles FOREIGN KEY (role_id) REFERENCES roles (id),
+  CONSTRAINT fk_role_permission_permissions FOREIGN KEY (permission_id) REFERENCES permissions (id)
+);
+
+-- Quem tem qual papel em qual escopo.
+-- Quem: um usuário OU a "sala" de um hub (quem está presente sem login) — exatamente um dos dois.
+-- Onde: exatamente um de organization_id / space_id / hub_id, conforme scope_type.
+-- Ex.: "Ana é Editora no espaço Manuais"; "a sala do Hub da recepção é Leitora no espaço Manuais".
+-- Ter memory.read num espaço anda junto com uma cópia trancada da chave (space_key_grants).
+CREATE TABLE role_assignments (
+  id CHAR(36) NOT NULL,
+  created_at DATETIME NOT NULL,
+  deleted_at DATETIME NULL,
+  role_id CHAR(36) NOT NULL,
+  user_id CHAR(36) NULL,
+  room_hub_id CHAR(36) NULL,
+  scope_type ENUM('organization', 'space', 'hub') NOT NULL,
+  organization_id CHAR(36) NULL,
+  space_id CHAR(36) NULL,
+  hub_id CHAR(36) NULL,
+  granted_by_user_id CHAR(36) NULL COMMENT 'em espaço: precisa ser alguém de dentro (o admin não se coloca sozinho)',
+  PRIMARY KEY (id),
+  INDEX fk_role_assignments_roles_idx (role_id),
+  INDEX ix_role_assignments_user_scope (user_id, scope_type),
+  INDEX fk_role_assignments_room_hub_idx (room_hub_id),
+  INDEX fk_role_assignments_organizations_idx (organization_id),
+  INDEX fk_role_assignments_spaces_idx (space_id),
+  INDEX fk_role_assignments_hubs_idx (hub_id),
+  INDEX fk_role_assignments_granted_by_idx (granted_by_user_id),
+  CONSTRAINT fk_role_assignments_roles FOREIGN KEY (role_id) REFERENCES roles (id),
+  CONSTRAINT fk_role_assignments_users FOREIGN KEY (user_id) REFERENCES users (id),
+  CONSTRAINT fk_role_assignments_room_hub FOREIGN KEY (room_hub_id) REFERENCES hubs (id),
+  CONSTRAINT fk_role_assignments_organizations FOREIGN KEY (organization_id) REFERENCES organizations (id),
+  CONSTRAINT fk_role_assignments_spaces FOREIGN KEY (space_id) REFERENCES spaces (id),
+  CONSTRAINT fk_role_assignments_hubs FOREIGN KEY (hub_id) REFERENCES hubs (id),
+  CONSTRAINT fk_role_assignments_granted_by FOREIGN KEY (granted_by_user_id) REFERENCES users (id)
 );
