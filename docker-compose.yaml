@@ -14,6 +14,7 @@ services:
       - "${API_PORT:-3000}:3000"
     depends_on:
       - db
+      - aws
 
   db:
     image: pgvector/pgvector:pg18
@@ -49,3 +50,15 @@ services:
       - "${PGADMIN_PORT:-8080}:80"
     depends_on:
       - db
+
+  aws:
+    # 4.14.0 é a última versão que roda sem LOCALSTACK_AUTH_TOKEN (a partir da 2026.03 o token é obrigatório)
+    image: localstack/localstack:4.14.0
+    container_name: vaulter-back-aws
+    restart: always
+    environment:
+      SERVICES: s3
+    volumes:
+      - ./.docker/localstack/init/ready.d:/etc/localstack/init/ready.d:ro
+    ports:
+      - "${AWS_EXTERNAL_PORT:-4566}:4566"

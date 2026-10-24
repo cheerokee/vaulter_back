@@ -50,6 +50,7 @@ npm run start:dev                    # dentro do container: API em live reload
   | `app` | `vaulter-back-app` | — | `localhost:${API_PORT}` |
   | `db` (PostgreSQL 18 + pgvector) | `vaulter-back-db` | `db:5432` | `localhost:${DB_EXTERNAL_PORT}` |
   | `pgadmin` | `vaulter-back-pgadmin` | — | `localhost:${PGADMIN_PORT}` |
+  | `aws` (LocalStack, só S3) | `vaulter-back-aws` | `http://aws:4566` | `localhost:${AWS_EXTERNAL_PORT}` |
 - **Banco único:** o Postgres guarda tanto os dados relacionais quanto os embeddings de RAG (extensão
   **pgvector**, já habilitada na criação do banco por `.docker/postgres/init/01-extensions.sql`). Não criar
   outro banco para vetores sem uma razão forte.
@@ -58,6 +59,11 @@ npm run start:dev                    # dentro do container: API em live reload
   (`.docker/pgadmin/servers.json`); só pede a senha do banco (`DB_PASSWORD`) na primeira conexão.
 - Os dados do Postgres ficam em `.docker/pgdata/` (fora do git e do contexto de build). Para zerar o banco
   (e rodar de novo os scripts de init): `docker compose down && sudo rm -rf .docker/pgdata && docker compose up -d`.
+- **S3 local:** LocalStack fixado na `4.14.0`, a última versão que roda sem `LOCALSTACK_AUTH_TOKEN` — não
+  subir a versão sem decidir sobre o token. A versão gratuita **não persiste dados**: a cada subida o
+  `.docker/localstack/init/ready.d/01-buckets.sh` recria o bucket `vaulter-hub-brain` (versionado), vazio.
+  Novos buckets entram nesse script. Clientes S3 apontando para `aws:4566` precisam de path-style
+  (`S3_FORCE_PATH_STYLE=true`). Layout do bucket: `orgs/<orgId>/spaces/<spaceId>/...`.
 - Não há imagem de produção ainda — o `Dockerfile` é só para desenvolvimento.
 - Novo serviço (banco, cache, fila) entra no `docker-compose.yaml`, com suas variáveis no `.env.example`.
 
