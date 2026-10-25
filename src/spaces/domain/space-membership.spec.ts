@@ -95,3 +95,33 @@ describe('SpaceMembershipRules', () => {
     });
   });
 });
+
+describe('space role permissions', () => {
+  it('mirror the RBAC catalog of organizations', async () => {
+    const { FACTORY_ROLES } =
+      await import('../../organizations/domain/rbac-catalog.js');
+    const { SPACE_ROLE_PERMISSIONS } = await import('./space-membership.js');
+    for (const role of [
+      'space_reader',
+      'space_editor',
+      'space_manager',
+    ] as const) {
+      expect([...SPACE_ROLE_PERMISSIONS[role]].sort()).toEqual(
+        [...FACTORY_ROLES[role]].sort(),
+      );
+    }
+  });
+
+  it('hasSpacePermission: only the manager manages members', async () => {
+    const { hasSpacePermission } = await import('./space-membership.js');
+    expect(hasSpacePermission('space_manager', 'space.members.manage')).toBe(
+      true,
+    );
+    expect(hasSpacePermission('space_editor', 'space.members.manage')).toBe(
+      false,
+    );
+    expect(hasSpacePermission('space_editor', 'memory.write')).toBe(true);
+    expect(hasSpacePermission('space_reader', 'memory.write')).toBe(false);
+    expect(hasSpacePermission('space_reader', 'memory.read')).toBe(true);
+  });
+});

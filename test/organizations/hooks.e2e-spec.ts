@@ -1,6 +1,7 @@
 import type { INestApplication } from '@nestjs/common';
 import { InvitationHooks } from '../../src/shared/application/invitation-hooks.js';
 import { MemberRemovedHooks } from '../../src/shared/application/member-removed-hooks.js';
+import { SpacesInvitationHook } from '../../src/spaces/application/invitation.hook.js';
 import {
   adminDataSource,
   createTestApp,
@@ -70,9 +71,45 @@ describe('Organization hooks (e2e)', () => {
       .expect(204);
   });
 
+  // O `spaces` assina o registro no boot; estes testes o tiram por um momento para isolar o comportamento do
+  // registro (e o devolvem no fim).
+  const withoutSpacesHook = async (work: () => Promise<void>) => {
+    const spacesHook = app.get(SpacesInvitationHook);
+    spacesHook.onModuleDestroy();
+    try {
+      await work();
+    } finally {
+      spacesHook.onModuleInit();
+    }
+  };
+
   it('invitation with spaces and no subscriber -> 422 spaces-not-supported, no row', async () => {
     const owner = await c.signUp(account, 'hk-nosub@example.com', 'Olivia');
     const org = (await c.createOrg(owner.token, 'NoSub Inc').expect(201)).body
+      .id as string;
+    await withoutSpacesHook(async () => {
+      const res = await c
+        .http()
+        .post(`/organizations/${org}/invitations`)
+        .set(c.bearer(owner.token))
+        .send({
+          roleKey: 'org_member',
+          spaces: [{ spaceId: SPACE, roleKey: 'space_reader' }],
+        });
+      expect(res.status).toBe(422);
+      expect(JSON.stringify(res.body)).toContain('spaces-not-supported');
+    });
+    expect(
+      await count(
+        `SELECT count(*) AS n FROM organization_invitations WHERE organization_id = $1`,
+        [org],
+      ),
+    ).toBe(0);
+  });
+
+  it('with the spaces subscriber, an unknown space -> 404 space-not-found, no row', async () => {
+    const owner = await c.signUp(account, 'hk-unknown@example.com', 'Olivia');
+    const org = (await c.createOrg(owner.token, 'Unknown Inc').expect(201)).body
       .id as string;
     const res = await c
       .http()
@@ -82,8 +119,8 @@ describe('Organization hooks (e2e)', () => {
         roleKey: 'org_member',
         spaces: [{ spaceId: SPACE, roleKey: 'space_reader' }],
       });
-    expect(res.status).toBe(422);
-    expect(JSON.stringify(res.body)).toContain('spaces-not-supported');
+    expect(res.status).toBe(404);
+    expect(JSON.stringify(res.body)).toContain('space-not-found');
     expect(
       await count(
         `SELECT count(*) AS n FROM organization_invitations WHERE organization_id = $1`,
@@ -103,15 +140,17 @@ describe('Organization hooks (e2e)', () => {
       onAccepted: () => Promise.resolve(),
     });
     try {
-      const res = await c
-        .http()
-        .post(`/organizations/${org}/invitations`)
-        .set(c.bearer(owner.token))
-        .send({
-          roleKey: 'org_member',
-          spaces: [{ spaceId: SPACE, roleKey: 'space_editor' }],
-        });
-      expect(res.status).toBe(500);
+      await withoutSpacesHook(async () => {
+        const res = await c
+          .http()
+          .post(`/organizations/${org}/invitations`)
+          .set(c.bearer(owner.token))
+          .send({
+            roleKey: 'org_member',
+            spaces: [{ spaceId: SPACE, roleKey: 'space_editor' }],
+          });
+        expect(res.status).toBe(500);
+      });
       expect(
         await count(
           `SELECT count(*) AS n FROM organization_invitations WHERE organization_id = $1`,

@@ -21,6 +21,25 @@ export class OrganizationDirectory {
     return (await this.memberships.find(orgId, userId)) !== null;
   }
 
+  /**
+   * Ids of every organization where the user is an ACTIVE member (reads only the user's own links, RLS
+   * self_read). Used by `spaces` to resolve a space id for an org admin who is not in the space.
+   */
+  async organizationIdsOf(userId: string): Promise<string[]> {
+    if (!validate(userId)) return [];
+    const ids: string[] = [];
+    let cursor: string | undefined;
+    do {
+      const page = await this.orgs.listForUser(userId, {
+        ...(cursor ? { cursor } : {}),
+        limit: 100,
+      });
+      ids.push(...page.items.map((i) => i.organization.id));
+      cursor = page.nextCursor ?? undefined;
+    } while (cursor);
+    return ids;
+  }
+
   /** The organization's recovery-kit public key, or null when none is registered (or the org is unknown). */
   async recoveryPublicKey(orgId: string): Promise<string | null> {
     if (!validate(orgId)) return null;

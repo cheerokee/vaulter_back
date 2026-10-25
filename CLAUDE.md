@@ -252,8 +252,9 @@ src/organizations/
   `onAccepted({ organizationId, invitationId, userId, now })` no aceite, depois do vínculo (também quando a pessoa
   já era membro e o convite só foi consumido; vale para a rota logada e para o gancho de cadastro). O DTO aceita
   `spaces` (até 20, sem `spaceId` repetido -> 422 `duplicate-space`).
-- **`OrganizationDirectory`** (exportado, junto com `OrganizationAccess` e `AuditLog`): `isActiveMember(orgId, userId)`
-  e `recoveryPublicKey(orgId)` (`null` se não houver), sem lançar para org/usuário inexistente.
+- **`OrganizationDirectory`** (exportado, junto com `OrganizationAccess` e `AuditLog`): `isActiveMember(orgId, userId)`,
+  `recoveryPublicKey(orgId)` (`null` se não houver) e `organizationIdsOf(userId)` (organizações ativas da pessoa),
+  sem lançar para org/usuário inexistente. Não é checagem de autorização.
 - **`OrganizationAccess` é o padrão para os próximos módulos (spaces, hubs):** `requireMember(orgId, userId)` ->
   **404** para não membro (não revela que a organização existe); `requirePermission(orgId, userId, permissao)` ->
   **403** para membro sem a permissão. Todo caso de uso que toca dado de organização chama um dos dois primeiro;
@@ -291,12 +292,29 @@ src/organizations/
 - **Auditoria (`audit_logs`):** *append-only* — o papel de runtime tem só `INSERT`/`SELECT` (sem `UPDATE`/`DELETE`),
   via `AuditLog.record` dentro da mesma transação da ação. Ações: `organization.created`, `organization.updated`,
   `organization.recovery_key.registered|replaced`, `member.joined`, `member.left`, `member.removed`,
-  `member.role_changed`, `invitation.created`, `invitation.revoked`. `metadata` nunca leva segredo/token.
+  `member.role_changed`, `invitation.created`, `invitation.revoked` e as `space.*` do módulo `spaces`. `metadata`
+  nunca leva segredo/token/cópia trancada.
 - **Assentos:** assento = membro ativo (convite pendente não conta). `SeatPolicy` (hoje ilimitado) é checada ao criar
   e ao aceitar convite. TODO ao entrarem limites reais: travar a linha da organização (`FOR UPDATE`) antes de contar,
   senão requisições concorrentes estouram o limite.
 - Rotas autenticadas marcam `@ApiBearerAuth()` por método (a prévia de convite é `@Public()` e não deve aparecer
   com cadeado no Swagger). Nenhuma rota daqui entra na doc pública.
+
+## Módulo `spaces`
+`src/spaces/` (espaços, membros do espaço, versões da chave e cópias trancadas, pendências de trancar).
+Spec: `docs/superpowers/specs/2026-10-25-spaces-design.md`. Depende de `organizations` e `identity` (só o que eles
+exportam); nenhum dos dois importa `spaces`.
+- **`SpaceAccess`** (exportado, padrão para storage/hubs): `requireSpaceMember(spaceId, userId)` -> **404**
+  `space-not-found` para quem não é membro do espaço (inclusive admin da organização), espaço inexistente ou de outra
+  organização; `requireSpacePermission(..., permissao)` -> **403** para membro sem a permissão. A organização é
+  descoberta pelas linhas de `role_assignments` da própria pessoa (`findOrganizationOfMember`, só `app.user_id`).
+  Operações só de admin (promover Gestor, reabrir pelo kit) usam `requireOrgPermissionForSpace`: procura o espaço só
+  nas organizações em que a pessoa tem a permissão (404 para o resto). Mutações usam `lockAsMember` /
+  `lockWithOrgPermission` dentro do `uow.run`: checagem sem lock, `FOR UPDATE` no espaço, checagem de novo.
+- **Kit de recuperação (`RecoveryKit`):** quem grava `recovery_wrapped_key` manda `recoveryPublicKey`; sem kit 422
+  `recovery-key-required`, kit diferente 409 `recovery-key-changed`; a impressão gravada vem da chave da organização.
+- **Ganchos:** `spaces.member-removed` (trava os espaços da pessoa, lápide em cópias e papéis, troca pendente,
+  cancela pendências, audita) e `spaces.invitation` (só Gestor indica o espaço; no aceite vira pendência de trancar).
 
 ## Banco de dados (TypeORM + migrations)
 - **TypeORM 1.x** + `@nestjs/typeorm`, driver `pg`. Config de conexão em `src/database/typeorm.options.ts`,

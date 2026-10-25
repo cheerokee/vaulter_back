@@ -12,7 +12,18 @@ export type AuditAction =
   | 'member.removed'
   | 'member.role_changed'
   | 'invitation.created'
-  | 'invitation.revoked';
+  | 'invitation.revoked'
+  | 'space.created'
+  | 'space.renamed'
+  | 'space.member_added'
+  | 'space.member_removed'
+  | 'space.member_left'
+  | 'space.member_role_changed'
+  | 'space.key_rotated'
+  | 'space.recovery_rewrapped'
+  | 'space.recovered_with_kit'
+  | 'space.manager_promoted'
+  | 'space.pending_grant_declined';
 
 export type AuditRecord = {
   organizationId: string;

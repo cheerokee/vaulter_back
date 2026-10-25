@@ -42,6 +42,17 @@ export abstract class SpaceRoleRepository {
    * remove, demote or leave, so concurrent requests serialize.
    */
   abstract lockSpaceManagers(orgId: string, spaceId: string): Promise<string[]>;
+  /**
+   * Organization of the space when `userId` is an ACTIVE member of it, else null. Runs with only
+   * `app.user_id` (policy self_read of role_assignments): it reads the user's own rows, so a space id of
+   * another organization (or one the user is not in) never resolves.
+   */
+  abstract findOrganizationOfMember(
+    spaceId: string,
+    userId: string,
+  ): Promise<string | null>;
+  /** Ids of the spaces where the user is an active member in the organization, sorted. */
+  abstract spaceIdsOfUser(orgId: string, userId: string): Promise<string[]>;
   /** Tombstones the user's space assignments in the organization; returns the affected space ids. */
   abstract removeUserInOrg(orgId: string, userId: string): Promise<string[]>;
 }

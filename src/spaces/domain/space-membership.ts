@@ -11,6 +11,35 @@ export function isSpaceRoleKey(value: unknown): value is SpaceRoleKey {
   return (SPACE_ROLE_KEYS as readonly unknown[]).includes(value);
 }
 
+/** Space-scope permissions (same keys as the RBAC catalog, scope `space`). */
+export type SpacePermission =
+  'memory.read' | 'memory.write' | 'memory.delete' | 'space.members.manage';
+
+/**
+ * Permissions of each factory space role. Mirrors the RBAC catalog of `organizations` (the source of truth in
+ * the database); a domain never imports another module's domain, and a spec keeps both in sync.
+ */
+export const SPACE_ROLE_PERMISSIONS: Record<
+  SpaceRoleKey,
+  readonly SpacePermission[]
+> = {
+  space_reader: ['memory.read'],
+  space_editor: ['memory.read', 'memory.write'],
+  space_manager: [
+    'memory.read',
+    'memory.write',
+    'memory.delete',
+    'space.members.manage',
+  ],
+};
+
+export function hasSpacePermission(
+  roleKey: SpaceRoleKey,
+  permission: SpacePermission,
+): boolean {
+  return SPACE_ROLE_PERMISSIONS[roleKey].includes(permission);
+}
+
 /** Facts read by the caller under lock (SpaceRoleRepository.lockSpaceManagers). */
 export type SpaceMembershipContext = {
   /** the target is the only active manager. */

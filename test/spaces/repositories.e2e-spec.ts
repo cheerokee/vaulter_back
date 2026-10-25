@@ -766,6 +766,58 @@ describe('spaces repositories (e2e, app role)', () => {
     });
   });
 
+  describe('SpaceRoleRepository: locating a space', () => {
+    it('findOrganizationOfMember resolves only for an active member, without an organization context', async () => {
+      const ana = await makeUser('ana@x.com');
+      const bob = await makeUser('bob@x.com');
+      const eve = await makeUser('eve@x.com');
+      const orgA = await makeOrg('A', [ana], [bob]);
+      const orgB = await makeOrg('B', [eve]);
+      const { space } = await makeSpace(orgA.id, ana, [[bob, 'space_reader']]);
+      const { space: sb } = await makeSpace(orgB.id, eve, [], 'B');
+      expect(await spaceRoles.findOrganizationOfMember(space.id, ana)).toBe(
+        orgA.id,
+      );
+      expect(await spaceRoles.findOrganizationOfMember(space.id, bob)).toBe(
+        orgA.id,
+      );
+      // Não membro (de outra organização, ou admin fora do espaço) não resolve.
+      expect(
+        await spaceRoles.findOrganizationOfMember(space.id, eve),
+      ).toBeNull();
+      expect(await spaceRoles.findOrganizationOfMember(sb.id, ana)).toBeNull();
+      // Dentro de uma transação com o contexto de outra organização, continua só para as próprias linhas.
+      const inB = await uow.run(async () => {
+        await uow.setContext({ organizationId: orgB.id });
+        return spaceRoles.findOrganizationOfMember(space.id, eve);
+      });
+      expect(inB).toBeNull();
+      await spaceRoles.remove(orgA.id, space.id, bob);
+      expect(
+        await spaceRoles.findOrganizationOfMember(space.id, bob),
+      ).toBeNull();
+      expect(await spaceRoles.findOrganizationOfMember('nope', ana)).toBeNull();
+    });
+
+    it('spaceIdsOfUser lists the active spaces of the user in the organization, sorted', async () => {
+      const ana = await makeUser('ana@x.com');
+      const bob = await makeUser('bob@x.com');
+      const orgA = await makeOrg('A', [ana], [bob]);
+      const orgB = await makeOrg('B', [bob]);
+      const { space: s1 } = await makeSpace(orgA.id, ana, [
+        [bob, 'space_reader'],
+      ]);
+      const { space: s2 } = await makeSpace(orgA.id, bob, [], 'Vendas');
+      await makeSpace(orgA.id, ana, [], 'Sem Bob');
+      await makeSpace(orgB.id, bob, [], 'B');
+      expect(await spaceRoles.spaceIdsOfUser(orgA.id, bob)).toEqual(
+        [s1.id, s2.id].sort(),
+      );
+      await spaceRoles.remove(orgA.id, s1.id, bob);
+      expect(await spaceRoles.spaceIdsOfUser(orgA.id, bob)).toEqual([s2.id]);
+    });
+  });
+
   describe('leaving the organization', () => {
     it('tombstoneUserInOrg / removeUserInOrg return the affected spaces and never touch another organization', async () => {
       const ana = await makeUser('ana@x.com');

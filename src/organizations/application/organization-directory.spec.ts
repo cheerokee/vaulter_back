@@ -35,6 +35,30 @@ describe('OrganizationDirectory', () => {
     expect(kit.mocks.memberships.find).not.toHaveBeenCalled();
   });
 
+  it('organizationIdsOf: every active organization of the user, across pages', async () => {
+    const O2 = '019a1b2c-0000-7000-8000-000000000002';
+    kit.mocks.orgs.listForUser
+      .mockResolvedValueOnce({
+        items: [{ organization: makeOrganization(), roleKey: 'org_admin' }],
+        nextCursor: 'c1',
+      })
+      .mockResolvedValueOnce({
+        items: [
+          { organization: makeOrganization({}, O2), roleKey: 'org_member' },
+        ],
+        nextCursor: null,
+      });
+    await expect(directory().organizationIdsOf(MEMBER)).resolves.toEqual([
+      ORG_ID,
+      O2,
+    ]);
+    expect(kit.mocks.orgs.listForUser).toHaveBeenNthCalledWith(2, MEMBER, {
+      cursor: 'c1',
+      limit: 100,
+    });
+    await expect(directory().organizationIdsOf('nope')).resolves.toEqual([]);
+  });
+
   it('recoveryPublicKey: null without a key or for an unknown org, the key otherwise', async () => {
     await expect(directory().recoveryPublicKey(ORG_ID)).resolves.toBeNull();
     kit.setOrganization(makeOrganization({ recoveryPublicKey: 'pk-abc' }));

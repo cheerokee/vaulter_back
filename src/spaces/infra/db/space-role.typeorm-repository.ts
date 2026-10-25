@@ -5,7 +5,9 @@ import {
   type CursorPage,
   type CursorPageRequest,
 } from '../../../shared/domain/pagination.js';
+import { validate } from 'uuid';
 import { runInOrganizationScope } from '../../../shared/infra/db/organization-scope.js';
+import { runWithContext } from '../../../shared/infra/db/unit-of-work.js';
 import type { SpaceRoleKey } from '../../domain/space-membership.js';
 import {
   SpaceRoleRepository,
@@ -167,6 +169,45 @@ export class SpaceRoleTypeormRepository extends SpaceRoleRepository {
         ),
     );
     return distinctSorted(rows.map((r) => r.user_id));
+  }
+
+  // Só `app.user_id` (a organização do contexto, se houver, fica como estava): a policy self_read deixa ver só
+  // as linhas da própria pessoa, e o filtro por user_id garante o mesmo mesmo que outra organização esteja no
+  // contexto. Não junta `spaces` (o RLS dela pede a organização): o caso de uso confere o espaço depois, já no
+  // escopo da organização encontrada.
+  async findOrganizationOfMember(
+    spaceId: string,
+    userId: string,
+  ): Promise<string | null> {
+    if (!validate(spaceId) || !validate(userId)) return null;
+    const rows: { organization_id: string }[] = await runWithContext(
+      this.dataSource,
+      { userId },
+      (m) =>
+        m.query(
+          `SELECT ra.organization_id FROM role_assignments ra
+            WHERE ra.space_id = $1 AND ra.user_id = $2
+              AND ra.scope_type = 'space' AND ra.deleted_at IS NULL`,
+          [spaceId, userId],
+        ),
+    );
+    return rows[0]?.organization_id ?? null;
+  }
+
+  async spaceIdsOfUser(orgId: string, userId: string): Promise<string[]> {
+    const rows: { space_id: string }[] = await runInOrganizationScope(
+      this.dataSource,
+      orgId,
+      (m) =>
+        m.query(
+          `SELECT DISTINCT ra.space_id FROM role_assignments ra
+            WHERE ra.organization_id = $1 AND ra.user_id = $2
+              AND ra.scope_type = 'space' AND ra.deleted_at IS NULL
+            ORDER BY ra.space_id`,
+          [orgId, userId],
+        ),
+    );
+    return rows.map((r) => r.space_id);
   }
 
   async removeUserInOrg(orgId: string, userId: string): Promise<string[]> {

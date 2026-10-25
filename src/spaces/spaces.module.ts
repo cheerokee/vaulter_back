@@ -2,6 +2,26 @@ import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { IdentityModule } from '../identity/identity.module.js';
 import { OrganizationsModule } from '../organizations/organizations.module.js';
+import { AddSpaceMemberUseCase } from './application/add-space-member.use-case.js';
+import { ChangeSpaceMemberRoleUseCase } from './application/change-space-member-role.use-case.js';
+import { CreateSpaceUseCase } from './application/create-space.use-case.js';
+import { DeclinePendingGrantUseCase } from './application/decline-pending-grant.use-case.js';
+import { GetMyKeysUseCase } from './application/get-my-keys.use-case.js';
+import { GetSpaceUseCase } from './application/get-space.use-case.js';
+import { SpacesInvitationHook } from './application/invitation.hook.js';
+import { LeaveSpaceUseCase } from './application/leave-space.use-case.js';
+import { ListPendingGrantsUseCase } from './application/list-pending-grants.use-case.js';
+import { ListSpaceMembersUseCase } from './application/list-space-members.use-case.js';
+import { ListSpacesUseCase } from './application/list-spaces.use-case.js';
+import { SpacesMemberRemovedHook } from './application/member-removed.hook.js';
+import { PromoteSpaceManagerUseCase } from './application/promote-space-manager.use-case.js';
+import { RecoverOrphanSpaceUseCase } from './application/recover-orphan-space.use-case.js';
+import { RecoveryKit } from './application/recovery-kit.js';
+import { RenameSpaceUseCase } from './application/rename-space.use-case.js';
+import { RemoveSpaceMemberUseCase } from './application/remove-space-member.use-case.js';
+import { RewrapRecoveryUseCase } from './application/rewrap-recovery.use-case.js';
+import { RotateSpaceKeyUseCase } from './application/rotate-space-key.use-case.js';
+import { SpaceAccess } from './application/space-access.js';
 import { KeyFingerprinter } from './application/ports/key-fingerprinter.js';
 import { PendingGrantRepository } from './domain/pending-grant.repository.js';
 import { SpaceGrantRepository } from './domain/space-grant.repository.js';
@@ -46,6 +66,28 @@ import { SpaceTypeormRepository } from './infra/db/space.typeorm-repository.js';
     },
     { provide: SpaceIntentRepository, useClass: SpaceIntentTypeormRepository },
     { provide: KeyFingerprinter, useClass: SodiumKeyFingerprinter },
+    AddSpaceMemberUseCase,
+    ChangeSpaceMemberRoleUseCase,
+    CreateSpaceUseCase,
+    DeclinePendingGrantUseCase,
+    GetMyKeysUseCase,
+    GetSpaceUseCase,
+    SpacesInvitationHook,
+    LeaveSpaceUseCase,
+    ListPendingGrantsUseCase,
+    ListSpaceMembersUseCase,
+    ListSpacesUseCase,
+    SpacesMemberRemovedHook,
+    PromoteSpaceManagerUseCase,
+    RecoverOrphanSpaceUseCase,
+    RecoveryKit,
+    RenameSpaceUseCase,
+    RemoveSpaceMemberUseCase,
+    RewrapRecoveryUseCase,
+    RotateSpaceKeyUseCase,
+    SpaceAccess,
   ],
+  // Para os próximos módulos (storage, hubs): checagem de acesso ao espaço.
+  exports: [SpaceAccess],
 })
 export class SpacesModule {}
