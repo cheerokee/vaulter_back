@@ -135,6 +135,53 @@ CREATE TABLE hubs (
 );
 
 -- ---------------------------------------------------------------------------------------------------
+-- Integrações: apps e instalações (API de integração)
+-- Spec: valter-valt-ai/docs/superpowers/specs/2026-10-24-api-de-integracao-design.md
+-- App = sistema integrador (ex.: Salte), registrado uma vez por uma organização publicadora.
+-- Instalação = app x organização cliente (ex.: Salte na Britago). Quem recebe papéis é a instalação.
+-- ---------------------------------------------------------------------------------------------------
+
+CREATE TABLE apps (
+  id CHAR(36) NOT NULL,
+  created_at DATETIME NOT NULL,
+  updated_at DATETIME NULL,
+  deleted_at DATETIME NULL,
+  publisher_organization_id CHAR(36) NOT NULL COMMENT 'organização dona do app no Vaulter (ex.: a do Salte)',
+  name VARCHAR(255) NOT NULL,
+  description VARCHAR(500) NULL,
+  public_key TEXT NOT NULL COMMENT 'o app assina o pedido de token (OAuth client credentials com private_key_jwt)',
+  status ENUM('active', 'suspended') NOT NULL DEFAULT 'active',
+  sync_version BIGINT NOT NULL COMMENT 'versão de sincronização: sequência global do servidor, muda a cada insert/update/exclusão',
+  PRIMARY KEY (id),
+  INDEX fk_apps_organizations_idx (publisher_organization_id),
+  CONSTRAINT fk_apps_organizations FOREIGN KEY (publisher_organization_id) REFERENCES organizations (id),
+  INDEX ix_apps_sync_version (sync_version)
+);
+
+CREATE TABLE app_installations (
+  id CHAR(36) NOT NULL,
+  created_at DATETIME NOT NULL,
+  updated_at DATETIME NULL,
+  deleted_at DATETIME NULL,
+  app_id CHAR(36) NOT NULL,
+  organization_id CHAR(36) NOT NULL COMMENT 'organização cliente que instalou (plano precisa liberar integrações)',
+  status ENUM('active', 'suspended', 'revoked') NOT NULL DEFAULT 'active' COMMENT 'revogar invalida os tokens na hora',
+  installed_by_user_id CHAR(36) NOT NULL COMMENT 'administrador daquela organização',
+  -- Um par de chaves por instalação (nunca um por app): vazar a da Britago não afeta a Britec.
+  signing_public_key TEXT NOT NULL COMMENT 'o integrador assina cada comando; o hub confere com esta chave',
+  encryption_public_key TEXT NOT NULL COMMENT 'para trancar a chave de um espaço para a instalação (space_key_grants)',
+  sync_version BIGINT NOT NULL COMMENT 'versão de sincronização: sequência global do servidor, muda a cada insert/update/exclusão',
+  PRIMARY KEY (id),
+  UNIQUE INDEX uq_app_installations_app_organization (app_id, organization_id),
+  INDEX fk_app_installations_organizations_idx (organization_id),
+  INDEX fk_app_installations_installed_by_idx (installed_by_user_id),
+  CONSTRAINT fk_app_installations_apps FOREIGN KEY (app_id) REFERENCES apps (id),
+  CONSTRAINT fk_app_installations_organizations FOREIGN KEY (organization_id) REFERENCES organizations (id),
+  CONSTRAINT fk_app_installations_installed_by FOREIGN KEY (installed_by_user_id) REFERENCES users (id),
+  INDEX ix_app_installations_sync_version (sync_version)
+);
+
+-- ---------------------------------------------------------------------------------------------------
 -- Espaços e chaves
 -- ---------------------------------------------------------------------------------------------------
 
@@ -171,7 +218,7 @@ CREATE TABLE space_keys (
   INDEX ix_space_keys_sync_version (sync_version)
 );
 
--- Cópias trancadas da chave do espaço: uma por pessoa e uma por hub autorizado (exatamente um dos dois).
+-- Cópias trancadas da chave do espaço: uma por pessoa, por hub autorizado ou por instalação de app.
 CREATE TABLE space_key_grants (
   id CHAR(36) NOT NULL,
   created_at DATETIME NOT NULL,
@@ -180,16 +227,20 @@ CREATE TABLE space_key_grants (
   space_key_id CHAR(36) NOT NULL,
   user_id CHAR(36) NULL,
   hub_id CHAR(36) NULL,
-  wrapped_key TEXT NOT NULL COMMENT 'trancada com a public_key do usuário ou do hub',
+  app_installation_id CHAR(36) NULL,
+  wrapped_key TEXT NOT NULL COMMENT 'trancada com a public_key do usuário, do hub ou da instalação (exatamente um dos três)',
   sync_version BIGINT NOT NULL COMMENT 'versão de sincronização: sequência global do servidor, muda a cada insert/update/exclusão',
   PRIMARY KEY (id),
   UNIQUE INDEX uq_space_key_grants_user (space_key_id, user_id),
   UNIQUE INDEX uq_space_key_grants_hub (space_key_id, hub_id),
+  UNIQUE INDEX uq_space_key_grants_installation (space_key_id, app_installation_id),
   INDEX fk_space_key_grants_users_idx (user_id),
   INDEX fk_space_key_grants_hubs_idx (hub_id),
+  INDEX fk_space_key_grants_app_installations_idx (app_installation_id),
   CONSTRAINT fk_space_key_grants_space_keys FOREIGN KEY (space_key_id) REFERENCES space_keys (id),
   CONSTRAINT fk_space_key_grants_users FOREIGN KEY (user_id) REFERENCES users (id),
   CONSTRAINT fk_space_key_grants_hubs FOREIGN KEY (hub_id) REFERENCES hubs (id),
+  CONSTRAINT fk_space_key_grants_app_installations FOREIGN KEY (app_installation_id) REFERENCES app_installations (id),
   INDEX ix_space_key_grants_sync_version (sync_version)
 );
 
@@ -306,7 +357,7 @@ CREATE TABLE role_permission (
 );
 
 -- Quem tem qual papel em qual escopo.
--- Quem: um usuário OU a "sala" de um hub (quem está presente sem login) — exatamente um dos dois.
+-- Quem: um usuário, a "sala" de um hub (quem está presente sem login) OU uma instalação de app — exatamente um.
 -- Onde: exatamente um de organization_id / space_id / hub_id, conforme scope_type.
 -- Ex.: "Ana é Editora no espaço Manuais"; "a sala do Hub da recepção é Leitora no espaço Manuais".
 -- Ter memory.read num espaço anda junto com uma cópia trancada da chave (space_key_grants).
@@ -318,11 +369,15 @@ CREATE TABLE role_assignments (
   role_id CHAR(36) NOT NULL,
   user_id CHAR(36) NULL,
   room_hub_id CHAR(36) NULL,
+  app_installation_id CHAR(36) NULL,
   scope_type ENUM('organization', 'space', 'hub') NOT NULL,
   organization_id CHAR(36) NULL,
   space_id CHAR(36) NULL,
   hub_id CHAR(36) NULL,
   granted_by_user_id CHAR(36) NULL COMMENT 'em espaço: precisa ser alguém de dentro (o admin não se coloca sozinho)',
+  approval_status ENUM('not_required', 'pending', 'approved', 'rejected') NOT NULL DEFAULT 'not_required' COMMENT 'papel de instalação num hub: o dono do hub aprova; só vale quando approved',
+  approved_by_user_id CHAR(36) NULL,
+  approved_at DATETIME NULL,
   sync_version BIGINT NOT NULL COMMENT 'versão de sincronização: sequência global do servidor, muda a cada insert/update/exclusão',
   PRIMARY KEY (id),
   INDEX fk_role_assignments_roles_idx (role_id),
@@ -332,6 +387,8 @@ CREATE TABLE role_assignments (
   INDEX fk_role_assignments_spaces_idx (space_id),
   INDEX fk_role_assignments_hubs_idx (hub_id),
   INDEX fk_role_assignments_granted_by_idx (granted_by_user_id),
+  INDEX fk_role_assignments_app_installations_idx (app_installation_id),
+  INDEX fk_role_assignments_approved_by_idx (approved_by_user_id),
   CONSTRAINT fk_role_assignments_roles FOREIGN KEY (role_id) REFERENCES roles (id),
   CONSTRAINT fk_role_assignments_users FOREIGN KEY (user_id) REFERENCES users (id),
   CONSTRAINT fk_role_assignments_room_hub FOREIGN KEY (room_hub_id) REFERENCES hubs (id),
@@ -339,5 +396,82 @@ CREATE TABLE role_assignments (
   CONSTRAINT fk_role_assignments_spaces FOREIGN KEY (space_id) REFERENCES spaces (id),
   CONSTRAINT fk_role_assignments_hubs FOREIGN KEY (hub_id) REFERENCES hubs (id),
   CONSTRAINT fk_role_assignments_granted_by FOREIGN KEY (granted_by_user_id) REFERENCES users (id),
+  CONSTRAINT fk_role_assignments_app_installations FOREIGN KEY (app_installation_id) REFERENCES app_installations (id),
+  CONSTRAINT fk_role_assignments_approved_by FOREIGN KEY (approved_by_user_id) REFERENCES users (id),
   INDEX ix_role_assignments_sync_version (sync_version)
+);
+
+-- Permissões que o app pode pedir. À instalação só se concede a interseção (app declarou x papel concedido).
+CREATE TABLE app_permission (
+  app_id CHAR(36) NOT NULL,
+  permission_id CHAR(36) NOT NULL,
+  created_at DATETIME NOT NULL,
+  updated_at DATETIME NULL,
+  deleted_at DATETIME NULL,
+  PRIMARY KEY (app_id, permission_id),
+  INDEX fk_app_permission_permissions_idx (permission_id),
+  CONSTRAINT fk_app_permission_apps FOREIGN KEY (app_id) REFERENCES apps (id),
+  CONSTRAINT fk_app_permission_permissions FOREIGN KEY (permission_id) REFERENCES permissions (id)
+);
+
+-- ---------------------------------------------------------------------------------------------------
+-- Caixa de entrada e auditoria
+-- ---------------------------------------------------------------------------------------------------
+
+-- Itens que um integrador manda para um espaço cifrado: cifrados por ele com a chave do espaço, guardados no
+-- S3 sem o backend conseguir ler. O hub busca os pendentes, incorpora e passa a ser dono deles.
+CREATE TABLE inbox_items (
+  id CHAR(36) NOT NULL,
+  created_at DATETIME NOT NULL,
+  updated_at DATETIME NULL,
+  deleted_at DATETIME NULL,
+  space_id CHAR(36) NOT NULL,
+  app_installation_id CHAR(36) NOT NULL COMMENT 'origem: a resposta do Valter cita a fonte',
+  object_key VARCHAR(1024) NOT NULL COMMENT 'orgs/<orgId>/spaces/<spaceId>/inbox/<id>',
+  key_version INT NOT NULL COMMENT 'versão da chave do espaço usada na cifra',
+  content_hash VARCHAR(128) NOT NULL,
+  size_bytes BIGINT NOT NULL,
+  status ENUM('pending', 'ingested', 'expired') NOT NULL DEFAULT 'pending',
+  ingested_by_hub_id CHAR(36) NULL,
+  ingested_at DATETIME NULL,
+  expires_at DATETIME NOT NULL COMMENT '30 dias sem ser incorporado = expira',
+  sync_version BIGINT NOT NULL COMMENT 'versão de sincronização: sequência global do servidor, muda a cada insert/update/exclusão',
+  PRIMARY KEY (id),
+  INDEX fk_inbox_items_spaces_idx (space_id),
+  INDEX fk_inbox_items_app_installations_idx (app_installation_id),
+  INDEX fk_inbox_items_hubs_idx (ingested_by_hub_id),
+  CONSTRAINT fk_inbox_items_spaces FOREIGN KEY (space_id) REFERENCES spaces (id),
+  CONSTRAINT fk_inbox_items_app_installations FOREIGN KEY (app_installation_id) REFERENCES app_installations (id),
+  CONSTRAINT fk_inbox_items_hubs FOREIGN KEY (ingested_by_hub_id) REFERENCES hubs (id),
+  INDEX ix_inbox_items_sync_version (sync_version)
+);
+
+-- Toda chamada de integração (e, no futuro, ações sensíveis de usuários). Só se acrescenta; nada é editado.
+-- Retenção apaga de vez os registros antigos (prazo no plano).
+CREATE TABLE audit_logs (
+  id CHAR(36) NOT NULL,
+  created_at DATETIME NOT NULL,
+  updated_at DATETIME NULL,
+  deleted_at DATETIME NULL,
+  organization_id CHAR(36) NOT NULL,
+  app_installation_id CHAR(36) NULL,
+  user_id CHAR(36) NULL,
+  action VARCHAR(100) NOT NULL COMMENT 'ex.: memory.query, inbox.put, hub.camera.photo',
+  scope_type ENUM('organization', 'space', 'hub') NULL,
+  space_id CHAR(36) NULL,
+  hub_id CHAR(36) NULL,
+  result ENUM('success', 'denied', 'error', 'hub_offline') NOT NULL,
+  ip VARCHAR(45) NULL,
+  metadata JSON NULL,
+  PRIMARY KEY (id),
+  INDEX ix_audit_logs_organization_created (organization_id, created_at),
+  INDEX fk_audit_logs_app_installations_idx (app_installation_id),
+  INDEX fk_audit_logs_users_idx (user_id),
+  INDEX fk_audit_logs_spaces_idx (space_id),
+  INDEX fk_audit_logs_hubs_idx (hub_id),
+  CONSTRAINT fk_audit_logs_organizations FOREIGN KEY (organization_id) REFERENCES organizations (id),
+  CONSTRAINT fk_audit_logs_app_installations FOREIGN KEY (app_installation_id) REFERENCES app_installations (id),
+  CONSTRAINT fk_audit_logs_users FOREIGN KEY (user_id) REFERENCES users (id),
+  CONSTRAINT fk_audit_logs_spaces FOREIGN KEY (space_id) REFERENCES spaces (id),
+  CONSTRAINT fk_audit_logs_hubs FOREIGN KEY (hub_id) REFERENCES hubs (id)
 );
