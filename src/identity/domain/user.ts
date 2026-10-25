@@ -83,6 +83,19 @@ export class User extends Entity<UserProps> {
     return new User(props, id);
   }
 
+  /** Validates the key material of a password change (everything but the auth hash). */
+  static validatePasswordChange(input: {
+    kdfSalt: string;
+    kdfParams: unknown;
+    encryptedPrivateKey: string;
+  }): Pick<UserProps, 'kdfSalt' | 'kdfParams' | 'encryptedPrivateKey'> {
+    return {
+      kdfSalt: assertKdfSalt(input.kdfSalt),
+      kdfParams: parseKdfParams(input.kdfParams),
+      encryptedPrivateKey: assertEncryptedPrivateKey(input.encryptedPrivateKey),
+    };
+  }
+
   changePassword(input: {
     authHash: string;
     kdfSalt: string;
@@ -90,17 +103,10 @@ export class User extends Entity<UserProps> {
     encryptedPrivateKey: string;
   }): void {
     const authHash = assertAuthHash(input.authHash);
-    const kdfSalt = assertKdfSalt(input.kdfSalt);
-    const kdfParams = parseKdfParams(input.kdfParams);
-    const encryptedPrivateKey = assertEncryptedPrivateKey(
-      input.encryptedPrivateKey,
-    );
     this.props = {
       ...this.props,
       authHash,
-      kdfSalt,
-      kdfParams,
-      encryptedPrivateKey,
+      ...User.validatePasswordChange(input),
     };
   }
 

@@ -9,6 +9,8 @@ import { RefreshSessionUseCase } from './application/refresh-session.use-case.js
 import { LogoutUseCase } from './application/logout.use-case.js';
 import { ListSessionsUseCase } from './application/list-sessions.use-case.js';
 import { RevokeSessionUseCase } from './application/revoke-session.use-case.js';
+import { GetMeUseCase } from './application/get-me.use-case.js';
+import { ChangePasswordUseCase } from './application/change-password.use-case.js';
 import { LoginUseCase } from './application/login.use-case.js';
 import { PreLoginUseCase } from './application/pre-login.use-case.js';
 import { RegisterUserUseCase } from './application/register-user.use-case.js';
@@ -44,6 +46,8 @@ import { UserTypeormRepository } from './infra/db/user.typeorm-repository.js';
     LogoutUseCase,
     ListSessionsUseCase,
     RevokeSessionUseCase,
+    GetMeUseCase,
+    ChangePasswordUseCase,
   ],
 })
 export class IdentityModule {}
