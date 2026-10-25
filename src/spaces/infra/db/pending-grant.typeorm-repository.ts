@@ -13,7 +13,12 @@ import {
   type PendingGrantStatus,
 } from '../../domain/pending-grant.repository.js';
 import type { SpaceRoleKey } from '../../domain/space-membership.js';
-import { spaceFactoryRoleId, toCursorPage, updatedRows } from './db-helpers.js';
+import {
+  spaceFactoryRoleId,
+  spaceNotFound,
+  toCursorPage,
+  updatedRows,
+} from './db-helpers.js';
 
 type PendingRow = {
   id: string;
@@ -63,9 +68,7 @@ export class PendingGrantTypeormRepository extends PendingGrantRepository {
         ],
       );
       if (rows.length === 0) {
-        throw new Error(
-          'PendingGrantRepository.create: the space does not exist in this organization.',
-        );
+        throw spaceNotFound();
       }
     });
   }

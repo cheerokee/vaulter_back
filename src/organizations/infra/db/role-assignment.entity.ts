@@ -99,10 +99,18 @@ export class RoleAssignmentTypeormEntity extends SyncableTypeormEntity {
 
   // Alvo por nome: um módulo não importa a infra/ do outro (o spaces depende do organizations, não o contrário).
   @ManyToOne('SpaceTypeormEntity')
-  @JoinColumn({
-    name: 'space_id',
-    foreignKeyConstraintName: 'fk_role_assignments_spaces',
-  })
+  @JoinColumn([
+    {
+      name: 'space_id',
+      referencedColumnName: 'id',
+      foreignKeyConstraintName: 'fk_role_assignments_spaces',
+    },
+    {
+      name: 'organization_id',
+      referencedColumnName: 'organizationId',
+      foreignKeyConstraintName: 'fk_role_assignments_spaces',
+    },
+  ])
   space?: { id: string };
 
   // FK para hubs: módulo de hubs.

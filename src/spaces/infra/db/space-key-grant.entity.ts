@@ -46,10 +46,18 @@ export class SpaceKeyGrantTypeormEntity extends SyncableTypeormEntity {
   spaceKeyId!: string;
 
   @ManyToOne(() => SpaceKeyTypeormEntity)
-  @JoinColumn({
-    name: 'space_key_id',
-    foreignKeyConstraintName: 'fk_space_key_grants_space_keys',
-  })
+  @JoinColumn([
+    {
+      name: 'space_key_id',
+      referencedColumnName: 'id',
+      foreignKeyConstraintName: 'fk_space_key_grants_space_keys',
+    },
+    {
+      name: 'organization_id',
+      referencedColumnName: 'organizationId',
+      foreignKeyConstraintName: 'fk_space_key_grants_space_keys',
+    },
+  ])
   spaceKey?: SpaceKeyTypeormEntity;
 
   @Column({ type: 'uuid', nullable: true })

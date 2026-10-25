@@ -5,7 +5,7 @@ import {
   SpaceIntentRepository,
   type SpaceIntent,
 } from '../../domain/space-intent.repository.js';
-import { spaceFactoryRoleId } from './db-helpers.js';
+import { spaceFactoryRoleId, spaceNotFound } from './db-helpers.js';
 
 // Só do backend. O convite é do organizations: aqui só a FK (o InvitationHooks passa o id do convite que a
 // própria organização acabou de criar, no mesmo unit of work).
@@ -34,9 +34,7 @@ export class SpaceIntentTypeormRepository extends SpaceIntentRepository {
           [orgId, invitationId, intent.spaceId, roleId],
         );
         if (rows.length === 0) {
-          throw new Error(
-            'SpaceIntentRepository.record: the space does not exist in this organization.',
-          );
+          throw spaceNotFound();
         }
       }
     });

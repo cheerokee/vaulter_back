@@ -1,4 +1,12 @@
-import { Check, Column, Entity, Index, JoinColumn, ManyToOne } from 'typeorm';
+import {
+  Check,
+  Column,
+  Entity,
+  Index,
+  JoinColumn,
+  ManyToOne,
+  Unique,
+} from 'typeorm';
 import { BaseTypeormEntity } from '../../../shared/infra/db/base.entity.js';
 import type { InvitationStatus } from '../../domain/invitation.js';
 import { OrganizationTypeormEntity } from './organization.entity.js';
@@ -7,6 +15,8 @@ import { RoleTypeormEntity } from './role.entity.js';
 // Só do backend (não sincroniza: sem sync_version). Guarda só o hash do token. RLS por organization_id; a
 // busca por token antes de haver organização usa a policy invitation_by_token (`app.invitation_token_hash`).
 @Entity('organization_invitations')
+// Alvo das FKs compostas (filho_id, organization_id): o pai precisa ser da mesma organização.
+@Unique('uq_organization_invitations_id_organization', ['id', 'organizationId'])
 @Check(
   'ck_organization_invitations_status',
   `"status" IN ('pending', 'accepted', 'revoked', 'expired')`,

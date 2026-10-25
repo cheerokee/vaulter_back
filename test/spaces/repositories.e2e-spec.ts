@@ -10,6 +10,7 @@ import type { OrgRoleKey } from '../../src/organizations/domain/membership.js';
 import { Organization } from '../../src/organizations/domain/organization.js';
 import { OrganizationRepository } from '../../src/organizations/domain/organization.repository.js';
 import { RoleAssignmentRepository } from '../../src/organizations/domain/role-assignment.repository.js';
+import { NotFoundError } from '../../src/shared/domain/errors.js';
 import { newId } from '../../src/shared/domain/id.js';
 import {
   UnitOfWork,
@@ -39,6 +40,7 @@ const FP_NEW = 'b'.repeat(64);
 const wrapped = (tag: string) => `wk-${tag}`;
 
 const now = new Date('2026-10-25T12:00:00.000Z');
+const NOT_FOUND = { constructor: NotFoundError, code: 'space-not-found' };
 
 const SPACE_TABLES = [
   'spaces',
@@ -261,11 +263,16 @@ describe('spaces repositories (e2e, app role)', () => {
       // Os repositórios não penduram nada da B num espaço/chave da A.
       await expect(
         keys.addVersion(orgB.id, space.id, 2, 'x', FP_NEW),
-      ).rejects.toThrow();
-      await expect(grants.upsert(orgB.id, keyId, bob, 'x')).rejects.toThrow();
+      ).rejects.toMatchObject(NOT_FOUND);
+      await expect(
+        grants.upsert(orgB.id, keyId, bob, 'x'),
+      ).rejects.toMatchObject({
+        constructor: NotFoundError,
+        code: 'space-key-not-found',
+      });
       await expect(
         spaceRoles.assign(orgB.id, space.id, bob, 'space_reader', null),
-      ).rejects.toThrow();
+      ).rejects.toMatchObject(NOT_FOUND);
       await expect(
         pending.create(orgB.id, {
           id: newId(),
@@ -275,12 +282,12 @@ describe('spaces repositories (e2e, app role)', () => {
           invitationId: null,
           requestedByUserId: bob,
         }),
-      ).rejects.toThrow();
+      ).rejects.toMatchObject(NOT_FOUND);
       await expect(
         intents.record(orgB.id, newId(), [
           { spaceId: space.id, roleKey: 'space_reader' },
         ]),
-      ).rejects.toThrow();
+      ).rejects.toMatchObject(NOT_FOUND);
       expect(await spaceRoles.activeMemberIds(orgA.id, space.id)).toEqual([
         ana,
       ]);
@@ -288,6 +295,103 @@ describe('spaces repositories (e2e, app role)', () => {
         `SELECT count(*)::int AS n FROM space_key_grants`,
       )) as { n: number }[];
       expect(n).toBe(1);
+    });
+
+    // A checagem de FK ignora o RLS: só a FK composta (filho_id, organization_id) impede apontar para o pai
+    // de outra organização.
+    it('composite FKs: rows of B cannot point at the spaces, keys or invitations of A; same-org rows work', async () => {
+      const { bob, orgA, orgB, space, keyId, inv } = await seedA();
+      const dan = await makeUser('dan@x.com');
+      const { space: spaceB } = await makeSpace(orgB.id, bob);
+      const invB = issue(orgB.id, bob);
+      await invitations.create(invB);
+      const [{ id: roleId }] = (await admin.query(
+        `SELECT id FROM roles WHERE key = 'space_reader' AND organization_id IS NULL`,
+      )) as { id: string }[];
+      const B = { organizationId: orgB.id };
+      const insert = {
+        key: `INSERT INTO space_keys (organization_id, space_id, version, recovery_wrapped_key, recovery_key_fingerprint) VALUES ($1, $2, 7, 'x', 'f') RETURNING id`,
+        grant: `INSERT INTO space_key_grants (organization_id, space_key_id, user_id, wrapped_key) VALUES ($1, $2, $3, 'x')`,
+        pending: `INSERT INTO space_pending_grants (organization_id, space_id, user_id, role_id, invitation_id) VALUES ($1, $2, $3, $4, $5)`,
+        intent: `INSERT INTO invitation_space_intents (organization_id, invitation_id, space_id, role_id) VALUES ($1, $2, $3, $4)`,
+        assignment: `INSERT INTO role_assignments (role_id, user_id, scope_type, organization_id, space_id) VALUES ($1, $2, 'space', $3, $4)`,
+      };
+      for (const [sql, params] of [
+        [insert.key, [orgB.id, space.id]],
+        [insert.grant, [orgB.id, keyId, dan]],
+        [insert.pending, [orgB.id, space.id, dan, roleId, null]],
+        [insert.pending, [orgB.id, spaceB.id, dan, roleId, inv.id]],
+        [insert.intent, [orgB.id, invB.id, space.id, roleId]],
+        [insert.intent, [orgB.id, inv.id, spaceB.id, roleId]],
+        [insert.assignment, [roleId, dan, orgB.id, space.id]],
+      ] as const) {
+        await expect(asApp(B, sql, [...params])).rejects.toMatchObject({
+          code: '23503',
+        });
+      }
+      const [{ id: keyB }] = (await asApp(B, insert.key, [
+        orgB.id,
+        spaceB.id,
+      ])) as { id: string }[];
+      await asApp(B, insert.grant, [orgB.id, keyB, dan]);
+      await asApp(B, insert.pending, [
+        orgB.id,
+        spaceB.id,
+        dan,
+        roleId,
+        invB.id,
+      ]);
+      await asApp(B, insert.intent, [orgB.id, invB.id, spaceB.id, roleId]);
+      await asApp(B, insert.assignment, [roleId, dan, orgB.id, spaceB.id]);
+      expect(await spaceRoles.roleOf(orgB.id, spaceB.id, dan)).toBe(
+        'space_reader',
+      );
+      // Nada da B ficou pendurado na A.
+      expect(
+        await asApp(
+          { organizationId: orgA.id },
+          `SELECT 1 FROM role_assignments WHERE user_id = $1`,
+          [dan],
+        ),
+      ).toEqual([]);
+    });
+
+    it('revive paths require an active parent (tombstoned space or key -> NotFoundError)', async () => {
+      const ana = await makeUser('ana@x.com');
+      const bob = await makeUser('bob@x.com');
+      const org = await makeOrg('A', [ana], [bob]);
+      const { space, keyId } = await makeSpace(org.id, ana, [
+        [bob, 'space_reader'],
+      ]);
+      await uow.run(async () => {
+        await grants.tombstoneUser(org.id, space.id, bob);
+        await spaceRoles.remove(org.id, space.id, bob);
+      });
+      await admin.query(
+        `UPDATE space_keys SET deleted_at = now() WHERE id = $1`,
+        [keyId],
+      );
+      await expect(
+        grants.upsert(org.id, keyId, bob, 'again'),
+      ).rejects.toMatchObject({
+        constructor: NotFoundError,
+        code: 'space-key-not-found',
+      });
+      await expect(
+        keys.setRecoveryWrap(org.id, space.id, 1, 'x', FP_NEW),
+      ).rejects.toMatchObject({ code: 'space-key-not-found' });
+      await admin.query(`UPDATE spaces SET deleted_at = now() WHERE id = $1`, [
+        space.id,
+      ]);
+      await expect(
+        spaceRoles.assign(org.id, space.id, bob, 'space_reader', ana),
+      ).rejects.toMatchObject(NOT_FOUND);
+      const rows = (await admin.query(
+        `SELECT deleted_at FROM role_assignments WHERE scope_type = 'space' AND user_id = $1`,
+        [bob],
+      )) as { deleted_at: Date | null }[];
+      expect(rows).toHaveLength(1);
+      expect(rows[0]!.deleted_at).not.toBeNull();
     });
 
     it('role_assignments: space rows pass the org policy, and self_read stays limited to the own rows', async () => {

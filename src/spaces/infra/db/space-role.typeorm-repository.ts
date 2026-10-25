@@ -15,6 +15,7 @@ import {
   distinctSorted,
   requireUnitOfWork,
   spaceFactoryRoleId,
+  spaceNotFound,
   toCursorPage,
   updatedRows,
 } from './db-helpers.js';
@@ -48,8 +49,9 @@ export class SpaceRoleTypeormRepository extends SpaceRoleRepository {
             SET role_id = $4, granted_by_user_id = $5, deleted_at = NULL, updated_at = now()
           WHERE id = (
             SELECT ra.id FROM role_assignments ra
+              JOIN spaces s ON s.id = ra.space_id AND s.organization_id = ra.organization_id
              WHERE ra.organization_id = $1 AND ra.space_id = $2 AND ra.user_id = $3
-               AND ra.scope_type = 'space'
+               AND ra.scope_type = 'space' AND s.deleted_at IS NULL
              ORDER BY (ra.deleted_at IS NULL) DESC, ra.deleted_at DESC, ra.id DESC
              LIMIT 1)
          RETURNING id`,
@@ -70,9 +72,7 @@ export class SpaceRoleTypeormRepository extends SpaceRoleRepository {
         [orgId, spaceId, userId, roleId, grantedBy],
       );
       if (inserted.length === 0) {
-        throw new Error(
-          'SpaceRoleRepository.assign: the space does not exist in this organization.',
-        );
+        throw spaceNotFound();
       }
     });
   }

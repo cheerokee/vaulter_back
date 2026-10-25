@@ -35,10 +35,18 @@ export class SpacePendingGrantTypeormEntity extends BaseTypeormEntity {
   spaceId!: string;
 
   @ManyToOne(() => SpaceTypeormEntity)
-  @JoinColumn({
-    name: 'space_id',
-    foreignKeyConstraintName: 'fk_space_pending_grants_spaces',
-  })
+  @JoinColumn([
+    {
+      name: 'space_id',
+      referencedColumnName: 'id',
+      foreignKeyConstraintName: 'fk_space_pending_grants_spaces',
+    },
+    {
+      name: 'organization_id',
+      referencedColumnName: 'organizationId',
+      foreignKeyConstraintName: 'fk_space_pending_grants_spaces',
+    },
+  ])
   space?: SpaceTypeormEntity;
 
   @Column({ type: 'uuid' })
@@ -65,10 +73,18 @@ export class SpacePendingGrantTypeormEntity extends BaseTypeormEntity {
   invitationId!: string | null;
 
   @ManyToOne('OrganizationInvitationTypeormEntity')
-  @JoinColumn({
-    name: 'invitation_id',
-    foreignKeyConstraintName: 'fk_space_pending_grants_invitations',
-  })
+  @JoinColumn([
+    {
+      name: 'invitation_id',
+      referencedColumnName: 'id',
+      foreignKeyConstraintName: 'fk_space_pending_grants_invitations',
+    },
+    {
+      name: 'organization_id',
+      referencedColumnName: 'organizationId',
+      foreignKeyConstraintName: 'fk_space_pending_grants_invitations',
+    },
+  ])
   invitation?: { id: string };
 
   @Column({ type: 'uuid', nullable: true })

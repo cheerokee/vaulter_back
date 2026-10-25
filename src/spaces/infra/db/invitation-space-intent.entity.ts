@@ -29,20 +29,36 @@ export class InvitationSpaceIntentTypeormEntity extends BaseTypeormEntity {
   invitationId!: string;
 
   @ManyToOne('OrganizationInvitationTypeormEntity')
-  @JoinColumn({
-    name: 'invitation_id',
-    foreignKeyConstraintName: 'fk_invitation_space_intents_invitations',
-  })
+  @JoinColumn([
+    {
+      name: 'invitation_id',
+      referencedColumnName: 'id',
+      foreignKeyConstraintName: 'fk_invitation_space_intents_invitations',
+    },
+    {
+      name: 'organization_id',
+      referencedColumnName: 'organizationId',
+      foreignKeyConstraintName: 'fk_invitation_space_intents_invitations',
+    },
+  ])
   invitation?: { id: string };
 
   @Column({ type: 'uuid' })
   spaceId!: string;
 
   @ManyToOne(() => SpaceTypeormEntity)
-  @JoinColumn({
-    name: 'space_id',
-    foreignKeyConstraintName: 'fk_invitation_space_intents_spaces',
-  })
+  @JoinColumn([
+    {
+      name: 'space_id',
+      referencedColumnName: 'id',
+      foreignKeyConstraintName: 'fk_invitation_space_intents_spaces',
+    },
+    {
+      name: 'organization_id',
+      referencedColumnName: 'organizationId',
+      foreignKeyConstraintName: 'fk_invitation_space_intents_spaces',
+    },
+  ])
   space?: SpaceTypeormEntity;
 
   @Column({ type: 'uuid' })

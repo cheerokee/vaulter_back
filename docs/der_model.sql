@@ -10,6 +10,10 @@
 --   ENUM(...) -> enum do Postgres (ou varchar + check)
 --   JSON      -> jsonb
 -- Índices únicos com deleted_at viram índices únicos parciais (WHERE deleted_at IS NULL) no Postgres.
+-- FKs de filho de espaço (space_keys, space_key_grants, space_pending_grants, invitation_space_intents e
+-- role_assignments.space_id) são compostas com organization_id no Postgres — (filho_id, organization_id) ->
+-- (pai.id, pai.organization_id), com UNIQUE (id, organization_id) em spaces, space_keys e
+-- organization_invitations —, porque a checagem de FK ignora o RLS.
 --
 -- Offline-first: tabelas que o hub/app sincronizam NUNCA têm DELETE físico; excluir = preencher deleted_at
 -- (lápide). Tabela de ligação com PK composta que volta a existir = limpar deleted_at, não inserir de novo.

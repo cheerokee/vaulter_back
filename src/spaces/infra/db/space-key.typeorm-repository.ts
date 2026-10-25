@@ -5,7 +5,7 @@ import {
   SpaceKeyRepository,
   type SpaceKeyVersion,
 } from '../../domain/space-key.repository.js';
-import { updatedRows } from './db-helpers.js';
+import { spaceKeyNotFound, spaceNotFound, updatedRows } from './db-helpers.js';
 
 type KeyRow = {
   id: string;
@@ -47,9 +47,7 @@ export class SpaceKeyTypeormRepository extends SpaceKeyRepository {
     );
     const row = rows[0];
     if (!row) {
-      throw new Error(
-        'SpaceKeyRepository.addVersion: the space does not exist in this organization.',
-      );
+      throw spaceNotFound();
     }
     return toVersion(row);
   }
@@ -90,9 +88,7 @@ export class SpaceKeyTypeormRepository extends SpaceKeyRepository {
         ),
     );
     if (updatedRows(raw).length === 0) {
-      throw new Error(
-        'SpaceKeyRepository.setRecoveryWrap: no such key version in this organization.',
-      );
+      throw spaceKeyNotFound();
     }
   }
 }

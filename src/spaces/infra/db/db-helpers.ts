@@ -4,6 +4,7 @@ import {
   type CursorPage,
 } from '../../../shared/domain/pagination.js';
 import { currentManager } from '../../../shared/infra/db/unit-of-work.js';
+import { NotFoundError } from '../../../shared/domain/errors.js';
 import type { SpaceRoleKey } from '../../domain/space-membership.js';
 
 // Locks (`FOR UPDATE`) só servem dentro de uma transação que dure o caso de uso inteiro.
@@ -54,4 +55,16 @@ export function toCursorPage<T>(
 // Ids sem repetição, em ordem estável.
 export function distinctSorted(ids: string[]): string[] {
   return [...new Set(ids)].sort();
+}
+
+// Pai ausente (inexistente, de outra organização ou com lápide): erro de domínio, nunca um 500.
+export function spaceNotFound(): NotFoundError {
+  return new NotFoundError('space-not-found', 'The space was not found.');
+}
+
+export function spaceKeyNotFound(): NotFoundError {
+  return new NotFoundError(
+    'space-key-not-found',
+    'The space key version was not found.',
+  );
 }

@@ -1,4 +1,12 @@
-import { Check, Column, Entity, Index, JoinColumn, ManyToOne } from 'typeorm';
+import {
+  Check,
+  Column,
+  Entity,
+  Index,
+  JoinColumn,
+  ManyToOne,
+  Unique,
+} from 'typeorm';
 import { SyncableTypeormEntity } from '../../../shared/infra/db/base.entity.js';
 
 export type CloudMode = 'encrypted_backup' | 'active_cloud';
@@ -6,6 +14,8 @@ export type CloudMode = 'encrypted_backup' | 'active_cloud';
 // Sincronizável. RLS por organization_id (migration CreateSpaces, policy org_isolation).
 // key_rotation_required: flag do backend (troca de chave pendente depois da saída de um membro).
 @Entity('spaces')
+// Alvo das FKs compostas (filho_id, organization_id): o pai precisa ser da mesma organização.
+@Unique('uq_spaces_id_organization', ['id', 'organizationId'])
 @Check(
   'ck_spaces_cloud_mode',
   `"cloud_mode" IN ('encrypted_backup', 'active_cloud')`,

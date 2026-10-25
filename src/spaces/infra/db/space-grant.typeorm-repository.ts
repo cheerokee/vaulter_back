@@ -5,7 +5,7 @@ import {
   SpaceGrantRepository,
   type SpaceGrant,
 } from '../../domain/space-grant.repository.js';
-import { distinctSorted, updatedRows } from './db-helpers.js';
+import { distinctSorted, spaceKeyNotFound, updatedRows } from './db-helpers.js';
 
 @Injectable()
 export class SpaceGrantTypeormRepository extends SpaceGrantRepository {
@@ -29,7 +29,9 @@ export class SpaceGrantTypeormRepository extends SpaceGrantRepository {
               SET wrapped_key = $4, deleted_at = NULL, updated_at = now()
             WHERE id = (
               SELECT g.id FROM space_key_grants g
+                JOIN space_keys k ON k.id = g.space_key_id AND k.organization_id = g.organization_id
                WHERE g.organization_id = $1 AND g.space_key_id = $2 AND g.user_id = $3
+                 AND k.deleted_at IS NULL
                ORDER BY (g.deleted_at IS NULL) DESC, g.deleted_at DESC, g.id DESC
                LIMIT 1)
            RETURNING id`,
@@ -48,9 +50,7 @@ export class SpaceGrantTypeormRepository extends SpaceGrantRepository {
         [orgId, spaceKeyId, userId, wrappedKey],
       );
       if (inserted.length === 0) {
-        throw new Error(
-          'SpaceGrantRepository.upsert: the key version does not exist in this organization.',
-        );
+        throw spaceKeyNotFound();
       }
     });
   }
