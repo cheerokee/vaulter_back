@@ -247,6 +247,7 @@ CREATE TABLE spaces (
   cloud_mode ENUM('encrypted_backup', 'active_cloud') NOT NULL DEFAULT 'encrypted_backup',
   allow_online_llm TINYINT NOT NULL DEFAULT 1 COMMENT 'v1: só o campo; todos permitidos',
   current_key_version INT NOT NULL DEFAULT 1,
+  key_rotation_required TINYINT NOT NULL DEFAULT 0 COMMENT 'troca de chave pendente após saída; estado do backend, não sincroniza o significado',
   sync_version BIGINT NOT NULL COMMENT 'versão de sincronização: sequência global do servidor, muda a cada insert/update/exclusão',
   PRIMARY KEY (id),
   INDEX fk_spaces_organizations_idx (organization_id),
@@ -260,12 +261,16 @@ CREATE TABLE space_keys (
   created_at DATETIME NOT NULL,
   updated_at DATETIME NULL,
   deleted_at DATETIME NULL,
+  organization_id CHAR(36) NOT NULL COMMENT 'desnormalizado para o RLS',
   space_id CHAR(36) NOT NULL,
   version INT NOT NULL,
   recovery_wrapped_key TEXT NOT NULL COMMENT 'trancada com organizations.recovery_public_key (kit)',
+  recovery_key_fingerprint VARCHAR(64) NOT NULL COMMENT 'hash do kit usado',
   sync_version BIGINT NOT NULL COMMENT 'versão de sincronização: sequência global do servidor, muda a cada insert/update/exclusão',
   PRIMARY KEY (id),
   UNIQUE INDEX uq_space_keys_space_version (space_id, version),
+  INDEX fk_space_keys_organizations_idx (organization_id),
+  CONSTRAINT fk_space_keys_organizations FOREIGN KEY (organization_id) REFERENCES organizations (id),
   CONSTRAINT fk_space_keys_spaces FOREIGN KEY (space_id) REFERENCES spaces (id),
   INDEX ix_space_keys_sync_version (sync_version)
 );
@@ -276,6 +281,7 @@ CREATE TABLE space_key_grants (
   created_at DATETIME NOT NULL,
   updated_at DATETIME NULL,
   deleted_at DATETIME NULL,
+  organization_id CHAR(36) NOT NULL COMMENT 'desnormalizado para o RLS',
   space_key_id CHAR(36) NOT NULL,
   user_id CHAR(36) NULL,
   hub_id CHAR(36) NULL,
@@ -286,9 +292,11 @@ CREATE TABLE space_key_grants (
   UNIQUE INDEX uq_space_key_grants_user (space_key_id, user_id),
   UNIQUE INDEX uq_space_key_grants_hub (space_key_id, hub_id),
   UNIQUE INDEX uq_space_key_grants_installation (space_key_id, app_installation_id),
+  INDEX fk_space_key_grants_organizations_idx (organization_id),
   INDEX fk_space_key_grants_users_idx (user_id),
   INDEX fk_space_key_grants_hubs_idx (hub_id),
   INDEX fk_space_key_grants_app_installations_idx (app_installation_id),
+  CONSTRAINT fk_space_key_grants_organizations FOREIGN KEY (organization_id) REFERENCES organizations (id),
   CONSTRAINT fk_space_key_grants_space_keys FOREIGN KEY (space_key_id) REFERENCES space_keys (id),
   CONSTRAINT fk_space_key_grants_users FOREIGN KEY (user_id) REFERENCES users (id),
   CONSTRAINT fk_space_key_grants_hubs FOREIGN KEY (hub_id) REFERENCES hubs (id),
@@ -416,6 +424,9 @@ CREATE TABLE role_permission (
 -- Onde: exatamente um de organization_id / space_id / hub_id, conforme scope_type.
 -- Ex.: "Ana é Editora no espaço Manuais"; "a sala do Hub da recepção é Leitora no espaço Manuais".
 -- Ter memory.read num espaço anda junto com uma cópia trancada da chave (space_key_grants).
+-- Escopo de espaço (scope_type = 'space'): space_id preenchido, user_id = o membro, role_id = papel de espaço.
+-- No Postgres: índice único parcial (space_id, user_id) WHERE scope_type = 'space' AND deleted_at IS NULL —
+-- no máximo uma atribuição ativa por pessoa em cada espaço (MySQL não expressa índice parcial).
 CREATE TABLE role_assignments (
   id CHAR(36) NOT NULL,
   created_at DATETIME NOT NULL,
@@ -454,6 +465,56 @@ CREATE TABLE role_assignments (
   CONSTRAINT fk_role_assignments_app_installations FOREIGN KEY (app_installation_id) REFERENCES app_installations (id),
   CONSTRAINT fk_role_assignments_approved_by FOREIGN KEY (approved_by_user_id) REFERENCES users (id),
   INDEX ix_role_assignments_sync_version (sync_version)
+);
+
+-- Pendência de trancar a chave do espaço para quem foi indicado por convite (ainda não tem conta/chave).
+-- Só do backend (não sincroniza com hub/app).
+CREATE TABLE space_pending_grants (
+  id CHAR(36) NOT NULL,
+  created_at DATETIME NOT NULL,
+  updated_at DATETIME NULL,
+  deleted_at DATETIME NULL,
+  organization_id CHAR(36) NOT NULL,
+  space_id CHAR(36) NOT NULL,
+  user_id CHAR(36) NOT NULL,
+  role_id CHAR(36) NOT NULL,
+  invitation_id CHAR(36) NULL,
+  requested_by_user_id CHAR(36) NOT NULL,
+  status ENUM('pending', 'granted', 'declined', 'cancelled') NOT NULL DEFAULT 'pending',
+  PRIMARY KEY (id),
+  INDEX fk_space_pending_grants_organizations_idx (organization_id),
+  INDEX fk_space_pending_grants_spaces_idx (space_id),
+  INDEX fk_space_pending_grants_users_idx (user_id),
+  INDEX fk_space_pending_grants_roles_idx (role_id),
+  INDEX fk_space_pending_grants_invitations_idx (invitation_id),
+  INDEX fk_space_pending_grants_requested_by_idx (requested_by_user_id),
+  CONSTRAINT fk_space_pending_grants_organizations FOREIGN KEY (organization_id) REFERENCES organizations (id),
+  CONSTRAINT fk_space_pending_grants_spaces FOREIGN KEY (space_id) REFERENCES spaces (id),
+  CONSTRAINT fk_space_pending_grants_users FOREIGN KEY (user_id) REFERENCES users (id),
+  CONSTRAINT fk_space_pending_grants_roles FOREIGN KEY (role_id) REFERENCES roles (id),
+  CONSTRAINT fk_space_pending_grants_invitations FOREIGN KEY (invitation_id) REFERENCES organization_invitations (id),
+  CONSTRAINT fk_space_pending_grants_requested_by FOREIGN KEY (requested_by_user_id) REFERENCES users (id)
+);
+
+-- Espaços indicados num convite (com o papel em cada um). Só do backend (não sincroniza com hub/app).
+CREATE TABLE invitation_space_intents (
+  id CHAR(36) NOT NULL,
+  created_at DATETIME NOT NULL,
+  updated_at DATETIME NULL,
+  deleted_at DATETIME NULL,
+  organization_id CHAR(36) NOT NULL,
+  invitation_id CHAR(36) NOT NULL,
+  space_id CHAR(36) NOT NULL,
+  role_id CHAR(36) NOT NULL,
+  PRIMARY KEY (id),
+  INDEX fk_invitation_space_intents_organizations_idx (organization_id),
+  INDEX fk_invitation_space_intents_invitations_idx (invitation_id),
+  INDEX fk_invitation_space_intents_spaces_idx (space_id),
+  INDEX fk_invitation_space_intents_roles_idx (role_id),
+  CONSTRAINT fk_invitation_space_intents_organizations FOREIGN KEY (organization_id) REFERENCES organizations (id),
+  CONSTRAINT fk_invitation_space_intents_invitations FOREIGN KEY (invitation_id) REFERENCES organization_invitations (id),
+  CONSTRAINT fk_invitation_space_intents_spaces FOREIGN KEY (space_id) REFERENCES spaces (id),
+  CONSTRAINT fk_invitation_space_intents_roles FOREIGN KEY (role_id) REFERENCES roles (id)
 );
 
 -- Permissões que o app pode pedir. À instalação só se concede a interseção (app declarou x papel concedido).
