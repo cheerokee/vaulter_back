@@ -110,3 +110,23 @@ describe('validateEnv', () => {
     ).toThrow(/AUTH_JWT_PREVIOUS_KEYS/);
   });
 });
+
+describe('validateEnv ARGON2_POOL_SIZE', () => {
+  it('is optional and treats empty as unset', () => {
+    expect(validateEnv(validConfig()).ARGON2_POOL_SIZE).toBeUndefined();
+    expect(
+      validateEnv({ ...validConfig(), ARGON2_POOL_SIZE: '' }).ARGON2_POOL_SIZE,
+    ).toBeUndefined();
+  });
+
+  it('accepts an integer >= 1 and rejects the rest', () => {
+    expect(
+      validateEnv({ ...validConfig(), ARGON2_POOL_SIZE: '3' }).ARGON2_POOL_SIZE,
+    ).toBe(3);
+    for (const bad of ['0', '-1', '1.5', 'x']) {
+      expect(() =>
+        validateEnv({ ...validConfig(), ARGON2_POOL_SIZE: bad }),
+      ).toThrow(/ARGON2_POOL_SIZE/);
+    }
+  });
+});

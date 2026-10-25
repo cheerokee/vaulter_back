@@ -139,6 +139,14 @@ export class EnvironmentVariables {
   @Max(1)
   SENTRY_TRACES_SAMPLE_RATE: number = 0;
 
+  @Transform(({ value }) =>
+    value === undefined || value === '' ? undefined : Number(value),
+  )
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  ARGON2_POOL_SIZE?: number;
+
   @Validate(TrustProxyConstraint)
   TRUST_PROXY: string = 'false';
 

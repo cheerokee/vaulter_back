@@ -1,42 +1,80 @@
-import { Injectable, type OnModuleInit } from '@nestjs/common';
-import { getSodium } from '../../../shared/infra/crypto/sodium.js';
+import { existsSync } from 'node:fs';
+import { availableParallelism } from 'node:os';
+import {
+  Injectable,
+  Optional,
+  type OnModuleDestroy,
+  type OnModuleInit,
+} from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
+import { Piscina } from 'piscina';
 import { AuthProofHasher } from '../../application/ports/auth-proof-hasher.js';
 
-// OWASP minimum for Argon2id: 2 iterations, 19 MiB.
-const OPS_LIMIT = 2;
-const MEM_LIMIT = 19_922_944;
 const DUMMY_PROOF = 'dummy-auth-proof-for-timing-equalisation';
 
+/** Compiled .js in dist/, .ts when running from sources (Vitest). */
+function workerFile(): URL {
+  const js = new URL('./argon2.worker.js', import.meta.url);
+  return existsSync(js) ? js : new URL('./argon2.worker.ts', import.meta.url);
+}
+
+/** Argon2id runs in a worker pool so ~25 ms of CPU per call never blocks the event loop. */
 @Injectable()
 export class SodiumAuthProofHasher
   extends AuthProofHasher
-  implements OnModuleInit
+  implements OnModuleInit, OnModuleDestroy
 {
+  private pool?: Piscina;
   private dummyHash?: Promise<string>;
 
-  /** Warms the dummy hash so the first unknown-email verify costs the same as later ones. */
+  constructor(@Optional() private readonly config?: ConfigService) {
+    super();
+  }
+
+  /** Creates the pool and warms the dummy hash so the first unknown-email verify costs the same as later ones. */
   async onModuleInit(): Promise<void> {
+    this.getPool();
     this.dummyHash ??= this.hash(DUMMY_PROOF);
     await this.dummyHash;
   }
 
+  async onModuleDestroy(): Promise<void> {
+    const pool = this.pool;
+    this.pool = undefined;
+    await pool?.destroy();
+  }
+
   async hash(authProof: string): Promise<string> {
-    const sodium = await getSodium();
-    return sodium.crypto_pwhash_str(authProof, OPS_LIMIT, MEM_LIMIT);
+    return (await this.getPool().run({ op: 'hash', authProof })) as string;
   }
 
   async verify(authHash: string, authProof: string): Promise<boolean> {
-    const sodium = await getSodium();
-    try {
-      return sodium.crypto_pwhash_str_verify(authHash, authProof);
-    } catch {
-      return false;
-    }
+    return (await this.getPool().run({
+      op: 'verify',
+      authHash,
+      authProof,
+    })) as boolean;
   }
 
   async verifyAgainstDummy(authProof: string): Promise<false> {
     this.dummyHash ??= this.hash(DUMMY_PROOF);
     await this.verify(await this.dummyHash, authProof);
     return false;
+  }
+
+  private getPool(): Piscina {
+    if (!this.pool) {
+      const size = Number(this.config?.get('ARGON2_POOL_SIZE'));
+      const threads =
+        Number.isInteger(size) && size >= 1
+          ? size
+          : Math.min(4, availableParallelism());
+      this.pool = new Piscina({
+        filename: workerFile().href,
+        minThreads: threads,
+        maxThreads: threads,
+      });
+    }
+    return this.pool;
   }
 }
