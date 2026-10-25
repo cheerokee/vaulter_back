@@ -45,9 +45,17 @@ describe('rate limiting (e2e)', () => {
     for (let i = 0; i < 10; i++) {
       const res = await loginAs(`ip-${i}@example.com`, '198.51.100.1');
       expect(res.status).toBe(401);
+      expect(
+        Object.keys(res.headers).filter(
+          (h) => h.startsWith('x-ratelimit') && h.endsWith('-email'),
+        ),
+      ).toEqual([]);
     }
     const res = await loginAs('ip-10@example.com', '198.51.100.1');
     expect(res.status).toBe(429);
+    expect(
+      Object.keys(res.headers).filter((h) => h.endsWith('-email')),
+    ).toEqual([]);
     expect(res.headers['content-type']).toMatch(/application\/problem\+json/);
     expect(res.body.type).toMatch(/\/too-many-requests$/);
     expect(res.body.status).toBe(429);
@@ -150,10 +158,21 @@ describe('rate limiting (e2e)', () => {
         .set(c.bearer(token))
         .set('X-Forwarded-For', '198.51.100.123');
     expect((await get()).status).toBe(200);
+    // a different un-overridden route from the same IP shares the same budget
+    expect(
+      (
+        await c
+          .http()
+          .get('/me')
+          .set(c.bearer(token))
+          .set('X-Forwarded-For', '198.51.100.123')
+      ).status,
+    ).toBe(200);
     const rows: { hits: number }[] = await admin.query(
       `SELECT hits FROM rate_limit_hits WHERE key LIKE 'default:%'`,
     );
     expect(rows).toHaveLength(1);
+    expect(rows[0]?.hits).toBe(2);
     await admin.query(
       `UPDATE rate_limit_hits SET hits = 300 WHERE key LIKE 'default:%'`,
     );

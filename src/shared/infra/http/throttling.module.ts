@@ -38,6 +38,8 @@ function isEnabled(value: unknown): boolean {
             {
               name: EMAIL_THROTTLER,
               ...RATE_LIMITS.loginEmail,
+              // Do not expose the per-e-mail counters (X-RateLimit-*-email); Retry-After is set by the guard.
+              setHeaders: false,
               skipIf: (context: ExecutionContext) =>
                 !enabled() ||
                 !Reflect.getMetadata(

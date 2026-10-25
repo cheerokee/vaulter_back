@@ -1,3 +1,4 @@
+import { ipTracker } from '../../../shared/infra/http/ip-tracker.js';
 import { normalizeEmail } from '../../domain/email.js';
 
 /**
@@ -10,5 +11,5 @@ export function loginEmailTracker(req: Record<string, any>): string {
   const email: unknown = req.body?.email;
   return typeof email === 'string'
     ? `email:${normalizeEmail(email)}`
-    : `ip:${String(req.ip)}`;
+    : `ip:${ipTracker(req.ip)}`;
 }
