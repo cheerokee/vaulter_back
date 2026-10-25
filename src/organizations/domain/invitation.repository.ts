@@ -13,8 +13,12 @@ export abstract class InvitationRepository {
     page: CursorPageRequest,
   ): Promise<CursorPage<Invitation>>;
   abstract revoke(orgId: string, id: string): Promise<boolean>;
-  /** Atomic: only succeeds while pending and unexpired. */
+  /**
+   * Atomic: only succeeds while pending and unexpired (`expires_at > now`). `orgId` comes from
+   * `findByTokenHash` and sets the RLS context, like every other organization-scoped method.
+   */
   abstract markAccepted(
+    orgId: string,
     id: string,
     userId: string,
     now: Date,

@@ -76,6 +76,13 @@ export async function resetDatabase(): Promise<void> {
         `SELECT * FROM "${t}" WHERE ${where}`,
       );
     }
+    // Snapshot vazio repõe um catálogo vazio para sempre (reset rodou antes do seed?): falha alto.
+    if (names.has('permissions') && !catalogSnapshot.permissions?.length) {
+      catalogSnapshot = undefined;
+      throw new Error(
+        'resetDatabase: the RBAC catalog snapshot is empty (permissions); migrations did not seed it.',
+      );
+    }
   }
   const list = [...names].map((t) => `"${t}"`).join(', ');
   await ds.query(`TRUNCATE ${list} RESTART IDENTITY CASCADE`);

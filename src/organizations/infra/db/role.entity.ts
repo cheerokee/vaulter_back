@@ -1,9 +1,11 @@
 import { Check, Column, Entity, Index, JoinColumn, ManyToOne } from 'typeorm';
 import { SyncableTypeormEntity } from '../../../shared/infra/db/base.entity.js';
 import type { PermissionScope } from '../../domain/rbac-catalog.js';
+import { OrganizationTypeormEntity } from './organization.entity.js';
 
 // organization_id nulo = papel de fábrica (key fixa e única); preenchido = papel próprio da organização.
-// A FK para organizations entra junto com essa tabela.
+// RLS (migration CreateOrganizations): lê os de fábrica e os da organização do contexto; grava só os da
+// organização do contexto.
 @Entity('roles')
 @Check(
   'ck_roles_scope_type',
@@ -22,6 +24,13 @@ import type { PermissionScope } from '../../domain/rbac-catalog.js';
 export class RoleTypeormEntity extends SyncableTypeormEntity {
   @Column({ type: 'uuid', nullable: true })
   organizationId!: string | null;
+
+  @ManyToOne(() => OrganizationTypeormEntity)
+  @JoinColumn({
+    name: 'organization_id',
+    foreignKeyConstraintName: 'fk_roles_organizations',
+  })
+  organization?: OrganizationTypeormEntity;
 
   @Column({ type: 'varchar', length: 20 })
   scopeType!: PermissionScope;
