@@ -5,6 +5,7 @@ import { LoggerModule } from 'nestjs-pino';
 import { AppController } from './app.controller.js';
 import { AppService } from './app.service.js';
 import { DatabaseModule } from './database/database.module.js';
+import { IdentityModule } from './identity/identity.module.js';
 import { pinoHttpOptions } from './shared/infra/observability/logger.config.js';
 import { validateEnv } from './shared/infra/config/env.validation.js';
 
@@ -19,6 +20,7 @@ import { validateEnv } from './shared/infra/config/env.validation.js';
     }),
     SentryModule.forRoot(),
     DatabaseModule,
+    IdentityModule,
   ],
   controllers: [AppController],
   providers: [AppService],
