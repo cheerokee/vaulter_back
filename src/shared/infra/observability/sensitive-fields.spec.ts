@@ -34,8 +34,16 @@ describe('scrubSensitive', () => {
         'token',
         'inviteToken',
         'invite_token',
+        'recoveryWrappedKey',
+        'recovery_wrapped_key',
       ]),
     );
+    expect(
+      scrubSensitive({ recoveryWrappedKey: 'k', recovery_wrapped_key: 'k' }),
+    ).toEqual({
+      recoveryWrappedKey: '[REDACTED]',
+      recovery_wrapped_key: '[REDACTED]',
+    });
     expect(scrubSensitive({ inviteToken: 't', invite_token: 't' })).toEqual({
       inviteToken: '[REDACTED]',
       invite_token: '[REDACTED]',

@@ -63,6 +63,7 @@ export class RecoverOrphanSpaceUseCase {
       OrphanRules.assertOrphan(
         (await this.roles.activeMemberIds(orgId, space.id)).length,
       );
+      // O limite de membros (SPACE_MAX_MEMBERS) não se aplica aqui: o espaço órfão tem zero membros.
       const versions = await this.keys.versions(orgId, space.id);
       KeyRotationRules.assertGrantsCoverVersions(
         input.grants.map((g) => g.version),

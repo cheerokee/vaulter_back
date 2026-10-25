@@ -1,11 +1,34 @@
-import { DomainValidationError } from '../../shared/domain/errors.js';
-import { SpaceMembershipRules as R } from './space-membership.js';
+import {
+  ConflictError,
+  DomainValidationError,
+} from '../../shared/domain/errors.js';
+import {
+  SPACE_MAX_MEMBERS,
+  SpaceMembershipRules as R,
+} from './space-membership.js';
 
 const last = { isLastManager: true, hasOtherMembers: true };
 const lastAlone = { isLastManager: true, hasOtherMembers: false };
 const notLast = { isLastManager: false, hasOtherMembers: true };
 
 describe('SpaceMembershipRules', () => {
+  it('caps the members of a space (409 space-member-limit), 500 by default', () => {
+    expect(SPACE_MAX_MEMBERS).toBe(500);
+    expect(() => R.assertCanAddMember(2, 3)).not.toThrow();
+    for (const count of [3, 4]) {
+      expect(() => R.assertCanAddMember(count, 3)).toThrowError(
+        expect.objectContaining({
+          constructor: ConflictError,
+          code: 'space-member-limit',
+        }),
+      );
+    }
+    expect(() => R.assertCanAddMember(SPACE_MAX_MEMBERS - 1)).not.toThrow();
+    expect(() => R.assertCanAddMember(SPACE_MAX_MEMBERS)).toThrowError(
+      expect.objectContaining({ code: 'space-member-limit' }),
+    );
+  });
+
   it('accepts only the three space roles', () => {
     for (const k of ['space_reader', 'space_editor', 'space_manager']) {
       expect(R.assertSpaceRole(k)).toBe(k);

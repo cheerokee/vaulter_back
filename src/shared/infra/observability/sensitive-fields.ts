@@ -15,6 +15,7 @@ const BASE_KEYS = [
   'newKdfSalt',
   'newKdfParams',
   'wrappedKey',
+  'recoveryWrappedKey',
   'accessToken',
   'refreshToken',
   'authorization',

@@ -1,4 +1,14 @@
-import { DomainValidationError } from '../../shared/domain/errors.js';
+import {
+  ConflictError,
+  DomainValidationError,
+} from '../../shared/domain/errors.js';
+
+/**
+ * Active members per space. Every member must receive a copy of each new key version in ONE rotation request,
+ * so the cap keeps that request possible (and a pending rotation never gets stuck); the rotation DTO derives
+ * its limit from this constant.
+ */
+export const SPACE_MAX_MEMBERS = 500;
 
 export const SPACE_ROLE_KEYS = [
   'space_reader',
@@ -69,6 +79,16 @@ export const SpaceMembershipRules = {
       ),
       hasOtherMembers: memberIds.some((id) => id !== targetUserId),
     };
+  },
+
+  /** `activeMembers` counted under the space lock; adding one more must not pass the cap. */
+  assertCanAddMember(activeMembers: number, max = SPACE_MAX_MEMBERS): void {
+    if (activeMembers >= max) {
+      throw new ConflictError(
+        'space-member-limit',
+        `A space can have at most ${max} members.`,
+      );
+    }
   },
 
   assertSpaceRole(roleKey: string): SpaceRoleKey {

@@ -219,6 +219,20 @@ O convite (`POST /organizations/:id/invitations`) ganha `spaces` opcional.
 - **Isolamento:** `spaces`, `space_keys` e `space_key_grants` levam RLS. As duas tabelas de chave não têm
   `organization_id` no DER, então a policy usa `EXISTS` no espaço, ou recebe `organization_id` desnormalizado
   (decisão do builder, testada pelo papel de runtime).
+  - O 404 uniforme vale **entre organizações**: um `spaceId` de outra organização (ou inexistente) responde 404 em
+    toda rota, inclusive na intenção de espaço do convite. **Dentro da própria organização**, quem convida
+    indicando um espaço de que não é Gestor recebe **403** (não vaza nada: o admin já lista os espaços com
+    `?all=true`).
+- **Limites (nenhum espaço pode ficar travado):**
+  - **membros:** no máximo `SPACE_MAX_MEMBERS = 500` membros ativos por espaço (constante do domínio). A troca de
+    chave manda uma cópia por membro num pedido só, então pôr o 501º (inclusive ao atender uma pendência de
+    convite) responde 409 `space-member-limit`; o limite de cópias do DTO da troca vem da mesma constante
+    (500 × ~175 bytes ≈ 88 kB). A reabertura pelo kit só acontece com zero membros;
+  - **versões:** pôr membro, retrancar para o kit e reabrir pelo kit mandam **todas as versões num pedido só**, e
+    isso cresce com as versões (cada saída do espaço = uma troca = uma versão). O DTO aceita até 500 versões
+    (500 × ~142 bytes ≈ 71 kB, abaixo do limite padrão de 100 kB do corpo JSON). A versão da troca nunca tem
+    teto. Quando algum espaço se aproximar: aumentar o limite do corpo JSON nessas rotas, ou aceitar as versões
+    em lotes por faixa de versão.
 - **Sincronizáveis:** `spaces`, `space_keys` e `space_key_grants` levam `sync_version`. Remover é lápide.
 - **Pendências:** as flags ("troca de chave pendente", "retrancar para o kit pendente") e as pendências de
   trancar por convite são estado **do backend**. Não sincronizam e nunca carregam material de chave.

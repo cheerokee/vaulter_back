@@ -320,6 +320,10 @@ exportam); nenhum dos dois importa `spaces`.
   `validation-failed`); listas usam `pageResponse` (`cursor-pagination.query.ts`). Cópia trancada no DTO:
   `^[A-Za-z0-9_-]{108}$`; chave do kit: 43 caracteres. A recusa de pendência é por id
   (`DELETE /spaces/:id/pending-grants/:pendingGrantId`); `POST /spaces/:id/recover` usa `@ThrottleReauth()`.
+- **Limites (spec §8):** `SPACE_MAX_MEMBERS = 500` (domínio; pôr o 501º -> 409 `space-member-limit`; o DTO da troca
+  de chave usa a mesma constante). Pôr membro, retrancar e reabrir mandam **todas as versões num pedido só**
+  (`MAX_KEY_VERSIONS = 500`, ~71 kB < 100 kB do corpo JSON); a versão da troca não tem teto. Perto do limite:
+  aumentar o limite do corpo JSON nessas rotas ou aceitar versões em lotes por faixa.
 - **e2e com a cripto real do cliente:** os helpers de espaço ficam em `test/support/identity-client.ts`
   (`c.spaces`: criar com kit, pôr membro selando todas as versões, trocar a chave, retrancar, abrir as cópias) e
   as invariantes de banco em `test/support/spaces-db.ts`. Não duplicar nos specs.

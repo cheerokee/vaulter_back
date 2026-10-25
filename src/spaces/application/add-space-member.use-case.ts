@@ -71,6 +71,10 @@ export class AddSpaceMemberUseCase {
           'The user is already a member of the space.',
         );
       }
+      // Contado com o espaço travado: toda entrada passa por este lock, então duas entradas não furam o limite.
+      SpaceMembershipRules.assertCanAddMember(
+        (await this.roles.activeMemberIds(orgId, space.id)).length,
+      );
       const versions = await this.keys.versions(orgId, space.id);
       KeyRotationRules.assertGrantsCoverVersions(
         input.grants.map((g) => g.version),

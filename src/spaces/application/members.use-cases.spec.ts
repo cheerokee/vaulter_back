@@ -20,6 +20,7 @@ import {
   makeSpaceKit,
   wk,
 } from '../../../test/support/spaces-kit.js';
+import { SPACE_MAX_MEMBERS } from '../domain/space-membership.js';
 import { AddSpaceMemberUseCase } from './add-space-member.use-case.js';
 import { ChangeSpaceMemberRoleUseCase } from './change-space-member-role.use-case.js';
 import { DeclinePendingGrantUseCase } from './decline-pending-grant.use-case.js';
@@ -188,6 +189,30 @@ describe('AddSpaceMemberUseCase', () => {
       ).rejects.toMatchObject(NOT_FOUND);
     }
     expect(m.spaces.lockForUpdate).not.toHaveBeenCalled();
+  });
+
+  it('refuses a member beyond SPACE_MAX_MEMBERS (409 space-member-limit), counted under the lock', async () => {
+    const roles = kit.spaceRoles.get(SPACE_ID)!;
+    // 3 members already; fill up to the limit with fake ids
+    for (let i = roles.size; i < SPACE_MAX_MEMBERS; i++) {
+      roles.set(`fake-${i}`, 'space_reader');
+    }
+    await expect(
+      useCase().execute(actor(MANAGER), SPACE_ID, input),
+    ).rejects.toMatchObject({
+      constructor: ConflictError,
+      code: 'space-member-limit',
+    });
+    expect(m.grants.upsert).not.toHaveBeenCalled();
+    expect(m.roles.assign).not.toHaveBeenCalled();
+    expect(kit.trace.indexOf('roles.activeMemberIds')).toBeGreaterThan(
+      kit.trace.indexOf('spaces.lockForUpdate'),
+    );
+    // one seat left: accepted
+    roles.delete(`fake-${SPACE_MAX_MEMBERS - 1}`);
+    await expect(
+      useCase().execute(actor(MANAGER), SPACE_ID, input),
+    ).resolves.toEqual({ userId: OUTSIDER, roleKey: 'space_editor' });
   });
 
   it('an editor gets 403', async () => {
