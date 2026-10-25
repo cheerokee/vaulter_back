@@ -7,6 +7,7 @@ import { ChangeSpaceMemberRoleUseCase } from './application/change-space-member-
 import { CreateSpaceUseCase } from './application/create-space.use-case.js';
 import { DeclinePendingGrantUseCase } from './application/decline-pending-grant.use-case.js';
 import { GetMyKeysUseCase } from './application/get-my-keys.use-case.js';
+import { GetRecoveryCopiesUseCase } from './application/get-recovery-copies.use-case.js';
 import { GetSpaceUseCase } from './application/get-space.use-case.js';
 import { SpacesInvitationHook } from './application/invitation.hook.js';
 import { LeaveSpaceUseCase } from './application/leave-space.use-case.js';
@@ -75,6 +76,7 @@ import { SpacesController } from './infra/http/spaces.controller.js';
     CreateSpaceUseCase,
     DeclinePendingGrantUseCase,
     GetMyKeysUseCase,
+    GetRecoveryCopiesUseCase,
     GetSpaceUseCase,
     SpacesInvitationHook,
     LeaveSpaceUseCase,

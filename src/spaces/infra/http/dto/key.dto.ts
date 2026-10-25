@@ -77,6 +77,13 @@ export class RewrapRecoveryDto {
   versions!: VersionGrantDto[];
 }
 
+export class RecoveryCopiesDto {
+  @IsString()
+  @Matches(BASE64URL)
+  @MaxLength(256)
+  currentAuthProof!: string;
+}
+
 export class RecoverOrphanSpaceDto {
   /** Every version, opened with the recovery kit and sealed for the admin. */
   @IsArray()

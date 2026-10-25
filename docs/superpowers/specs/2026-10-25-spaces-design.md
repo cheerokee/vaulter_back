@@ -135,6 +135,11 @@ quando a pessoa sai da organização (abaixo).
   - **Sem Gestor, mas com membros:** um admin da organização pode **promover um membro que já está no espaço**
     a Gestor (`POST /spaces/:id/managers`), sem kit nenhum. Ele não se põe no espaço e não lê nada. Fica auditado.
   - **Órfão (nenhum membro ativo):** um admin reabre pelo kit de recuperação (`POST /spaces/:id/recover`).
+    - **Cópias do kit (revisão final):** o app do admin lê as cópias do kit de cada versão em
+      `POST /spaces/:id/recover/copies` (`{ currentAuthProof }` -> `{ currentVersion, copies: [{ version,
+      recoveryWrappedKey, recoveryKeyFingerprint }] }`). Exige `org.members.manage`, o espaço órfão (pré-checagem
+      sem lock antes da reautenticação, checagem que vale sob o lock) e reautenticação antes da leitura; auditado
+      `space.recovery_copies_read` (sem as cópias). A cópia do kit não abre sem a parte secreta do kit.
     - O app abre as cópias do kit com a parte secreta, tranca **todas as versões** para o próprio admin e manda
       `grants: [{ version, wrappedKey }]` e `currentAuthProof` (reautenticação, como na troca do kit).
     - O backend só aceita com o espaço sem nenhum membro ativo (`space-not-orphan`, 409). O admin entra como Gestor.
@@ -198,6 +203,7 @@ segundo plano)
 | `POST /spaces/:id/keys` | nova versão (`version`, `grants[]`, `recoveryPublicKey`, `recoveryWrappedKey`) | com troca pendente, qualquer membro; sem ela, só o Gestor (10/h por usuário) |
 | `PUT /spaces/:id/keys/recovery` | retranca todas as versões para o kit atual (`versions[]`) | membro do espaço |
 | `POST /spaces/:id/managers` | admin promove um membro existente a Gestor quando o espaço ficou sem Gestor | admin da org |
+| `POST /spaces/:id/recover/copies` | cópias do kit de todas as versões de um espaço órfão (`currentAuthProof`) | admin da org (`org.members.manage`) |
 | `POST /spaces/:id/recover` | admin reabre um espaço órfão pelo kit (`grants[]`, `currentAuthProof`) | admin da org |
 | `GET /spaces/:id/pending-grants` | pendências de trancar (pessoas indicadas por convite) | Gestor |
 | `DELETE /spaces/:id/pending-grants/:id` | recusa a pendência | Gestor |
@@ -246,7 +252,7 @@ O convite (`POST /organizations/:id/invitations`) ganha `spaces` opcional.
   espaço, `space_keys.recovery_key_fingerprint`, a flag de troca de chave pendente e a tabela de pendências de
   trancar.
 - **Rate limit:** `POST /spaces/:id/keys` tem contador próprio por usuário (10 por hora, `RATE_LIMITS.spaceKeyRotation`).
-  `POST /spaces/:id/recover` usa o mesmo limite de reautenticação por usuário de
+  `POST /spaces/:id/recover` e `POST /spaces/:id/recover/copies` usam o mesmo limite de reautenticação por usuário de
   `PUT /me/password` e da troca do kit (`@ThrottleReauth`).
 
 ## 9. Fica a cargo de quem construir

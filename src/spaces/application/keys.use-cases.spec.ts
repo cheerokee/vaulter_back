@@ -23,6 +23,7 @@ import {
   wk,
 } from '../../../test/support/spaces-kit.js';
 import { GetMyKeysUseCase } from './get-my-keys.use-case.js';
+import { GetRecoveryCopiesUseCase } from './get-recovery-copies.use-case.js';
 import { RecoverOrphanSpaceUseCase } from './recover-orphan-space.use-case.js';
 import { RewrapRecoveryUseCase } from './rewrap-recovery.use-case.js';
 import { RotateSpaceKeyUseCase } from './rotate-space-key.use-case.js';
@@ -485,6 +486,118 @@ describe('RecoverOrphanSpaceUseCase', () => {
         grants: [{ version: 1, wrappedKey: BAD_WK }],
       }),
     ).rejects.toMatchObject({ code: 'wrapped-key-invalid' });
+    expect(m.verifier.verify).not.toHaveBeenCalled();
+  });
+});
+
+describe('GetRecoveryCopiesUseCase', () => {
+  const useCase = () =>
+    new GetRecoveryCopiesUseCase(
+      d.access,
+      d.verifier,
+      d.keys,
+      d.roles,
+      d.audit,
+      d.uow,
+    );
+  const orphan = () =>
+    kit.addSpace(SPACE_ID, ORG_ID, [], {
+      version: 2,
+      fingerprints: [fp(OLD_KIT_PK), fp(KIT_PK)],
+    });
+  const input = { currentAuthProof: PROOF };
+
+  it('reauth before the unit of work; returns the kit copy of every version under the lock; audited without copies', async () => {
+    orphan();
+    await expect(
+      useCase().execute(actor(ADMIN), SPACE_ID, input),
+    ).resolves.toEqual({
+      currentVersion: 2,
+      copies: [
+        {
+          version: 1,
+          recoveryWrappedKey: wk(90),
+          recoveryKeyFingerprint: fp(OLD_KIT_PK),
+        },
+        {
+          version: 2,
+          recoveryWrappedKey: wk(91),
+          recoveryKeyFingerprint: fp(KIT_PK),
+        },
+      ],
+    });
+    expect(m.verifier.verify).toHaveBeenCalledWith(ADMIN, PROOF);
+    expect(kit.trace).toContain('verifier.verify@out');
+    const lock = kit.trace.indexOf('spaces.lockForUpdate');
+    expect(lock).toBeGreaterThan(kit.trace.indexOf('verifier.verify@out'));
+    expect(kit.trace.lastIndexOf('roles.activeMemberIds')).toBeGreaterThan(
+      lock,
+    );
+    expect(kit.trace.indexOf('keys.versions')).toBeGreaterThan(lock);
+    expect(kit.audited()).toEqual([
+      {
+        organizationId: ORG_ID,
+        userId: ADMIN,
+        action: 'space.recovery_copies_read',
+        metadata: { spaceId: SPACE_ID, versions: 2 },
+      },
+    ]);
+    expect(kit.auditDump()).not.toContain(wk(90));
+    expect(kit.auditDump()).not.toContain(PROOF);
+    // read-only: nothing is written besides the audit
+    expect(m.grants.upsert).not.toHaveBeenCalled();
+    expect(m.roles.assign).not.toHaveBeenCalled();
+  });
+
+  it('a space with members: 409 space-not-orphan before the reauth (non-locking pre-check)', async () => {
+    await expect(
+      useCase().execute(actor(ADMIN), SPACE_ID, input),
+    ).rejects.toMatchObject({
+      constructor: ConflictError,
+      code: 'space-not-orphan',
+    });
+    expect(m.verifier.verify).not.toHaveBeenCalled();
+    expect(m.uow.run).not.toHaveBeenCalled();
+    expect(m.keys.versions).not.toHaveBeenCalled();
+  });
+
+  it('a member appearing between the pre-check and the lock: 409 under the lock, no copy read', async () => {
+    orphan();
+    m.roles.activeMemberIds
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([READER]);
+    await expect(
+      useCase().execute(actor(ADMIN), SPACE_ID, input),
+    ).rejects.toMatchObject({ code: 'space-not-orphan' });
+    expect(m.verifier.verify).toHaveBeenCalled();
+    expect(m.keys.versions).not.toHaveBeenCalled();
+    expect(m.audit.record).not.toHaveBeenCalled();
+  });
+
+  it('wrong proof: the error propagates, nothing read', async () => {
+    orphan();
+    m.verifier.verify.mockRejectedValue(
+      new DomainValidationError('current-auth-proof-invalid', 'x'),
+    );
+    await expect(
+      useCase().execute(actor(ADMIN), SPACE_ID, input),
+    ).rejects.toMatchObject({ code: 'current-auth-proof-invalid' });
+    expect(m.uow.run).not.toHaveBeenCalled();
+    expect(m.keys.versions).not.toHaveBeenCalled();
+  });
+
+  it('needs org.members.manage: org member and other org admin 404 (no reauth spent); space member without it 403', async () => {
+    orphan();
+    for (const userId of [OUTSIDER, OTHER_ADMIN]) {
+      await expect(
+        useCase().execute(actor(userId), SPACE_ID, input),
+      ).rejects.toMatchObject(NOT_FOUND);
+    }
+    expect(m.verifier.verify).not.toHaveBeenCalled();
+    kit.reset();
+    await expect(
+      useCase().execute(actor(EDITOR), SPACE_ID, input),
+    ).rejects.toBeInstanceOf(PermissionDeniedError);
     expect(m.verifier.verify).not.toHaveBeenCalled();
   });
 });

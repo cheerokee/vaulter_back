@@ -293,7 +293,8 @@ src/organizations/
 - **Auditoria (`audit_logs`):** *append-only* — o papel de runtime tem só `INSERT`/`SELECT` (sem `UPDATE`/`DELETE`),
   via `AuditLog.record` dentro da mesma transação da ação. Ações: `organization.created`, `organization.updated`,
   `organization.recovery_key.registered|replaced`, `member.joined`, `member.left`, `member.removed`,
-  `member.role_changed`, `invitation.created`, `invitation.revoked` e as `space.*` do módulo `spaces`. `metadata`
+  `member.role_changed`, `invitation.created`, `invitation.revoked` e as `space.*` do módulo `spaces` (inclusive
+  `space.recovery_copies_read`, quando um admin lê as cópias do kit de um espaço órfão). `metadata`
   nunca leva segredo/token/cópia trancada.
 - **Assentos:** assento = membro ativo (convite pendente não conta). `SeatPolicy` (hoje ilimitado) é checada ao criar
   e ao aceitar convite. TODO ao entrarem limites reais: travar a linha da organização (`FOR UPDATE`) antes de contar,
@@ -333,8 +334,10 @@ exportam); nenhum dos dois importa `spaces`.
     (`RATE_LIMITS.spaceKeyRotation`) — senão um Leitor inflaria as versões além de `MAX_KEY_VERSIONS`;
   - **retrancar** (`rewrap`) regrava o kit da organização para todas as versões quando o kit muda, com a impressão
     do kit informada (`RecoveryKit`; 409 `recovery-key-changed` se divergir);
-  - **órfão** (nenhum membro com papel): só um admin com `org.members.manage` reabre, **pelo kit**
-    (`POST /spaces/:id/recover`, exige reautenticação) mandando as cópias de todas as versões seladas para ele;
+  - **órfão** (nenhum membro com papel): só um admin com `org.members.manage` reabre, **pelo kit**, em dois passos
+    com reautenticação: `POST /spaces/:id/recover/copies` devolve as cópias do kit de todas as versões
+    (`recoveryWrappedKey` + impressão; auditado `space.recovery_copies_read`, sem as cópias), o app abre com a parte
+    secreta do kit e `POST /spaces/:id/recover` manda as cópias de todas as versões seladas para o admin;
     é a única forma de um admin se pôr num espaço. **Promover Gestor** também é operação de admin (404 se fora da org);
   - pôr membro novo exige as cópias de **todas** as versões no mesmo pedido; o convite aceito deixa uma **pendência
     de trancar** (`space_pending_grants`) que o Gestor resolve (põe a cópia) ou recusa **por id**.
@@ -342,7 +345,8 @@ exportam); nenhum dos dois importa `spaces`.
   tag `spaces`): ids de caminho passam pelo `uuidPipe` (`src/shared/infra/http/uuid-pipe.ts`, 422
   `validation-failed`); listas usam `pageResponse` (`cursor-pagination.query.ts`). Cópia trancada no DTO:
   `^[A-Za-z0-9_-]{108}$`; chave do kit: 43 caracteres. A recusa de pendência é por id
-  (`DELETE /spaces/:id/pending-grants/:pendingGrantId`); `POST /spaces/:id/recover` usa `@ThrottleReauth()`.
+  (`DELETE /spaces/:id/pending-grants/:pendingGrantId`); `POST /spaces/:id/recover` e `POST /spaces/:id/recover/copies`
+  usam `@ThrottleReauth()`.
 - **Limites (spec §8):** `SPACE_MAX_MEMBERS = 500` (domínio; pôr o 501º -> 409 `space-member-limit`; o DTO da troca
   de chave usa a mesma constante). Pôr membro, retrancar e reabrir mandam **todas as versões num pedido só**
   (`MAX_KEY_VERSIONS = 500`, ~71 kB < 100 kB do corpo JSON); a versão da troca não tem teto. Perto do limite:
@@ -477,7 +481,7 @@ Os valores do `.env.example` para os segredos são **só de desenvolvimento**; p
   | `POST /auth/register` | 10/h por IP |
   | `POST /auth/login` | 10/min por IP **e** 5/min por e-mail normalizado |
   | `POST /auth/refresh` | 60/min por IP |
-  | `PUT /me/password` **e** `PUT /organizations/:id/recovery-key` (reautenticação) | 5 por 15 min por usuário, **um orçamento só para as duas** |
+  | `PUT /me/password`, `PUT /organizations/:id/recovery-key`, `POST /spaces/:id/recover` e `POST /spaces/:id/recover/copies` (reautenticação) | 5 por 15 min por usuário, **um orçamento só para todas** |
   | `POST /invitations/preview` (pública) | 30/min por IP |
   | `POST /invitations/accept` | 10/min por IP |
   | `POST /spaces/:id/keys` (troca da chave do espaço) | 10/h por usuário (`userIdTracker`, contador próprio) |

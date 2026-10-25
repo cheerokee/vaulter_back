@@ -22,6 +22,7 @@ export type AuditAction =
   | 'space.key_rotated'
   | 'space.recovery_rewrapped'
   | 'space.recovered_with_kit'
+  | 'space.recovery_copies_read'
   | 'space.manager_promoted'
   | 'space.pending_grant_declined';
 

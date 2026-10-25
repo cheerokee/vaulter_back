@@ -217,6 +217,40 @@ export function identityClient(getApp: () => INestApplication) {
             })),
           ),
         }),
+    /** POST /spaces/:id/recover/copies (org admin, orphan space, reauthenticated): the kit copies. */
+    recoveryCopies: (
+      token: string,
+      spaceId: string,
+      currentAuthProof: string,
+    ) =>
+      http()
+        .post(`/spaces/${spaceId}/recover/copies`)
+        .set(auth(token))
+        .send({ currentAuthProof }),
+    /**
+     * What the admin's app does to reopen an orphan space: reads the kit copies through the API (reauthenticated)
+     * and opens each with the kit secret. Returns the keys in version order (keys[i] = version i + 1).
+     */
+    openRecoveryCopies: async (
+      admin: KeyedUser,
+      spaceId: string,
+      kit: { publicKey: string; privateKey: Uint8Array },
+    ) => {
+      const res = await http()
+        .post(`/spaces/${spaceId}/recover/copies`)
+        .set(auth(admin.token))
+        .send({ currentAuthProof: admin.account.authProof })
+        .expect(200);
+      const copies = res.body.copies as {
+        version: number;
+        recoveryWrappedKey: string;
+      }[];
+      return Promise.all(
+        copies.map((c) =>
+          openSpaceKey(c.recoveryWrappedKey, kit.publicKey, kit.privateKey),
+        ),
+      );
+    },
     /** GET /spaces/:id/keys and opens every copy with the user's private key (throws if any does not open). */
     openKeys: async (user: KeyedUser, spaceId: string) => {
       const res = await http()

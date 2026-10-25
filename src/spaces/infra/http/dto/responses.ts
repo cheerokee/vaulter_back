@@ -1,4 +1,5 @@
 import type { MyKeysView } from '../../../application/dto/my-keys-view.js';
+import type { RecoveryCopiesView } from '../../../application/get-recovery-copies.use-case.js';
 import type { PendingGrantView } from '../../../application/dto/pending-grant-view.js';
 import type { SpaceMemberView } from '../../../application/dto/space-member-view.js';
 import type {
@@ -67,6 +68,17 @@ export function myKeysResponse(v: MyKeysView) {
   return {
     currentVersion: v.currentVersion,
     keys: v.keys.map((k) => ({ version: k.version, wrappedKey: k.wrappedKey })),
+  };
+}
+
+export function recoveryCopiesResponse(v: RecoveryCopiesView) {
+  return {
+    currentVersion: v.currentVersion,
+    copies: v.copies.map((c) => ({
+      version: c.version,
+      recoveryWrappedKey: c.recoveryWrappedKey,
+      recoveryKeyFingerprint: c.recoveryKeyFingerprint,
+    })),
   };
 }
 

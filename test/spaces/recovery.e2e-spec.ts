@@ -44,7 +44,10 @@ describe('Space recovery kit, orphan spaces and managers (e2e)', () => {
     return { orgId, kit, spaceId: space.spaceId, keys: [space.key] };
   };
 
-  /** What the kit holder does: opens the kit copy of every version (read from the backup) with the kit. */
+  /**
+   * Verification only (stored state): opens the kit copy of every version, read straight from the database.
+   * The recovery flow itself reads the copies through `POST /spaces/:id/recover/copies` (s.openRecoveryCopies).
+   */
   const openWithKit = async (spaceId: string, kit: Kit) => {
     const rows: { version: number; recovery_wrapped_key: string }[] = await (
       await adminDataSource()
@@ -191,14 +194,17 @@ describe('Space recovery kit, orphan spaces and managers (e2e)', () => {
       s.addMember(owner.token, spaceId, recipientOf(ana), keys),
       201,
     );
-    const kitKeys = await openWithKit(spaceId, kit);
-    expect(kitKeys).toEqual(keys);
+    // the kit copies are only handed out for an orphan space (checked before the reauth)
+    const copiesNotOrphan = await s
+      .recoveryCopies(admin2.token, spaceId, owner.account.authProof)
+      .expect(409);
+    expect(copiesNotOrphan.body.type).toMatch(/\/space-not-orphan$/);
 
     const notOrphan = await c
       .http()
       .post(`/spaces/${spaceId}/recover`)
       .set(h(admin2))
-      .send(await recoverBody(kitKeys, admin2, admin2.account.authProof))
+      .send(await recoverBody(keys, admin2, admin2.account.authProof))
       .expect(409);
     expect(notOrphan.body.type).toMatch(/\/space-not-orphan$/);
 
@@ -209,6 +215,44 @@ describe('Space recovery kit, orphan spaces and managers (e2e)', () => {
       .set(h(owner))
       .expect(204);
     await c.http().post(`/spaces/${spaceId}/leave`).set(h(owner)).expect(204);
+    expect(await activeSpaceMembers(spaceId)).toEqual([]);
+
+    // the copies route: a plain org member 404, wrong proof 422, missing proof 422; nothing audited
+    await s
+      .recoveryCopies(bia.token, spaceId, bia.account.authProof)
+      .expect(404);
+    const wrongCopies = await s
+      .recoveryCopies(admin2.token, spaceId, owner.account.authProof)
+      .expect(422);
+    expect(wrongCopies.body.type).toMatch(/\/current-auth-proof-invalid$/);
+    await c
+      .http()
+      .post(`/spaces/${spaceId}/recover/copies`)
+      .set(h(admin2))
+      .send({})
+      .expect(422);
+    expect(await auditRows(orgId, 'space.recovery_copies_read')).toEqual([]);
+
+    // the admin's app reads the kit copies through the API and opens them with the kit secret
+    const copies = await s
+      .recoveryCopies(admin2.token, spaceId, admin2.account.authProof)
+      .expect(200);
+    expect(copies.body.currentVersion).toBe(1);
+    expect(copies.body.copies).toHaveLength(1);
+    expect(Object.keys(copies.body.copies[0]).sort()).toEqual([
+      'recoveryKeyFingerprint',
+      'recoveryWrappedKey',
+      'version',
+    ]);
+    const kitKeys = await s.openRecoveryCopies(admin2, spaceId, kit);
+    expect(kitKeys).toEqual(keys);
+    const readAudit = await auditRows(orgId, 'space.recovery_copies_read');
+    expect(readAudit).toHaveLength(2);
+    expect(readAudit[0]!.user_id).toBe(admin2.userId);
+    expect(readAudit[0]!.metadata).toEqual({ spaceId, versions: 1 });
+    expect(JSON.stringify(readAudit)).not.toMatch(/wrapped/i);
+    expect(JSON.stringify(readAudit)).not.toContain(admin2.account.authProof);
+    // reading the copies does not put the admin in the space
     expect(await activeSpaceMembers(spaceId)).toEqual([]);
 
     // a plain org member cannot even see it (404)
@@ -255,7 +299,10 @@ describe('Space recovery kit, orphan spaces and managers (e2e)', () => {
     expect(dump).not.toContain(admin2.account.authProof);
     expect(dump).not.toMatch(/wrapped/i);
 
-    // no longer orphan
+    // no longer orphan: neither the copies nor a second recovery
+    await s
+      .recoveryCopies(owner.token, spaceId, owner.account.authProof)
+      .expect(409);
     await c
       .http()
       .post(`/spaces/${spaceId}/recover`)

@@ -18,15 +18,17 @@ import { ThrottleReauth } from '../../../shared/infra/http/throttling.decorators
 import { userIdTracker } from '../../../shared/infra/http/user-id.tracker.js';
 import { uuidPipe } from '../../../shared/infra/http/uuid-pipe.js';
 import { GetMyKeysUseCase } from '../../application/get-my-keys.use-case.js';
+import { GetRecoveryCopiesUseCase } from '../../application/get-recovery-copies.use-case.js';
 import { RecoverOrphanSpaceUseCase } from '../../application/recover-orphan-space.use-case.js';
 import { RewrapRecoveryUseCase } from '../../application/rewrap-recovery.use-case.js';
 import { RotateSpaceKeyUseCase } from '../../application/rotate-space-key.use-case.js';
 import {
   RecoverOrphanSpaceDto,
+  RecoveryCopiesDto,
   RewrapRecoveryDto,
   RotateSpaceKeyDto,
 } from './dto/key.dto.js';
-import { myKeysResponse } from './dto/responses.js';
+import { myKeysResponse, recoveryCopiesResponse } from './dto/responses.js';
 
 // Só cópias trancadas passam por aqui: o backend nunca vê a chave do espaço em claro.
 @ApiTags('spaces')
@@ -37,6 +39,7 @@ export class SpaceKeysController {
     private readonly rotate: RotateSpaceKeyUseCase,
     private readonly rewrap: RewrapRecoveryUseCase,
     private readonly recover: RecoverOrphanSpaceUseCase,
+    private readonly recoveryCopies: GetRecoveryCopiesUseCase,
   ) {}
 
   @ApiBearerAuth()
@@ -84,6 +87,26 @@ export class SpaceKeysController {
         wrappedKey: v.wrappedKey,
       })),
     });
+  }
+
+  /**
+   * Org admin reads the kit copies of an orphan space (first step of the recovery: the app opens them with the
+   * kit secret and seals them for the admin). POST because the body carries the reauthentication proof.
+   */
+  @ThrottleReauth()
+  @ApiBearerAuth()
+  @Post('recover/copies')
+  @HttpCode(200)
+  async doRecoveryCopies(
+    @CurrentAuth() auth: AuthContext,
+    @Param('id', uuidPipe('id')) id: string,
+    @Body() dto: RecoveryCopiesDto,
+  ) {
+    return recoveryCopiesResponse(
+      await this.recoveryCopies.execute(auth, id, {
+        currentAuthProof: dto.currentAuthProof,
+      }),
+    );
   }
 
   /** Org admin reopens an orphan space with the recovery kit (shares the per-user reauth budget). */
