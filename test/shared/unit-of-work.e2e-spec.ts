@@ -281,6 +281,18 @@ describe('UnitOfWork (e2e)', () => {
     ).toEqual([]);
   });
 
+  it('setContext ignores invitationTokenHash (only withContext scopes it)', async () => {
+    const rows = await uow.run(async () => {
+      await uow.setContext({
+        invitationTokenHash: 'abc',
+      } as unknown as Parameters<UnitOfWork['setContext']>[0]);
+      return currentManager(ds).query(
+        `SELECT COALESCE(current_setting('app.invitation_token_hash', true), '') AS v`,
+      );
+    });
+    expect(rows[0].v).toBe('');
+  });
+
   it('setContext({ userId }) sets app.user_id for the transaction only', async () => {
     const userId = newId();
     const inside = await uow.run(async () => {

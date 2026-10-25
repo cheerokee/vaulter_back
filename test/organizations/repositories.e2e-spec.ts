@@ -164,7 +164,7 @@ describe('organizations repositories (e2e, app role)', () => {
       expect(row!.name).toBe('A');
     });
 
-    it('a member sees the organization through app_is_member, and only own memberships', async () => {
+    it('a member sees the organization through the membership policy (org_member_select), and only own memberships', async () => {
       const ana = await makeUser('ana@x.com');
       const bob = await makeUser('bob@x.com');
       const orgA = await makeOrg('A', [ana], [bob]);
@@ -542,6 +542,12 @@ describe('organizations repositories (e2e, app role)', () => {
       });
       expect(found!.expiresAt.toISOString()).toBe(inv.expiresAt.toISOString());
       expect(await invitations.findByTokenHash('nope')).toBeNull();
+      // Hash vazio não pula o filtro, nem dentro do contexto da organização do convite.
+      expect(
+        await uow.withContext({ organizationId: org.id }, () =>
+          invitations.findByTokenHash(''),
+        ),
+      ).toBeNull();
       // O hash no contexto abre só aquele convite, e não fica no unit of work depois da busca.
       const other0 = issue(org.id, ana);
       await invitations.create(other0);

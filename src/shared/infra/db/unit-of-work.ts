@@ -116,14 +116,19 @@ export class UnitOfWork {
 
   // Contexto do RLS (`app.organization_id`, `app.user_id`) para o resto da transação ativa. Para uma
   // troca temporária (ex.: gravar em outra organização no meio do `run`), use `withContext`.
-  async setContext(ctx: UnitOfWorkContext): Promise<void> {
+  // O hash do convite fica fora: ele só abre um convite por vez, via `runWithContext`/`withContext`, que
+  // restauram o valor anterior — nunca para o resto da transação.
+  async setContext(
+    ctx: Omit<UnitOfWorkContext, 'invitationTokenHash'>,
+  ): Promise<void> {
     const manager = activeManager(this.dataSource);
     if (!manager) {
       throw new Error(
         'UnitOfWork.setContext requires an active unit of work (call it inside UnitOfWork.run).',
       );
     }
-    await setTransactionContext(manager, ctx);
+    const { organizationId, userId } = ctx;
+    await setTransactionContext(manager, { organizationId, userId });
   }
 
   // Roda `work` com o contexto dado e restaura o anterior ao terminar (abre transação se não houver).

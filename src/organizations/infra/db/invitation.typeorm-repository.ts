@@ -41,6 +41,8 @@ export class InvitationTypeormRepository extends InvitationRepository {
   // invitation_by_token); runWithContext restaura o valor anterior ao sair, então não fica no UnitOfWork.
   // Papel do convite é de fábrica (visível sem organização pela policy roles_read).
   async findByTokenHash(tokenHash: string): Promise<Invitation | null> {
+    // Hash vazio nunca casa (e o filtro abaixo não pode ser pulado por ele).
+    if (typeof tokenHash !== 'string' || tokenHash.length === 0) return null;
     const [invitation] = await runWithContext(
       this.dataSource,
       { invitationTokenHash: tokenHash },
@@ -130,8 +132,8 @@ export class InvitationTypeormRepository extends InvitationRepository {
       .addSelect('r.key', 'role_key')
       .orderBy('i.id', 'DESC')
       .limit(filter.limit);
-    if (filter.id) qb.andWhere('i.id = :id', { id: filter.id });
-    if (filter.tokenHash) {
+    if (filter.id !== undefined) qb.andWhere('i.id = :id', { id: filter.id });
+    if (filter.tokenHash !== undefined) {
       qb.andWhere('i.token_hash = :tokenHash', { tokenHash: filter.tokenHash });
     }
     if (filter.organizationId) {
