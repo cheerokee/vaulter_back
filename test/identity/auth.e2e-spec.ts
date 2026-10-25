@@ -1,5 +1,6 @@
 import type { INestApplication } from '@nestjs/common';
 import request from 'supertest';
+import { RegistrationHooks } from '../../src/shared/application/registration-hooks.js';
 import { AccessTokenService } from '../../src/identity/application/ports/access-token-service.js';
 import {
   adminDataSource,
@@ -375,4 +376,63 @@ describe('Auth endpoints (e2e)', () => {
     await logout(accessToken).expect(204);
     await logout(accessToken).expect(401);
   }, 60_000);
+
+  describe('registration hooks', () => {
+    const usersCount = async () => {
+      const ds = await adminDataSource();
+      const rows: { n: string }[] = await ds.query(
+        'SELECT count(*)::text AS n FROM users',
+      );
+      return Number(rows[0]!.n);
+    };
+
+    it('a throwing hook rolls the whole registration back (no user row)', async () => {
+      const hooks = app.get(RegistrationHooks);
+      hooks.register({
+        name: 'test-throwing',
+        onRegistered: async () => {
+          throw new Error('hook exploded');
+        },
+      });
+      try {
+        const before = await usersCount();
+        const res = await register('hook-fail@example.com');
+        expect(res.status).toBe(500);
+        expect(await usersCount()).toBe(before);
+      } finally {
+        hooks.unregister('test-throwing');
+      }
+      // Same e-mail registers fine once the hook is gone: nothing was left behind.
+      await register('hook-fail@example.com').expect(201);
+    }, 60_000);
+
+    it('surfaces the hook result as invitation, only when present', async () => {
+      const hooks = app.get(RegistrationHooks);
+      let seen: string | undefined;
+      hooks.register({
+        name: 'test-invite',
+        onRegistered: async (ctx) => {
+          seen = ctx.inviteToken;
+          return ctx.inviteToken ? { invitation: { accepted: true } } : {};
+        },
+      });
+      try {
+        const withToken = await register('hook-inv@example.com', {
+          inviteToken: 'abc_DEF-123',
+        }).expect(201);
+        expect(seen).toBe('abc_DEF-123');
+        expect(withToken.body.invitation).toEqual({ accepted: true });
+        const without = await register('hook-noinv@example.com').expect(201);
+        expect('invitation' in without.body).toBe(false);
+      } finally {
+        hooks.unregister('test-invite');
+      }
+    }, 60_000);
+
+    it('rejects a malformed inviteToken with 422', async () => {
+      await register('hook-bad@example.com', {
+        inviteToken: 'bad token!',
+      }).expect(422);
+    }, 60_000);
+  });
 });

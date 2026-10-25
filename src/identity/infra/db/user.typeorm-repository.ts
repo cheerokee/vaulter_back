@@ -1,5 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import { DataSource, QueryFailedError, type Repository } from 'typeorm';
+import { DataSource, In, QueryFailedError, type Repository } from 'typeorm';
 import { ConflictError } from '../../../shared/domain/errors.js';
 import { currentManager } from '../../../shared/infra/db/unit-of-work.js';
 import type { User } from '../../domain/user.js';
@@ -23,6 +23,12 @@ export class UserTypeormRepository extends UserRepository {
   async findById(id: string): Promise<User | null> {
     const row = await this.repo.findOne({ where: { id } });
     return row ? UserMapper.toDomain(row) : null;
+  }
+
+  async findByIds(ids: string[]): Promise<User[]> {
+    if (ids.length === 0) return [];
+    const rows = await this.repo.find({ where: { id: In(ids) } });
+    return rows.map((row) => UserMapper.toDomain(row));
   }
 
   async findByEmail(normalizedEmail: string): Promise<User | null> {

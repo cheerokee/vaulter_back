@@ -12,6 +12,8 @@ export type LoginResult = {
     kdfParams: KdfParams;
   };
   session: SessionTokens;
+  /** Only present when an invite token was sent at registration (or a hook reported it). */
+  invitation?: { accepted: boolean };
 };
 
 export function toLoginResult(user: User, tokens: SessionTokens): LoginResult {

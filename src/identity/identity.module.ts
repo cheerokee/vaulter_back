@@ -15,6 +15,8 @@ import { ChangePasswordUseCase } from './application/change-password.use-case.js
 import { LoginUseCase } from './application/login.use-case.js';
 import { PreLoginUseCase } from './application/pre-login.use-case.js';
 import { RegisterUserUseCase } from './application/register-user.use-case.js';
+import { CurrentAuthProofVerifier } from './application/current-auth-proof-verifier.js';
+import { UserDirectory } from './application/user-directory.js';
 import { SessionIssuer } from './application/session-issuer.js';
 import { SessionRepository } from './domain/session.repository.js';
 import { UserRepository } from './domain/user.repository.js';
@@ -55,6 +57,9 @@ import { SessionsController } from './infra/http/sessions.controller.js';
     RevokeSessionUseCase,
     GetMeUseCase,
     ChangePasswordUseCase,
+    UserDirectory,
+    CurrentAuthProofVerifier,
   ],
+  exports: [UserDirectory, CurrentAuthProofVerifier],
 })
 export class IdentityModule {}

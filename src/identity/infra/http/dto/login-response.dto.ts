@@ -19,6 +19,7 @@ export class LoginResponse {
   user!: UserResponse;
   keys!: KeysResponse;
   session!: SessionTokensResponse;
+  invitation?: { accepted: boolean };
 
   static from(result: LoginResult): LoginResponse {
     const res = new LoginResponse();
@@ -35,6 +36,8 @@ export class LoginResponse {
       kdfParams: { ...result.keys.kdfParams },
     };
     res.session = SessionTokensResponse.from(result.session);
+    if (result.invitation)
+      res.invitation = { accepted: result.invitation.accepted };
     return res;
   }
 }

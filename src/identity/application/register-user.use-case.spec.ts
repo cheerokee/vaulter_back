@@ -2,6 +2,8 @@ import {
   ConflictError,
   DomainValidationError,
 } from '../../shared/domain/errors.js';
+import type { RegistrationHooks } from '../../shared/application/registration-hooks.js';
+import type { UnitOfWork } from '../../shared/infra/db/unit-of-work.js';
 import type { UserRepository } from '../domain/user.repository.js';
 import type { User } from '../domain/user.js';
 import type { AuthProofHasher } from './ports/auth-proof-hasher.js';
@@ -30,10 +32,14 @@ describe('RegisterUserUseCase', () => {
   const users = { create: vi.fn() };
   const hasher = { hash: vi.fn() };
   const issuer = { start: vi.fn() };
+  const hooks = { run: vi.fn() };
+  const uow = { run: vi.fn() };
   const useCase = new RegisterUserUseCase(
     users as unknown as UserRepository,
     hasher as unknown as AuthProofHasher,
     issuer as unknown as SessionIssuer,
+    uow as unknown as UnitOfWork,
+    hooks as unknown as RegistrationHooks,
   );
   const tokens = {
     sessionId: 's',
@@ -50,6 +56,8 @@ describe('RegisterUserUseCase', () => {
     hasher.hash.mockResolvedValue('$argon2id$hashed');
     users.create.mockResolvedValue(undefined);
     issuer.start.mockResolvedValue(tokens);
+    hooks.run.mockResolvedValue({});
+    uow.run.mockImplementation((work: () => Promise<unknown>) => work());
   });
   afterEach(() => vi.useRealTimers());
 
@@ -97,6 +105,65 @@ describe('RegisterUserUseCase', () => {
     await expect(useCase.execute(input())).rejects.toBeInstanceOf(
       ConflictError,
     );
+    expect(issuer.start).not.toHaveBeenCalled();
+  });
+
+  it('hashes before opening the unit of work', async () => {
+    await useCase.execute(input());
+    expect(hasher.hash.mock.invocationCallOrder[0]!).toBeLessThan(
+      uow.run.mock.invocationCallOrder[0]!,
+    );
+  });
+
+  it('creates the user, runs hooks and starts the session inside the unit of work, in order', async () => {
+    const order: string[] = [];
+    let inside = false;
+    uow.run.mockImplementation(async (work: () => Promise<unknown>) => {
+      inside = true;
+      try {
+        return await work();
+      } finally {
+        inside = false;
+      }
+    });
+    users.create.mockImplementation(async () => {
+      expect(inside).toBe(true);
+      order.push('create');
+    });
+    hooks.run.mockImplementation(async () => {
+      expect(inside).toBe(true);
+      order.push('hooks');
+      return {};
+    });
+    issuer.start.mockImplementation(async () => {
+      expect(inside).toBe(true);
+      order.push('session');
+      return tokens;
+    });
+    await useCase.execute({ ...input(), inviteToken: 'tok_1' });
+    expect(order).toEqual(['create', 'hooks', 'session']);
+    const created = users.create.mock.calls[0]![0] as User;
+    expect(hooks.run).toHaveBeenCalledWith({
+      userId: created.id,
+      name: 'Ana',
+      email: 'ana@x.com',
+      inviteToken: 'tok_1',
+      now,
+    });
+  });
+
+  it('surfaces the hook invitation result, and omits it otherwise', async () => {
+    hooks.run.mockResolvedValue({ invitation: { accepted: false } });
+    const out = await useCase.execute({ ...input(), inviteToken: 't' });
+    expect(out.invitation).toEqual({ accepted: false });
+    hooks.run.mockResolvedValue({});
+    const plain = await useCase.execute(input());
+    expect('invitation' in plain).toBe(false);
+  });
+
+  it('propagates a hook error and never starts a session', async () => {
+    hooks.run.mockRejectedValue(new Error('hook failed'));
+    await expect(useCase.execute(input())).rejects.toThrow('hook failed');
     expect(issuer.start).not.toHaveBeenCalled();
   });
 });

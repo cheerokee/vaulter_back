@@ -3,6 +3,7 @@ import {
   IsDefined,
   IsEmail,
   IsObject,
+  IsOptional,
   IsString,
   Length,
   Matches,
@@ -53,4 +54,10 @@ export class RegisterDto {
   @ValidateNested()
   @Type(() => DeviceDto)
   device!: DeviceDto;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(200)
+  @Matches(BASE64URL)
+  inviteToken?: string;
 }

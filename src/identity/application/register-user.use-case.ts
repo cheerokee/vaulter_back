@@ -1,5 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { assertAuthProof } from '../domain/crypto-material.js';
+import { RegistrationHooks } from '../../shared/application/registration-hooks.js';
+import { UnitOfWork } from '../../shared/infra/db/unit-of-work.js';
 import { UserRepository } from '../domain/user.repository.js';
 import { assertDevice } from '../domain/session.js';
 import { User } from '../domain/user.js';
@@ -19,6 +21,7 @@ export type RegisterUserInput = {
   kdfParams: unknown;
   publicKey: string;
   encryptedPrivateKey: string;
+  inviteToken?: string;
   device: DeviceInput;
   client: ClientInfo;
 };
@@ -29,6 +32,8 @@ export class RegisterUserUseCase {
     private readonly users: UserRepository,
     private readonly hasher: AuthProofHasher,
     private readonly sessionIssuer: SessionIssuer,
+    private readonly uow: UnitOfWork,
+    private readonly hooks: RegistrationHooks,
   ) {}
 
   async execute(input: RegisterUserInput): Promise<LoginResult> {
@@ -40,14 +45,26 @@ export class RegisterUserUseCase {
     const now = new Date();
     const authHash = await this.hasher.hash(input.authProof);
     const user = User.register({ ...input, authHash, now });
-    await this.users.create(user);
-
-    const tokens = await this.sessionIssuer.start(
-      user,
-      input.device,
-      input.client,
-      now,
-    );
-    return toLoginResult(user, tokens);
+    // User, hooks (e.g. personal organization) and session commit together; any failure undoes all.
+    const { tokens, hookResult } = await this.uow.run(async () => {
+      await this.users.create(user);
+      const hookResult = await this.hooks.run({
+        userId: user.id,
+        name: user.name,
+        email: user.email,
+        inviteToken: input.inviteToken,
+        now,
+      });
+      const tokens = await this.sessionIssuer.start(
+        user,
+        input.device,
+        input.client,
+        now,
+      );
+      return { tokens, hookResult };
+    });
+    const result = toLoginResult(user, tokens);
+    if (hookResult.invitation) result.invitation = hookResult.invitation;
+    return result;
   }
 }

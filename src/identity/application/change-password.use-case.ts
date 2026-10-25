@@ -1,13 +1,11 @@
 import { Injectable } from '@nestjs/common';
-import {
-  DomainValidationError,
-  UnauthenticatedError,
-} from '../../shared/domain/errors.js';
+import { UnauthenticatedError } from '../../shared/domain/errors.js';
 import { assertAuthProof } from '../domain/crypto-material.js';
 import { SessionRepository } from '../domain/session.repository.js';
 import { User } from '../domain/user.js';
 import { UserRepository } from '../domain/user.repository.js';
 import type { Actor } from './dto/actor.js';
+import { CurrentAuthProofVerifier } from './current-auth-proof-verifier.js';
 import { AuthProofHasher } from './ports/auth-proof-hasher.js';
 
 export type ChangePasswordInput = {
@@ -24,28 +22,18 @@ export class ChangePasswordUseCase {
     private readonly users: UserRepository,
     private readonly sessions: SessionRepository,
     private readonly hasher: AuthProofHasher,
+    private readonly currentProof: CurrentAuthProofVerifier,
   ) {}
 
   async execute(auth: Actor, input: ChangePasswordInput): Promise<void> {
+    // Reauthentication first: wrong or malformed proof (uniform timing) and missing user are rejected there.
+    await this.currentProof.verify(auth.userId, input.currentAuthProof);
     const user = await this.users.findById(auth.userId);
     if (!user) {
       throw new UnauthenticatedError(
         'invalid-access-token',
         'The access token is invalid or expired.',
       );
-    }
-
-    // A malformed proof never matches; the dummy verification keeps the timing uniform.
-    if (!isWellFormed(input.currentAuthProof)) {
-      await this.hasher.verifyAgainstDummy(
-        typeof input.currentAuthProof === 'string'
-          ? input.currentAuthProof
-          : '',
-      );
-      throw currentProofInvalid();
-    }
-    if (!(await this.hasher.verify(user.authHash, input.currentAuthProof))) {
-      throw currentProofInvalid();
     }
 
     // Validate the new material before the expensive hash; the domain re-validates the rest.
@@ -70,21 +58,4 @@ export class ChangePasswordUseCase {
       auth.sessionId,
     );
   }
-}
-
-function isWellFormed(proof: unknown): proof is string {
-  if (typeof proof !== 'string') return false;
-  try {
-    assertAuthProof(proof);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-function currentProofInvalid(): DomainValidationError {
-  return new DomainValidationError(
-    'current-auth-proof-invalid',
-    'The current password is incorrect.',
-  );
 }

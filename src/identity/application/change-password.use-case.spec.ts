@@ -5,6 +5,7 @@ import {
 import type { SessionRepository } from '../domain/session.repository.js';
 import type { UserRepository } from '../domain/user.repository.js';
 import { User } from '../domain/user.js';
+import { CurrentAuthProofVerifier } from './current-auth-proof-verifier.js';
 import { ChangePasswordUseCase } from './change-password.use-case.js';
 import type { AuthProofHasher } from './ports/auth-proof-hasher.js';
 
@@ -31,6 +32,10 @@ const useCase = new ChangePasswordUseCase(
   users as unknown as UserRepository,
   sessions as unknown as SessionRepository,
   hasher as unknown as AuthProofHasher,
+  new CurrentAuthProofVerifier(
+    users as unknown as UserRepository,
+    hasher as unknown as AuthProofHasher,
+  ),
 );
 const auth = { userId: 'u1', sessionId: 's1' };
 
