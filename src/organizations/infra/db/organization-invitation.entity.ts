@@ -5,7 +5,7 @@ import { OrganizationTypeormEntity } from './organization.entity.js';
 import { RoleTypeormEntity } from './role.entity.js';
 
 // Só do backend (não sincroniza: sem sync_version). Guarda só o hash do token. RLS por organization_id; a
-// busca por token antes de haver contexto passa pela função SECURITY DEFINER app_find_invitation.
+// busca por token antes de haver organização usa a policy invitation_by_token (`app.invitation_token_hash`).
 @Entity('organization_invitations')
 @Check(
   'ck_organization_invitations_status',

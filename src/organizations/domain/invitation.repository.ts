@@ -6,11 +6,13 @@ import type { Invitation } from './invitation.js';
 
 export abstract class InvitationRepository {
   abstract create(invitation: Invitation): Promise<void>;
-  /** Through the SECURITY DEFINER function: works before an organization context exists. */
+  /** Works before an organization context exists (RLS policy keyed on `app.invitation_token_hash`). */
   abstract findByTokenHash(tokenHash: string): Promise<Invitation | null>;
+  /** Pending and unexpired at `now` (same clock as `markAccepted`). */
   abstract listPending(
     orgId: string,
     page: CursorPageRequest,
+    now: Date,
   ): Promise<CursorPage<Invitation>>;
   abstract revoke(orgId: string, id: string): Promise<boolean>;
   /**

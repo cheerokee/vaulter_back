@@ -245,6 +245,86 @@ describe('organizations repositories (e2e, app role)', () => {
         (await asApp({}, `SELECT 1 FROM role_permission`)).length,
       ).toBeGreaterThan(0);
     });
+
+    it('the runtime role cannot write the RBAC catalog', async () => {
+      const [{ role_id, permission_id }] = (await admin.query(
+        `SELECT r.id AS role_id, p.id AS permission_id FROM roles r, permissions p
+          WHERE r.key = 'org_member' AND p.key = 'org.billing'`,
+      )) as { role_id: string; permission_id: string }[];
+      for (const sql of [
+        `INSERT INTO role_permission (role_id, permission_id) VALUES ('${role_id}', '${permission_id}')`,
+        `UPDATE permissions SET name = 'x'`,
+        `INSERT INTO permissions (key, scope_type, name) VALUES ('evil', 'hub', 'x')`,
+        `UPDATE permission_dependency SET deleted_at = now()`,
+        `UPDATE role_permission SET deleted_at = now()`,
+      ]) {
+        await expect(asApp({}, sql)).rejects.toMatchObject({ code: '42501' });
+      }
+    });
+
+    it('a member cannot update the organization with only the user context', async () => {
+      const ana = await makeUser('ana@x.com');
+      const org = await makeOrg('A', [ana]);
+      await asApp(
+        { userId: ana },
+        `UPDATE organizations SET name = 'via user' WHERE id = $1`,
+        [org.id],
+      );
+      expect((await orgs.findById(org.id))!.name).toBe('A');
+    });
+
+    it('the schema has no SECURITY DEFINER functions of ours', async () => {
+      const rows = await admin.query(
+        `SELECT p.proname FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+          WHERE n.nspname = 'public' AND p.prosecdef`,
+      );
+      expect(rows).toEqual([]);
+    });
+
+    // As policies são avaliadas com o papel de quem consulta (app_runtime), nunca com o do dono: com as
+    // tabelas de um dono sem superusuário (como num Postgres gerenciado), tudo continua igual.
+    it('works the same when the tables belong to a non-superuser owner', async () => {
+      const ana = await makeUser('ana@x.com');
+      const bob = await makeUser('bob@x.com');
+      const org = await makeOrg('A', [ana], [bob]);
+      const inv = issue(org.id, ana);
+      await invitations.create(inv);
+      const [{ owner }] = (await admin.query(
+        `SELECT current_user AS owner`,
+      )) as { owner: string }[];
+      const tables = [
+        'organizations',
+        'user_organization',
+        'role_assignments',
+        'organization_invitations',
+        'roles',
+      ];
+      await admin.query(`
+        DO $$ BEGIN
+          IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'rls_probe_owner') THEN
+            CREATE ROLE rls_probe_owner NOLOGIN NOSUPERUSER NOBYPASSRLS;
+          END IF;
+        END $$`);
+      try {
+        for (const t of tables) {
+          await admin.query(`ALTER TABLE "${t}" OWNER TO rls_probe_owner`);
+        }
+        const found = await invitations.findByTokenHash(inv.tokenHash);
+        expect(found?.id).toBe(inv.id);
+        const listed = await orgs.listForUser(bob, { limit: 10 });
+        expect(listed.items.map((i) => [i.organization.id, i.roleKey])).toEqual(
+          [[org.id, 'org_member']],
+        );
+        const other = await makeUser('cid@x.com');
+        expect(
+          await asApp({ userId: other }, `SELECT id FROM organizations`),
+        ).toEqual([]);
+      } finally {
+        for (const t of tables) {
+          await admin.query(`ALTER TABLE "${t}" OWNER TO "${owner}"`);
+        }
+      }
+    });
   });
 
   describe('OrganizationRepository', () => {
@@ -419,6 +499,30 @@ describe('organizations repositories (e2e, app role)', () => {
       expect((await first).sort()).toEqual([ana, bob].sort());
       expect((await second).sort()).toEqual([ana, bob].sort());
     });
+
+    it('lockOrgAdmins: the waiting caller sees the result of the one holding the lock', async () => {
+      const ana = await makeUser('ana@x.com');
+      const bob = await makeUser('bob@x.com');
+      const org = await makeOrg('A', [ana, bob]);
+
+      let release!: () => void;
+      const gate = new Promise<void>((r) => (release = r));
+      let firstLocked!: () => void;
+      const locked = new Promise<void>((r) => (firstLocked = r));
+      const first = uow.run(async () => {
+        const ids = await roles.lockOrgAdmins(org.id);
+        firstLocked();
+        await roles.assignOrgRole(org.id, bob, 'org_member', ana);
+        await gate;
+        return ids;
+      });
+      await locked;
+      const second = uow.run(() => roles.lockOrgAdmins(org.id));
+      await new Promise((r) => setTimeout(r, 200));
+      release();
+      expect((await first).sort()).toEqual([ana, bob].sort());
+      expect(await second).toEqual([ana]);
+    });
   });
 
   describe('InvitationRepository', () => {
@@ -438,16 +542,36 @@ describe('organizations repositories (e2e, app role)', () => {
       });
       expect(found!.expiresAt.toISOString()).toBe(inv.expiresAt.toISOString());
       expect(await invitations.findByTokenHash('nope')).toBeNull();
+      // O hash no contexto abre só aquele convite, e não fica no unit of work depois da busca.
+      const other0 = issue(org.id, ana);
+      await invitations.create(other0);
+      expect(
+        await asApp(
+          { invitationTokenHash: inv.tokenHash },
+          `SELECT id FROM organization_invitations`,
+        ),
+      ).toEqual([{ id: inv.id }]);
+      const leftover = await uow.run(async () => {
+        await invitations.findByTokenHash(inv.tokenHash);
+        // Mesma transação do unit of work (asApp entra nela num savepoint).
+        const [row] = (await asApp(
+          {},
+          `SELECT COALESCE(current_setting('app.invitation_token_hash', true), '') AS v`,
+        )) as { v: string }[];
+        return row!.v;
+      });
+      expect(leftover).toBe('');
+      await invitations.revoke(org.id, other0.id);
 
       const other = issue(org.id, ana);
       await invitations.create(other);
-      const page = await invitations.listPending(org.id, { limit: 1 });
+      const page = await invitations.listPending(org.id, { limit: 1 }, now);
       expect(page.items.map((i) => i.id)).toEqual([other.id]);
       expect(page.nextCursor).not.toBeNull();
 
       expect(await invitations.revoke(org.id, other.id)).toBe(true);
       expect(await invitations.revoke(org.id, other.id)).toBe(false);
-      const after = await invitations.listPending(org.id, { limit: 10 });
+      const after = await invitations.listPending(org.id, { limit: 10 }, now);
       expect(after.items.map((i) => i.id)).toEqual([inv.id]);
       expect((await invitations.findByTokenHash(other.tokenHash))!.status).toBe(
         'revoked',

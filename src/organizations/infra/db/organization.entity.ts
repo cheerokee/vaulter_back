@@ -2,8 +2,9 @@ import { Check, Column, Entity, Index, JoinColumn, ManyToOne } from 'typeorm';
 import { SyncableTypeormEntity } from '../../../shared/infra/db/base.entity.js';
 import type { HubLinkPolicy } from '../../domain/organization.js';
 
-// RLS (migration CreateOrganizations): visível com `app.organization_id = id` ou se o `app.user_id` for
-// membro ativo (função app_is_member); INSERT só com `app.organization_id` igual ao id novo.
+// RLS (migrations CreateOrganizations + HardenOrganizationsRls): visível com `app.organization_id = id` ou
+// se o `app.user_id` for membro ativo (EXISTS em user_organization); INSERT e UPDATE só com
+// `app.organization_id` igual ao id.
 @Entity('organizations')
 @Check(
   'ck_organizations_hub_link_policy',

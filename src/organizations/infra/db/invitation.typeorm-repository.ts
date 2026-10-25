@@ -7,7 +7,7 @@ import {
   type CursorPageRequest,
 } from '../../../shared/domain/pagination.js';
 import { runInOrganizationScope } from '../../../shared/infra/db/organization-scope.js';
-import { currentManager } from '../../../shared/infra/db/unit-of-work.js';
+import { runWithContext } from '../../../shared/infra/db/unit-of-work.js';
 import type { Invitation } from '../../domain/invitation.js';
 import { InvitationRepository } from '../../domain/invitation.repository.js';
 import type { OrgRoleKey } from '../../domain/membership.js';
@@ -37,20 +37,14 @@ export class InvitationTypeormRepository extends InvitationRepository {
     );
   }
 
-  // Sem contexto ainda: app_find_invitation (SECURITY DEFINER) só revela id e organização; o resto é lido
-  // já com a organização no contexto.
+  // Sem organização no contexto ainda: `app.invitation_token_hash` abre só o convite desse hash (policy
+  // invitation_by_token); runWithContext restaura o valor anterior ao sair, então não fica no UnitOfWork.
+  // Papel do convite é de fábrica (visível sem organização pela policy roles_read).
   async findByTokenHash(tokenHash: string): Promise<Invitation | null> {
-    const found: { id: string; organization_id: string }[] =
-      await currentManager(this.dataSource).query(
-        `SELECT id, organization_id FROM app_find_invitation($1)`,
-        [tokenHash],
-      );
-    const ref = found[0];
-    if (!ref) return null;
-    const [invitation] = await runInOrganizationScope(
+    const [invitation] = await runWithContext(
       this.dataSource,
-      ref.organization_id,
-      (m) => this.select(m, { id: ref.id, limit: 1 }),
+      { invitationTokenHash: tokenHash },
+      (m) => this.select(m, { tokenHash, limit: 1 }),
     );
     return invitation ?? null;
   }
@@ -59,12 +53,13 @@ export class InvitationTypeormRepository extends InvitationRepository {
   async listPending(
     orgId: string,
     page: CursorPageRequest,
+    now: Date,
   ): Promise<CursorPage<Invitation>> {
     const cursor = page.cursor ? decodeCursor(page.cursor) : undefined;
     const rows = await runInOrganizationScope(this.dataSource, orgId, (m) =>
       this.select(m, {
         organizationId: orgId,
-        pending: true,
+        pendingAt: now,
         before: cursor,
         limit: page.limit + 1,
       }),
@@ -121,8 +116,9 @@ export class InvitationTypeormRepository extends InvitationRepository {
     m: EntityManager,
     filter: {
       id?: string;
+      tokenHash?: string;
       organizationId?: string;
-      pending?: boolean;
+      pendingAt?: Date;
       before?: string;
       limit: number;
     },
@@ -135,13 +131,19 @@ export class InvitationTypeormRepository extends InvitationRepository {
       .orderBy('i.id', 'DESC')
       .limit(filter.limit);
     if (filter.id) qb.andWhere('i.id = :id', { id: filter.id });
+    if (filter.tokenHash) {
+      qb.andWhere('i.token_hash = :tokenHash', { tokenHash: filter.tokenHash });
+    }
     if (filter.organizationId) {
       qb.andWhere('i.organization_id = :orgId', {
         orgId: filter.organizationId,
       });
     }
-    if (filter.pending) {
-      qb.andWhere(`i.status = 'pending' AND i.expires_at > now()`);
+    // Mesmo relógio do markAccepted (o `now` da aplicação), não o now() do banco.
+    if (filter.pendingAt) {
+      qb.andWhere(`i.status = 'pending' AND i.expires_at > :pendingAt`, {
+        pendingAt: filter.pendingAt,
+      });
     }
     if (filter.before) qb.andWhere('i.id < :before', { before: filter.before });
     const { entities, raw } = await qb.getRawAndEntities<{

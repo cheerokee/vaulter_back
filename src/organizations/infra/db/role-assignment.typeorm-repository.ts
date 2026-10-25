@@ -6,7 +6,6 @@ import type { OrgRoleKey } from '../../domain/membership.js';
 import type { PermissionKey } from '../../domain/rbac-catalog.js';
 import { RoleAssignmentRepository } from '../../domain/role-assignment.repository.js';
 import { orgFactoryRoleId } from './factory-roles.js';
-import { RoleAssignmentTypeormEntity } from './role-assignment.entity.js';
 
 @Injectable()
 export class RoleAssignmentTypeormRepository extends RoleAssignmentRepository {
@@ -23,24 +22,16 @@ export class RoleAssignmentTypeormRepository extends RoleAssignmentRepository {
   ): Promise<void> {
     await runInOrganizationScope(this.dataSource, orgId, async (m) => {
       const roleId = await orgFactoryRoleId(m, roleKey);
-      const updated = await m
-        .createQueryBuilder()
-        .update(RoleAssignmentTypeormEntity)
-        .set({ roleId, grantedByUserId: grantedBy })
-        .where('organization_id = :orgId AND user_id = :userId', {
-          orgId,
-          userId,
-        })
-        .andWhere(`scope_type = 'organization' AND deleted_at IS NULL`)
-        .execute();
-      if (updated.affected) return;
-      await m.getRepository(RoleAssignmentTypeormEntity).insert({
-        roleId,
-        userId,
-        scopeType: 'organization',
-        organizationId: orgId,
-        grantedByUserId: grantedBy,
-      });
+      // Upsert atômico contra o índice parcial (sem a corrida de UPDATE-then-INSERT).
+      await m.query(
+        `INSERT INTO role_assignments (role_id, user_id, scope_type, organization_id, granted_by_user_id)
+         VALUES ($1, $2, 'organization', $3, $4)
+         ON CONFLICT (organization_id, user_id) WHERE scope_type = 'organization' AND deleted_at IS NULL
+         DO UPDATE SET role_id = EXCLUDED.role_id,
+                       granted_by_user_id = EXCLUDED.granted_by_user_id,
+                       updated_at = now()`,
+        [roleId, userId, orgId, grantedBy],
+      );
     });
   }
 

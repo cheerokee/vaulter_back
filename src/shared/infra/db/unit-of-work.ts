@@ -46,11 +46,14 @@ export function runInTransaction<T>(
 export interface UnitOfWorkContext {
   organizationId?: string;
   userId?: string;
+  // Hash do token de convite: abre só esse convite (policy invitation_by_token) antes de haver organização.
+  invitationTokenHash?: string;
 }
 
 const SETTINGS = {
   organizationId: 'app.organization_id',
   userId: 'app.user_id',
+  invitationTokenHash: 'app.invitation_token_hash',
 } as const satisfies Record<keyof UnitOfWorkContext, string>;
 
 // `set_config(..., true)` vale até o fim da transação: não vaza para a próxima da mesma conexão.

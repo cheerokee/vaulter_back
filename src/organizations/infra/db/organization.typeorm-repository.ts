@@ -57,8 +57,11 @@ export class OrganizationTypeormRepository extends OrganizationRepository {
     return row ? OrganizationMapper.toDomain(row) : null;
   }
 
-  // Atravessa organizações só com `app.user_id`: organizations pela app_is_member, user_organization e
-  // role_assignments pela policy de leitura própria. Ordem por id (v7 = ordem de criação).
+  // Atravessa organizações só com `app.user_id`: organizations pela policy de membro (EXISTS em
+  // user_organization), user_organization e role_assignments pela policy de leitura própria. Ordem por id
+  // (v7 = ordem de criação).
+  // ATENÇÃO (papéis próprios, modo avançado): sem `app.organization_id`, a policy roles_read só mostra papéis
+  // de fábrica; um membro com papel próprio sumiria desta lista (INNER JOIN em roles). Rever quando existirem.
   async listForUser(
     userId: string,
     page: CursorPageRequest,
