@@ -287,6 +287,12 @@ Os valores do `.env.example` para os segredos são **só de desenvolvimento**; p
 
 ## Pendências antes de produção
 - Rate limiting no login, refresh e troca de senha (`@nestjs/throttler`; o Argon2 roda no event loop).
+- Argon2id fora do event loop (pool de `worker_threads` ou binding nativo assíncrono): cada verificação leva
+  ~24 ms e bloqueia o loop.
+- `trust proxy` configurado para `req.ip`/`lastIp` corretos atrás de load balancer.
+- `typ: at+jwt` e `aud` nos tokens de acesso, antes de existir outro tipo de JWT ou validação offline no hub.
+- Política de rotação de segredos: `AUTH_JWT_SIGNING_SEED` (via `kid`), `IDENTITY_DECOY_SALT_KEY` e a senha do
+  role de runtime do banco (`02-app-role.sh` não troca a senha de um role já existente).
 - JWKS público para o hub validar tokens offline.
 - Exclusão de conta (LGPD) precisa revogar as sessões.
 
@@ -303,7 +309,7 @@ Os valores do `.env.example` para os segredos são **só de desenvolvimento**; p
   `^[A-Za-z0-9-]{1,64}$`; senão é gerado), o mesmo da resposta `problem+json`.
 - **Privacidade primeiro — o Vaulter não pode ler o cérebro do cliente, e a observabilidade não pode ser o
   vazamento:**
-  - PII padrão desligada (veja acima); **nunca** anexar corpo de requisição;
+  - `dataCollection` desligado (veja acima); **nunca** anexar corpo de requisição;
   - `beforeSend` remove campos sensíveis (`wrapped_key`, `encrypted_private_key`, `auth_hash`, `kdf_*`, tokens,
     cabeçalho `Authorization`) — vale para Sentry e para os logs (redaction do pino);
   - o hub nunca envia conteúdo de memória, transcrição ou imagem; só tipo e local do erro;

@@ -24,6 +24,12 @@ decodificadores devem **rejeitar** `=` e os caracteres `+` e `/`.
    - `opsLimit`: 2 a 10. `memLimitBytes`: 67108864 (64 MiB) a 1073741824 (1 GiB).
    - Padrão: `opsLimit` 3, `memLimitBytes` 67108864. É o que o pré-login devolve para e-mail inexistente.
 3. Chave mestra: `crypto_pwhash(32, senha, kdfSalt, opsLimit, memLimitBytes, crypto_pwhash_ALG_ARGON2ID13)`.
+   **Parâmetros:** o app deve **sempre registrar com `DEFAULT_KDF_PARAMS`**: parâmetros diferentes do padrão
+   tornam a conta distinguível no pré-login (o e-mail inexistente devolve o padrão).
+
+   **E-mail:** o cliente normaliza como o servidor: `trim()`, depois `normalize('NFC')`, depois `toLowerCase()`
+   (o resultado precisa ter de 1 a 255 caracteres; o servidor valida o tamanho depois da normalização).
+
    **Senha:** `senha.normalize('NFC')` e então bytes UTF-8, **sem `trim`** (assim a mesma senha digitada em
    teclados ou sistemas com normalização diferente gera a mesma chave).
 4. Subchaves, com `crypto_kdf_derive_from_key(32, id, "acctkeys", chaveMestra)` (`id` é `uint64`; o contexto
@@ -84,7 +90,7 @@ derrubam a sessão.
 
 Valores **somente para teste**, fixados em `test/support/client-crypto.spec.ts`.
 
-- senha (Unicode, NFC): `pássword-ção` (`p\u00e1ssw\u00f6rd-\u00e7\u00e3o`)
+- senha (Unicode, NFC): `pásswörd-ção` (`p\u00e1ssw\u00f6rd-\u00e7\u00e3o`)
 - `kdfSalt` (hex): `000102030405060708090a0b0c0d0e0f` (base64url: `AAECAwQFBgcICQoLDA0ODw`)
 - `kdfParams`: `argon2id13`, `opsLimit` 2, `memLimitBytes` 67108864
 - `authProof` (hex): `fa19859a223eab1569716ecf6c992e08022e1885a40c7986426ce53366e25310`
