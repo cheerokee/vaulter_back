@@ -1,10 +1,11 @@
 import {
   type INestApplication,
+  Logger,
   ValidationError,
   ValidationPipe,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { parseTrustProxy } from './trust-proxy.js';
+import { parseTrustProxy, trustProxyWarnings } from './trust-proxy.js';
 import { setupSwagger } from './swagger.js';
 import { ProblemDetailsFilter } from './problem-details.filter.js';
 import {
@@ -31,10 +32,17 @@ export function configureApp(app: INestApplication): void {
     .getOrThrow<string>('PROBLEM_TYPE_BASE_URL')
     .replace(/\/$/, '');
   // Express: decides whether X-Forwarded-For feeds req.ip (sessions' lastIp, rate-limit key).
-  app
-    .getHttpAdapter()
-    .getInstance()
-    .set('trust proxy', parseTrustProxy(config.get<string>('TRUST_PROXY')));
+  const trustProxy = parseTrustProxy(config.get<string>('TRUST_PROXY'));
+  app.getHttpAdapter().getInstance().set('trust proxy', trustProxy);
+  const rateLimit = config.get('RATE_LIMIT_ENABLED');
+  const logger = new Logger('TrustProxy');
+  for (const warning of trustProxyWarnings({
+    nodeEnv: config.get<string>('NODE_ENV') ?? process.env.NODE_ENV,
+    rateLimitEnabled: rateLimit !== false && rateLimit !== 'false',
+    trustProxy,
+  })) {
+    logger.warn(warning);
+  }
   app.useGlobalPipes(
     new ValidationPipe({
       whitelist: true,

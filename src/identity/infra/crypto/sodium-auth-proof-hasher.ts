@@ -3,13 +3,16 @@ import { availableParallelism } from 'node:os';
 import {
   Injectable,
   Optional,
-  type OnModuleDestroy,
+  ServiceUnavailableException,
+  type OnApplicationShutdown,
   type OnModuleInit,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Piscina } from 'piscina';
 import { AuthProofHasher } from '../../application/ports/auth-proof-hasher.js';
+import type { Argon2Job } from './argon2.worker.js';
 
+const QUEUE_FULL_MESSAGE = 'Task queue is at limit';
 const DUMMY_PROOF = 'dummy-auth-proof-for-timing-equalisation';
 
 /** Compiled .js in dist/, .ts when running from sources (Vitest). */
@@ -22,7 +25,7 @@ function workerFile(): URL {
 @Injectable()
 export class SodiumAuthProofHasher
   extends AuthProofHasher
-  implements OnModuleInit, OnModuleDestroy
+  implements OnModuleInit, OnApplicationShutdown
 {
   private pool?: Piscina;
   private dummyHash?: Promise<string>;
@@ -38,7 +41,11 @@ export class SodiumAuthProofHasher
     await this.getDummyHash();
   }
 
-  async onModuleDestroy(): Promise<void> {
+  /**
+   * Destroyed on application shutdown (after the HTTP server stopped accepting and draining requests),
+   * not on module destroy, so in-flight logins are not killed mid-hash.
+   */
+  async onApplicationShutdown(): Promise<void> {
     const pool = this.pool;
     this.pool = undefined;
     this.destroyed = true;
@@ -46,20 +53,28 @@ export class SodiumAuthProofHasher
   }
 
   async hash(authProof: string): Promise<string> {
-    return (await this.getPool().run({ op: 'hash', authProof })) as string;
+    return (await this.run({ op: 'hash', authProof })) as string;
   }
 
   async verify(authHash: string, authProof: string): Promise<boolean> {
-    return (await this.getPool().run({
-      op: 'verify',
-      authHash,
-      authProof,
-    })) as boolean;
+    return (await this.run({ op: 'verify', authHash, authProof })) as boolean;
   }
 
   async verifyAgainstDummy(authProof: string): Promise<false> {
     await this.verify(await this.getDummyHash(), authProof);
     return false;
+  }
+
+  /** Queue-full rejections become a 503 (the filter hides the detail); other errors pass through. */
+  private async run(job: Argon2Job): Promise<string | boolean> {
+    try {
+      return (await this.getPool().run(job)) as string | boolean;
+    } catch (error) {
+      if (error instanceof Error && error.message === QUEUE_FULL_MESSAGE) {
+        throw new ServiceUnavailableException();
+      }
+      throw error;
+    }
   }
 
   /** Cached dummy hash; a rejected attempt is dropped so a transient failure is retried. */
@@ -84,7 +99,13 @@ export class SodiumAuthProofHasher
         Number.isInteger(size) && size >= 1
           ? size
           : Math.min(4, availableParallelism());
+      // Bounded queue: ~64 waiting hashes per thread (each ~25 ms of worker time, so ~1.6 s of backlog);
+      // beyond that we shed load with 503 instead of letting memory and latency grow without limit.
+      const queue = Number(this.config?.get('ARGON2_MAX_QUEUE'));
+      const maxQueue =
+        Number.isInteger(queue) && queue >= 1 ? queue : threads * 64;
       this.pool = new Piscina({
+        maxQueue,
         filename: workerFile().href,
         minThreads: threads,
         maxThreads: threads,

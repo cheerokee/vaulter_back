@@ -147,6 +147,11 @@ export class EnvironmentVariables {
   @Min(1)
   ARGON2_POOL_SIZE?: number;
 
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  ARGON2_MAX_QUEUE?: number;
+
   @Transform(toBoolean)
   @IsBoolean()
   RATE_LIMIT_ENABLED: boolean = true;

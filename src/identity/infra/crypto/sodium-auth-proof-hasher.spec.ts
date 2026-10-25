@@ -1,4 +1,5 @@
 import { performance } from 'node:perf_hooks';
+import { ServiceUnavailableException } from '@nestjs/common';
 import sodium from 'libsodium-wrappers-sumo';
 import { MEM_LIMIT, OPS_LIMIT } from './argon2.worker.js';
 import { SodiumAuthProofHasher } from './sodium-auth-proof-hasher.js';
@@ -12,7 +13,7 @@ describe('SodiumAuthProofHasher', () => {
   });
 
   afterAll(async () => {
-    await hasher.onModuleDestroy();
+    await hasher.onApplicationShutdown();
   });
 
   it('verifies the right proof and rejects a wrong one', async () => {
@@ -44,13 +45,13 @@ describe('SodiumAuthProofHasher', () => {
     expect(spy).toHaveBeenCalledTimes(1);
     await fresh.verifyAgainstDummy(proof);
     expect(spy).toHaveBeenCalledTimes(1);
-    await fresh.onModuleDestroy();
+    await fresh.onApplicationShutdown();
   });
 
-  it('throws a clear error after onModuleDestroy instead of recreating a pool', async () => {
+  it('throws a clear error after shutdown instead of recreating a pool', async () => {
     const h = new SodiumAuthProofHasher();
     await h.onModuleInit();
-    await h.onModuleDestroy();
+    await h.onApplicationShutdown();
     await expect(h.hash(proof)).rejects.toThrow(/destroyed/);
     await expect(h.verify('x', proof)).rejects.toThrow(/destroyed/);
     await expect(h.verifyAgainstDummy(proof)).rejects.toThrow(/destroyed/);
@@ -64,7 +65,7 @@ describe('SodiumAuthProofHasher', () => {
     await expect(h.verifyAgainstDummy(proof)).rejects.toThrow('transient');
     spy.mockRestore();
     expect(await h.verifyAgainstDummy(proof)).toBe(false);
-    await h.onModuleDestroy();
+    await h.onApplicationShutdown();
   });
 
   it('keeps the event loop free during parallel verifications', async () => {
@@ -99,5 +100,30 @@ describe('SodiumAuthProofHasher', () => {
   it('uses the same Argon2id parameters as the documented ones', () => {
     expect(OPS_LIMIT).toBe(2);
     expect(MEM_LIMIT).toBe(19_922_944);
+  });
+
+  it('rejects with 503 when the queue is full instead of growing without bound', async () => {
+    const h = new SodiumAuthProofHasher({
+      get: (k: string) => ({ ARGON2_POOL_SIZE: 1, ARGON2_MAX_QUEUE: 1 })[k],
+    } as never);
+    await h.onModuleInit();
+    const results = await Promise.allSettled(
+      Array.from({ length: 12 }, () => h.hash(proof)),
+    );
+    const rejected = results.filter((r) => r.status === 'rejected');
+    expect(rejected.length).toBeGreaterThan(0);
+    for (const r of rejected) {
+      expect(r.reason).toBeInstanceOf(ServiceUnavailableException);
+    }
+    expect(results.some((r) => r.status === 'fulfilled')).toBe(true);
+    await h.onApplicationShutdown();
+  });
+
+  it('keeps the pool alive until application shutdown', async () => {
+    const h = new SodiumAuthProofHasher();
+    await h.onModuleInit();
+    expect(await h.hash(proof)).toMatch(/^\$argon2id\$/);
+    await h.onApplicationShutdown();
+    await expect(h.hash(proof)).rejects.toThrow(/destroyed/);
   });
 });

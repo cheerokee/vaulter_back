@@ -30,3 +30,36 @@ export function parseTrustProxy(
   }
   return items;
 }
+
+export interface TrustProxyContext {
+  nodeEnv: string | undefined;
+  rateLimitEnabled: boolean;
+  trustProxy: boolean | number | string[];
+}
+
+const MATCH_ALL_CIDRS = new Set(['0.0.0.0/0', '::/0']);
+
+/** Boot-time warnings about a TRUST_PROXY value that is unsafe or breaks per-IP rate limits. */
+export function trustProxyWarnings(ctx: TrustProxyContext): string[] {
+  const out: string[] = [];
+  const { trustProxy } = ctx;
+  if (
+    trustProxy === false &&
+    ctx.nodeEnv === 'production' &&
+    ctx.rateLimitEnabled
+  ) {
+    out.push(
+      'TRUST_PROXY=false in production: behind a load balancer or reverse proxy every client shares the proxy IP, so per-IP rate limits become global. Set TRUST_PROXY to the hop count or the proxy CIDRs.',
+    );
+  }
+  if (
+    trustProxy === true ||
+    (Array.isArray(trustProxy) &&
+      trustProxy.some((i) => MATCH_ALL_CIDRS.has(i)))
+  ) {
+    out.push(
+      'TRUST_PROXY trusts every X-Forwarded-For hop (true or a match-all CIDR): clients can forge their IP, bypass per-IP rate limits and spoof session IPs. Use the hop count or the proxy CIDRs instead.',
+    );
+  }
+  return out;
+}
