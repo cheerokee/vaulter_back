@@ -5,6 +5,7 @@ import { SessionRepository } from '../../src/identity/domain/session.repository.
 import { User } from '../../src/identity/domain/user.js';
 import { UserRepository } from '../../src/identity/domain/user.repository.js';
 import { DEFAULT_KDF_PARAMS } from '../../src/identity/domain/kdf-params.js';
+import { ConflictError } from '../../src/shared/domain/errors.js';
 import { newId } from '../../src/shared/domain/id.js';
 import { enableOrganizationRls } from '../../src/shared/infra/db/migration-helpers.js';
 import { runInOrganizationScope } from '../../src/shared/infra/db/organization-scope.js';
@@ -154,6 +155,103 @@ describe('UnitOfWork (e2e)', () => {
       }),
     ).rejects.toThrow('inner');
     expect(await countRows('users', user.id)).toBe(0);
+  });
+
+  it('a caught failure in a nested run is rolled back to its savepoint; the outer still commits', async () => {
+    const first = makeUser('first@x.com');
+    const insideFailed = makeUser('inner@x.com');
+    const last = makeUser('last@x.com');
+    await uow.run(async () => {
+      await users.create(first);
+      // Erro de banco (23505 traduzido para ConflictError) num run aninhado, capturado.
+      await expect(
+        uow.run(() => users.create(makeUser('first@x.com'))),
+      ).rejects.toBeInstanceOf(ConflictError);
+      // Erro de aplicação depois de gravar, capturado: a gravação interna é desfeita.
+      await expect(
+        uow.run(async () => {
+          await users.create(insideFailed);
+          throw new Error('inner');
+        }),
+      ).rejects.toThrow('inner');
+      await users.create(last);
+    });
+    expect(await countRows('users', first.id)).toBe(1);
+    expect(await countRows('users', insideFailed.id)).toBe(0);
+    expect(await countRows('users', last.id)).toBe(1);
+  });
+
+  it('a database error swallowed without a nested run makes run reject (no silent rollback)', async () => {
+    const user = makeUser();
+    await expect(
+      uow.run(async () => {
+        await users.create(user);
+        try {
+          await users.create(makeUser());
+        } catch {
+          // engolido de propósito: a transação ficou abortada
+        }
+        return 'looks fine';
+      }),
+    ).rejects.toMatchObject({ code: '25P02' });
+    expect(await countRows('users', user.id)).toBe(0);
+  });
+
+  it('concurrent runs keep their own organization context', async () => {
+    const list = (orgId: string) =>
+      uow.run(async () => {
+        await uow.setContext({ organizationId: orgId });
+        await currentManager(ds).query('SELECT pg_sleep(0.05)');
+        return (
+          (await currentManager(ds).query('SELECT v FROM uow_rls_probe')) as {
+            v: string;
+          }[]
+        ).map((r) => r.v);
+      });
+    const [a, b] = await Promise.all([list(orgA), list(orgB)]);
+    expect(a).toEqual(['a1']);
+    expect(b).toEqual(['b1']);
+  });
+
+  it('a nested organization scope restores the outer context when it returns', async () => {
+    const probe = () =>
+      currentManager(ds)
+        .query('SELECT v FROM uow_rls_probe ORDER BY v')
+        .then((r: { v: string }[]) => r.map((x) => x.v));
+    const seen = await uow.run(async () => {
+      await uow.setContext({ organizationId: orgA });
+      const inner = await runInOrganizationScope(ds, orgB, () => probe());
+      const afterScope = await probe();
+      const fromWith = await uow.withContext({ organizationId: orgB }, probe);
+      const afterWith = await probe();
+      return { inner, afterScope, fromWith, afterWith };
+    });
+    expect(seen).toEqual({
+      inner: ['b1'],
+      afterScope: ['a1'],
+      fromWith: ['b1'],
+      afterWith: ['a1'],
+    });
+  });
+
+  it('a nested organization scope that fails also restores the outer context', async () => {
+    const seen = await uow.run(async () => {
+      await uow.setContext({ organizationId: orgA });
+      await expect(
+        runInOrganizationScope(ds, orgB, () =>
+          Promise.reject(new Error('inner')),
+        ),
+      ).rejects.toThrow('inner');
+      return currentManager(ds).query('SELECT v FROM uow_rls_probe');
+    });
+    expect(seen).toEqual([{ v: 'a1' }]);
+  });
+
+  it('withContext outside run opens its own transaction with the context', async () => {
+    const rows = await uow.withContext({ organizationId: orgB }, () =>
+      currentManager(ds).query('SELECT v FROM uow_rls_probe'),
+    );
+    expect(rows).toEqual([{ v: 'b1' }]);
   });
 
   it('currentManager outside run is the data source manager', () => {

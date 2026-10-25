@@ -4,20 +4,17 @@ import type {
   EntityTarget,
   Repository,
 } from 'typeorm';
-import { runInTransaction, setTransactionContext } from './unit-of-work.js';
+import { runWithContext } from './unit-of-work.js';
 
 // Roda `work` numa transação com o contexto da organização. Dentro de um `UnitOfWork.run` (mesmo
-// DataSource), entra na transação ativa e o contexto vale até o fim dela; fora, abre a própria.
-// `set_config(..., true)` vale só até o fim da transação, então não vaza para a próxima da mesma conexão.
+// DataSource), entra na transação ativa num savepoint e, ao sair, restaura a organização anterior; fora,
+// abre a própria. `set_config(..., true)` vale só até o fim da transação, então não vaza para a próxima.
 export function runInOrganizationScope<T>(
   dataSource: DataSource,
   organizationId: string,
   work: (manager: EntityManager) => Promise<T>,
 ): Promise<T> {
-  return runInTransaction(dataSource, async (manager) => {
-    await setTransactionContext(manager, { organizationId });
-    return work(manager);
-  });
+  return runWithContext(dataSource, { organizationId }, work);
 }
 
 // Base dos repositórios de dado de cliente. Todo método público das subclasses recebe `organizationId`

@@ -245,12 +245,17 @@ test/support/        helpers e fixtures de teste compartilhados (cliente de crip
   **Testes de RLS precisam passar pelo login de runtime** — o dono é superusuário e ignora RLS.
 - **Unit of work** (`src/shared/infra/db/unit-of-work.ts`, provider global do `DatabaseModule`): caso de uso que
   grava em mais de um repositório (inclusive de outro módulo) envolve o trabalho em `await uow.run(async () => ...)`
-  — uma transação só, desfeita inteira se algo lançar erro. O `EntityManager` da transação viaja num
-  `AsyncLocalStorage`; os repositórios o pegam com `currentManager(dataSource)` (fora de `run`, é o
-  `dataSource.manager`, em autocommit como antes). `run` aninhado reaproveita a transação ativa (sem savepoint).
-  `uow.setContext({ organizationId?, userId? })` grava `app.organization_id` / `app.user_id` (`set_config(..., true)`,
-  vale até o fim da transação) para o RLS; fora de `run` lança erro. `runInOrganizationScope` usa o mesmo
-  mecanismo: dentro de um `run`, entra na transação dele.
+  — uma transação só. O `EntityManager` da transação viaja num `AsyncLocalStorage`; os repositórios o pegam com
+  `currentManager(dataSource)` (fora de `run`, é o `dataSource.manager`, em autocommit como antes).
+  - **Erro que sai do `run` desfaz tudo.** `run` aninhado abre um **savepoint**: se falhar, só ele é desfeito e o
+    erro sobe; quem capturar pode seguir. **Não engolir erro de repositório dentro de um `run` sem um `run`
+    aninhado** — a transação fica abortada e o `run` externo rejeita com `25P02` (há uma sonda antes do COMMIT
+    para isso não virar ROLLBACK silencioso).
+  - Efeitos pós-commit (fila pg-boss, e-mail, chamadas externas) vão **depois** do `run`, não dentro.
+  - Contexto do RLS: `uow.setContext({ organizationId?, userId? })` grava `app.organization_id` / `app.user_id`
+    (`set_config(..., true)`) até o fim da transação; fora de `run` lança erro. Para trocar só num trecho (ex.:
+    gravar na organização pessoal e na do convite na mesma transação), use `uow.withContext(ctx, work)` ou
+    `runInOrganizationScope`: dentro de um `run`, entram nele num savepoint e restauram o contexto anterior ao sair.
 - **Banco de teste:** os e2e rodam em `DB_TEST_DATABASE` (padrão `${DB_DATABASE}_test`), criado e migrado pelo
   `globalSetup`; o banco de desenvolvimento nunca é truncado.
 - **Enums do DER** viram `varchar` + `CHECK` (alterar enum nativo depois é caro). **Índices únicos parciais**
