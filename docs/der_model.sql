@@ -53,6 +53,27 @@ CREATE TABLE users (
   INDEX ix_users_sync_version (sync_version)
 );
 
+-- Sessão por aparelho (app, Hub). Não sincronizável: fica só no backend. Revogar = revoked_at; nada é apagado.
+CREATE TABLE user_sessions (
+  id CHAR(36) NOT NULL,
+  created_at DATETIME NOT NULL,
+  updated_at DATETIME NULL,
+  deleted_at DATETIME NULL,
+  user_id CHAR(36) NOT NULL,
+  device_name VARCHAR(100) NOT NULL,
+  device_platform ENUM('android', 'ios', 'hub', 'web', 'other') NOT NULL DEFAULT 'other',
+  refresh_token_hash VARCHAR(128) NOT NULL COMMENT 'hash do refresh atual; refresh rotativo, reuso revoga a sessão',
+  refresh_expires_at DATETIME NOT NULL COMMENT '30 dias de inatividade, renovado a cada refresh',
+  last_used_at DATETIME NOT NULL,
+  last_ip VARCHAR(45) NULL,
+  user_agent VARCHAR(500) NULL,
+  revoked_at DATETIME NULL,
+  revoked_reason ENUM('logout', 'revoked', 'refresh_reuse', 'password_change') NULL,
+  PRIMARY KEY (id),
+  INDEX ix_user_sessions_user (user_id, revoked_at),
+  CONSTRAINT fk_user_sessions_users FOREIGN KEY (user_id) REFERENCES users (id)
+);
+
 -- Papéis da plataforma (equipe Vaulter: suporte, financeiro...). Separados dos papéis de cliente (roles), que
 -- têm escopo de organização/espaço/hub e chegam ao hub; estes ficam só no backend.
 CREATE TABLE platform_roles (
