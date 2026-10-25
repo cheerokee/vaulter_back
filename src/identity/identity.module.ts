@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { APP_GUARD } from '@nestjs/core';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { AccessTokenService } from './application/ports/access-token-service.js';
 import { AuthProofHasher } from './application/ports/auth-proof-hasher.js';
@@ -25,12 +26,16 @@ import { UserSessionTypeormEntity } from './infra/db/user-session.entity.js';
 import { UserSessionTypeormRepository } from './infra/db/user-session.typeorm-repository.js';
 import { UserTypeormEntity } from './infra/db/user.entity.js';
 import { UserTypeormRepository } from './infra/db/user.typeorm-repository.js';
+import { AccessTokenGuard } from './infra/http/access-token.guard.js';
+import { AuthController } from './infra/http/auth.controller.js';
 
 @Module({
   imports: [
     TypeOrmModule.forFeature([UserTypeormEntity, UserSessionTypeormEntity]),
   ],
+  controllers: [AuthController],
   providers: [
+    { provide: APP_GUARD, useClass: AccessTokenGuard },
     { provide: UserRepository, useClass: UserTypeormRepository },
     { provide: SessionRepository, useClass: UserSessionTypeormRepository },
     { provide: AuthProofHasher, useClass: SodiumAuthProofHasher },

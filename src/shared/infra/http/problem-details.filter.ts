@@ -126,6 +126,18 @@ export class ProblemDetailsFilter implements ExceptionFilter {
       this.report(exception, requestId);
       return { status, code, detail: 'An unexpected error occurred' };
     }
+    // Errors from Express middleware (body-parser: 413, malformed JSON 400...) are http-errors.
+    const clientStatus = httpErrorStatus(exception);
+    if (clientStatus !== undefined) {
+      return {
+        status: clientStatus,
+        code: HTTP_CODES[clientStatus] ?? `http-${clientStatus}`,
+        detail:
+          clientStatus === 413
+            ? 'The request body is too large'
+            : 'The request could not be processed',
+      };
+    }
     this.report(exception, requestId);
     return {
       status: HttpStatus.INTERNAL_SERVER_ERROR,
@@ -151,4 +163,16 @@ export class ProblemDetailsFilter implements ExceptionFilter {
     if (e instanceof HubOfflineError) return 503;
     return undefined;
   }
+}
+
+function httpErrorStatus(exception: unknown): number | undefined {
+  if (typeof exception !== 'object' || exception === null) return undefined;
+  const { status, statusCode, expose } = exception as {
+    status?: unknown;
+    statusCode?: unknown;
+    expose?: unknown;
+  };
+  const value = typeof status === 'number' ? status : statusCode;
+  if (expose !== true || typeof value !== 'number') return undefined;
+  return value >= 400 && value < 500 ? value : undefined;
 }

@@ -49,6 +49,18 @@ function run(exception: unknown, reqId: string | undefined = 'req-1') {
 }
 
 describe('ProblemDetailsFilter', () => {
+  it('maps exposed http-errors from body-parser (413) to problem+json, not 500', () => {
+    const err = Object.assign(new Error('request entity too large'), {
+      status: 413,
+      statusCode: 413,
+      expose: true,
+      type: 'entity.too.large',
+    });
+    const res = run(err);
+    expect(res.statusCode).toBe(413);
+    expect(res.body.type).toBe(`${BASE}/payload-too-large`);
+  });
+
   it('maps DomainValidationError to 422 problem+json with stable type', () => {
     const res = run(
       new DomainValidationError('kdf-params-out-of-range', 'bad kdf'),
