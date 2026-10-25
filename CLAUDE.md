@@ -162,6 +162,21 @@ src/
   Migrations geradas já saem formatadas pelo Prettier.
 - Sempre revisar o SQL gerado antes de rodar, e escrever o `down` de migrations manuais.
 
+## Observabilidade
+- **Sentry** para erros e tracing — o mesmo nos três softwares (backend Nest, app Ionic, hub Python), para
+  seguir um problema de ponta a ponta. Sem DSN no `.env` (desenvolvimento), fica desligado.
+- **Logs estruturados com `nestjs-pino`** (JSON), sempre com o `requestId` — o mesmo da resposta
+  `problem+json`. Destino dos logs fica para quando houver produção; até lá, a saída do container.
+- **Métricas da frota** (hubs online, atraso de sincronização, caixa de entrada parada, comandos com hub offline)
+  entram quando houver hubs de clientes (ex.: Prometheus/Grafana).
+- **Privacidade primeiro — o Vaulter não pode ler o cérebro do cliente, e a observabilidade não pode ser o
+  vazamento:**
+  - `sendDefaultPii: false`; **nunca** anexar corpo de requisição;
+  - `beforeSend` remove campos sensíveis (`wrapped_key`, `encrypted_private_key`, `auth_hash`, `kdf_*`, tokens,
+    cabeçalho `Authorization`) — vale para Sentry e para os logs (redaction do pino);
+  - o hub nunca envia conteúdo de memória, transcrição ou imagem; só tipo e local do erro;
+  - LGPD: Sentry na região da UE, ou **GlitchTip** (compatível com o SDK do Sentry) se precisar hospedar.
+
 ## Documentação da API (interna × externa)
 Dois públicos, nunca misturados: o **time** e os **integradores** (apps como Orion e Salte). A externa não pode
 expor nada interno (cifra, infraestrutura, conexão do hub, endpoints de app/hub).
