@@ -17,13 +17,14 @@ npm install          # dependências
 npm run start:dev    # API em modo watch — rodar DENTRO do container (veja Docker)
 npm run build        # compila para dist/
 npm test             # testes unitários (Vitest)
-npm run test:e2e     # testes e2e (Vitest + supertest) — sobem o AppModule, precisam do banco
+npm run test:e2e     # testes e2e (Vitest + supertest) — sobem o AppModule, precisam do banco; rodar DENTRO do
+                     # container: docker exec vaulter-back-app npm run test:e2e
 npm run migration:show                 # status das migrations (veja Banco de dados)
 npm run lint         # oxlint com checagem de tipos
 npm run format       # Prettier em src/ e test/
 ```
 Antes de dizer que algo está pronto: `npm run build && npm test && npm run lint` precisam passar
-(e `npm run test:e2e`, dentro do container, quando mexer em módulos/banco).
+(e `docker exec vaulter-back-app npm run test:e2e`, dentro do container, quando mexer em módulos/banco).
 
 ## Docker
 O ambiente de desenvolvimento roda com **Docker Engine + Compose** (`docker-compose.yaml`), no mesmo modelo
@@ -106,7 +107,18 @@ couber (spec de contas, §12).
 - **Hub ↔ backend:** **WebSocket puro** com mensagens **JSON versionadas** (sem socket.io, que prende os dois
   lados à biblioteca).
 - **Sessão de usuário:** token de acesso curto + **refresh rotativo**, sessão **por aparelho**, revogável.
-  Detalhe no módulo `identity`.
+  Formato final (módulo `identity`):
+  - access token **JWT EdDSA (Ed25519)** com `kid` no cabeçalho e `iss` vindo do `.env`; vale **15 min**;
+  - refresh **rotativo** com **30 dias de inatividade** (cada refresh renova o prazo, sem teto absoluto); os dois
+    prazos são configuráveis no `.env`;
+  - a sessão é conferida **no banco a cada requisição** (busca por PK), então a revogação vale na hora;
+  - **reuso do refresh token** (ou corrida entre dois refreshes com o mesmo token) **revoga a sessão**; a revogação
+    é atômica, vence o primeiro motivo; **trocar a senha revoga as outras sessões** do usuário;
+  - o refresh token vai **no corpo**, sem cookie (não há front web na v1);
+  - trade-off conhecido: quem souber o id de uma sessão pode forçar a revogação dela apresentando um refresh
+    token forjado (não ganha acesso nenhum); os clientes devem **serializar** as chamadas de refresh.
+  - Formato v1 das chaves do usuário (Argon2id, normalização NFC da senha, vetor de teste):
+    [`docs/crypto/user-keys.md`](docs/crypto/user-keys.md).
 - **Tarefas em segundo plano:** **pg-boss** (fila no próprio Postgres, sem serviço novo).
 - **AWS:** região **`us-east-1` (Virgínia)** — o backend fica perto dos serviços externos (Anthropic, OpenRouter,
   Sentry), então só a ida app → backend cruza o continente; mais barata e com todos os serviços. LGPD permite
@@ -161,16 +173,48 @@ src/
   | `DomainValidationError` e erros do `ValidationPipe` | 422 |
   | `NotFoundError` | 404 |
   | `PermissionDeniedError` | 403 |
+  | `UnauthenticatedError` (credencial ou token inválido/expirado) | 401 |
   | `ConflictError` e violação de unicidade do Postgres (`23505`) | 409 |
   | `HubOfflineError` | 503 |
   | qualquer outro | 500 genérico |
 
   Resposta sempre em **RFC 9457 (`application/problem+json`)**: `type`, `title`, `status`, `detail`,
-  `requestId` (e, em validação, a lista de campos inválidos). Stack trace, SQL e mensagem crua do banco vão só
+  `requestId` (e, em validação, a lista de campos inválidos). Erros 4xx do body-parser (413 corpo grande,
+  400 JSON malformado) também saem como problem+json. Stack trace, SQL e mensagem crua do banco vão só
   para o log, nunca para a resposta.
 - O modelo de dados e as regras de negócio vêm da spec
   `valter-valt-ai/docs/superpowers/specs/2026-10-24-organizacoes-espacos-e-nuvem-design.md` e do DER em
   `docs/der_model.sql`.
+
+## Módulo de referência: `identity`
+`src/identity/` é o modelo a copiar; `src/shared/` é a base comum (Entity/UUID v7, erros, paginação, filtro
+`problem+json`, config/validação do `.env`, naming strategy, entidades base, helpers de migration/RLS, logs e Sentry).
+```
+src/identity/
+  domain/            email, kdf-params, crypto-material (value objects); user, session (+ *.repository.ts abstratos)
+  application/       um use-case por arquivo (+ *.spec.ts ao lado); ports/ (contratos de cripto/token);
+                     session-issuer.ts; dto/
+  infra/
+    db/              *.entity.ts, *.mapper.ts, *.typeorm-repository.ts
+    crypto/          implementações das ports (libsodium, jose)
+    http/            controllers, access-token.guard.ts, dto/ (class-validator + Swagger)
+  identity.module.ts
+test/identity/       e2e do módulo;  test/setup/ (globalSetup, test-app);  test/shared/ (e2e da base)
+test/support/        helpers e fixtures de teste compartilhados (cliente de cripto, identity-client, sessões)
+```
+**Como criar um módulo novo:**
+1. `domain/`: entidade/value objects com as regras (lançam erros de `shared/domain`) e o contrato do repositório
+   como **classe abstrata** (serve de token de DI).
+2. `application/`: um caso de uso `@Injectable()` por arquivo, dependendo só dos contratos; DTOs de saída.
+3. `infra/db/`: entidade TypeORM (`*.entity.ts`, estendendo as bases de `shared/infra/db`, com **todas** as
+   constraints nos metadados), mapper domínio ↔ entidade e repositório que implementa o contrato.
+4. Migration em `src/database/migrations/` (`addSyncVersionTrigger` / `enableOrganizationRls` quando couber;
+   dado de cliente tem `organization_id` e RLS); `migration:generate` depois dela deve sair vazio.
+5. `infra/http/`: controllers e DTOs de borda. Rotas exigem token por padrão (guard global); abra uma rota com
+   `@Public()` e leia o chamador com `@CurrentAuth()` (ambos em `src/shared/infra/http/auth.decorators.ts`).
+6. `<modulo>.module.ts`: `TypeOrmModule.forFeature([...])` e `{ provide: Contrato, useClass: Implementacao }`.
+7. Testes: unitários com contratos simulados via `vi`, ao lado do código; e2e em `test/<modulo>/`, reaproveitando
+   `test/support/`.
 
 ## Banco de dados (TypeORM + migrations)
 - **TypeORM 1.x** + `@nestjs/typeorm`, driver `pg`. Config de conexão em `src/database/typeorm.options.ts`,
@@ -182,6 +226,25 @@ src/
   `deleted_at` limpo, não uma linha nova. Essas tabelas têm também `sync_version` (sequência global do
   servidor, por trigger); o endpoint de sincronização usa `withDeleted` para mandar as lápides. Regras
   completas no cabeçalho de `docs/der_model.sql`.
+- **Dois logins no Postgres:**
+  - **runtime** (`DB_APP_USERNAME`/`DB_APP_PASSWORD`, padrão `vaulter_app`): o que a API usa. Sem superusuário,
+    sem `BYPASSRLS`, membro do papel de grupo `app_runtime`, que tem só `SELECT, INSERT, UPDATE` — **sem
+    `DELETE`** (reforça o soft delete; a limpeza de lápides decide isso depois). As permissões vêm das migrations;
+    o login é criado por `.docker/postgres/init/02-app-role.sh` (idempotente);
+  - **dono** (`DB_USERNAME`): migrations, CLI, compose, pgAdmin e a preparação do banco de teste.
+  - Em banco **já existente** (criado antes do script), rodar uma vez:
+    `docker exec vaulter-back-db sh /docker-entrypoint-initdb.d/02-app-role.sh`
+- **Helpers de migration** (`src/shared/infra/db/migration-helpers.ts`): `addSyncVersionTrigger(qr, tabela)` (coluna
+  `sync_version`, índice e trigger da sequência global) e `enableOrganizationRls(qr, tabela)` (RLS com `FORCE` e
+  policy por `app.organization_id`; sem contexto, nenhuma linha é visível). Em código, o contexto vai por transação:
+  `runInOrganizationScope(dataSource, orgId, work)` ou, nos repositórios de dado de cliente, estendendo
+  `OrganizationScopedRepository` (todo método recebe `organizationId` e filtra por ele; o RLS é a segunda trava).
+  **Testes de RLS precisam passar pelo login de runtime** — o dono é superusuário e ignora RLS.
+- **Banco de teste:** os e2e rodam em `DB_TEST_DATABASE` (padrão `${DB_DATABASE}_test`), criado e migrado pelo
+  `globalSetup`; o banco de desenvolvimento nunca é truncado.
+- **Enums do DER** viram `varchar` + `CHECK` (alterar enum nativo depois é caro). **Índices únicos parciais**
+  (ex.: `WHERE deleted_at IS NULL`) são declarados nos metadados da entidade, para o `migration:generate` não
+  acusar diferença.
 - **`synchronize` é sempre `false`** — o schema só muda por migration, nunca ligar sincronização automática.
 - **Entidades:** arquivos `*.entity.ts` em `infra/db/` do módulo (só a entidade TypeORM usa esse sufixo), registrados com
   `TypeOrmModule.forFeature([...])` no módulo (a app usa `autoLoadEntities`). O CLI acha as entidades pelo
@@ -199,6 +262,33 @@ src/
   `typeorm` (o projeto é ESM e as entidades dependem de `emitDecoratorMetadata`, que só o `tsc` gera).
   Migrations geradas já saem formatadas pelo Prettier.
 - Sempre revisar o SQL gerado antes de rodar, e escrever o `down` de migrations manuais.
+- A entidade TypeORM deve descrever **todas** as constraints (CHECK, índices, únicos parciais) nos metadados: depois
+  de uma migration, `migration:generate` precisa sair vazio.
+
+## Variáveis do `.env` (além das de infraestrutura do compose)
+Validadas na subida por `src/shared/infra/config/env.validation.ts` (faltou ou inválido: a API não sobe).
+| Variável | Para quê | Padrão |
+|---|---|---|
+| `DB_APP_USERNAME` / `DB_APP_PASSWORD` | login de runtime da API (veja Banco de dados) | `vaulter_app` (dev) |
+| `DB_TEST_DATABASE` | banco dos e2e | `${DB_DATABASE}_test` |
+| `PROBLEM_TYPE_BASE_URL` | base das URLs `type` dos erros | obrigatória |
+| `API_DOCS_TITLE` / `API_DOCS_INTERNAL_ENABLED` | título do Swagger / liga a doc interna | obrigatória / `false` |
+| `LOG_LEVEL` / `LOG_PRETTY` | nível do pino / saída legível | `info` / `false` |
+| `SENTRY_DSN` / `SENTRY_ENVIRONMENT` / `SENTRY_TRACES_SAMPLE_RATE` | Sentry (sem DSN, desligado) | vazio / `development` / `0` |
+| `AUTH_JWT_ISSUER` | `iss` dos tokens | obrigatória |
+| `AUTH_JWT_KEY_ID` | `kid` do cabeçalho do JWT | obrigatória |
+| `AUTH_JWT_SIGNING_SEED` | semente Ed25519 (32 bytes em base64url) — **segredo** | obrigatória |
+| `AUTH_ACCESS_TOKEN_TTL_SECONDS` | validade do access token | `900` |
+| `AUTH_REFRESH_TOKEN_IDLE_DAYS` | inatividade máxima do refresh | `30` |
+| `IDENTITY_DECOY_SALT_KEY` | chave do salt falso do pré-login (32 bytes em base64url) — **segredo** | obrigatória |
+
+Os valores do `.env.example` para os segredos são **só de desenvolvimento**; produção gera os próprios:
+`node -e "console.log(require('crypto').randomBytes(32).toString('base64url'))"`.
+
+## Pendências antes de produção
+- Rate limiting no login, refresh e troca de senha (`@nestjs/throttler`; o Argon2 roda no event loop).
+- JWKS público para o hub validar tokens offline.
+- Exclusão de conta (LGPD) precisa revogar as sessões.
 
 ## Observabilidade
 - **Sentry** para erros e tracing — o mesmo nos três softwares (backend Nest, app Ionic, hub Python), para
@@ -207,9 +297,13 @@ src/
   `problem+json`. Destino dos logs fica para quando houver produção; até lá, a saída do container.
 - **Métricas da frota** (hubs online, atraso de sincronização, caixa de entrada parada, comandos com hub offline)
   entram quando houver hubs de clientes (ex.: Prometheus/Grafana).
+- **Sentry 11 não tem `sendDefaultPii`:** usamos `dataCollection` desligado + `beforeSend` que limpa os campos
+  sensíveis. No pino, `formatters.log` limpa as chaves sensíveis em **qualquer profundidade** (EventEmitters,
+  `req` e `res` são tratados como opacos). O `requestId` é o cabeçalho `X-Request-Id` (aceito se casar
+  `^[A-Za-z0-9-]{1,64}$`; senão é gerado), o mesmo da resposta `problem+json`.
 - **Privacidade primeiro — o Vaulter não pode ler o cérebro do cliente, e a observabilidade não pode ser o
   vazamento:**
-  - `sendDefaultPii: false`; **nunca** anexar corpo de requisição;
+  - PII padrão desligada (veja acima); **nunca** anexar corpo de requisição;
   - `beforeSend` remove campos sensíveis (`wrapped_key`, `encrypted_private_key`, `auth_hash`, `kdf_*`, tokens,
     cabeçalho `Authorization`) — vale para Sentry e para os logs (redaction do pino);
   - o hub nunca envia conteúdo de memória, transcrição ou imagem; só tipo e local do erro;
