@@ -12,18 +12,6 @@ function sameSet<T>(a: readonly T[], b: readonly T[]): boolean {
 }
 
 export const KeyRotationRules = {
-  /** Repeated items are a mismatch too; `code` picks which one the caller is validating. */
-  assertNoDuplicates<T>(
-    items: readonly T[],
-    code:
-      | 'key-rotation-mismatch'
-      | 'key-versions-mismatch' = 'key-rotation-mismatch',
-  ): void {
-    if (new Set(items).size !== items.length) {
-      throw new ConflictError(code, 'The list has duplicated entries.');
-    }
-  },
-
   /** Rotation: grants must be exactly the active members, no duplicates, nobody missing or extra. */
   assertGrantsMatchMembers(
     grantUserIds: readonly string[],

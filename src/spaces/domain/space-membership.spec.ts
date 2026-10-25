@@ -75,4 +75,23 @@ describe('SpaceMembershipRules', () => {
       R.assertCanChangeRole('space_reader', 'boss', notLast),
     ).toThrowError(expect.objectContaining({ code: 'role-invalid' }));
   });
+
+  it('contextFor derives both facts from the lists', () => {
+    expect(R.contextFor(['a'], ['a', 'b'], 'a')).toEqual({
+      isLastManager: true,
+      hasOtherMembers: true,
+    });
+    expect(R.contextFor(['a'], ['a'], 'a')).toEqual({
+      isLastManager: true,
+      hasOtherMembers: false,
+    });
+    expect(R.contextFor(['a', 'b'], ['a', 'b', 'c'], 'a')).toEqual({
+      isLastManager: false,
+      hasOtherMembers: true,
+    });
+    expect(R.contextFor(['a'], ['a', 'b'], 'b')).toEqual({
+      isLastManager: false,
+      hasOtherMembers: true,
+    });
+  });
 });

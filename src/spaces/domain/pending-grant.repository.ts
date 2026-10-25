@@ -22,6 +22,11 @@ export type NewPendingGrant = Omit<PendingGrant, 'status' | 'createdAt'>;
 
 export abstract class PendingGrantRepository {
   abstract create(orgId: string, grant: NewPendingGrant): Promise<void>;
+  abstract findPending(
+    orgId: string,
+    spaceId: string,
+    userId: string,
+  ): Promise<PendingGrant | null>;
   abstract listPending(
     orgId: string,
     spaceId: string,

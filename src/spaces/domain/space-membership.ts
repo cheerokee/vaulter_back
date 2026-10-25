@@ -27,6 +27,21 @@ function lastManager(): never {
 }
 
 export const SpaceMembershipRules = {
+  /** Builds the context from the locked manager list and the active members (no trust in callers). */
+  contextFor(
+    managerIds: readonly string[],
+    memberIds: readonly string[],
+    targetUserId: string,
+  ): SpaceMembershipContext {
+    return {
+      isLastManager: SpaceMembershipRules.isLastManager(
+        managerIds,
+        targetUserId,
+      ),
+      hasOtherMembers: memberIds.some((id) => id !== targetUserId),
+    };
+  },
+
   assertSpaceRole(roleKey: string): SpaceRoleKey {
     if (!isSpaceRoleKey(roleKey)) {
       throw new DomainValidationError(
@@ -42,7 +57,7 @@ export const SpaceMembershipRules = {
     return managerIds.length === 1 && managerIds[0] === targetUserId;
   },
 
-  assertCanRemove(targetRole: string, ctx: SpaceMembershipContext): void {
+  assertCanRemove(targetRole: SpaceRoleKey, ctx: SpaceMembershipContext): void {
     if (
       targetRole === 'space_manager' &&
       ctx.isLastManager &&
@@ -53,12 +68,12 @@ export const SpaceMembershipRules = {
   },
 
   /** Leaving as the only member is allowed: the space becomes an orphan (reopened with the kit). */
-  assertCanLeave(targetRole: string, ctx: SpaceMembershipContext): void {
+  assertCanLeave(targetRole: SpaceRoleKey, ctx: SpaceMembershipContext): void {
     SpaceMembershipRules.assertCanRemove(targetRole, ctx);
   },
 
   assertCanChangeRole(
-    targetRole: string,
+    targetRole: SpaceRoleKey,
     newRole: string,
     ctx: SpaceMembershipContext,
   ): void {

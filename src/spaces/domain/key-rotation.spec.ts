@@ -59,14 +59,4 @@ describe('KeyRotationRules', () => {
       code('key-versions-mismatch'),
     );
   });
-
-  it('assertNoDuplicates throws the chosen conflict code', () => {
-    expect(() => R.assertNoDuplicates(['a', 'b'])).not.toThrow();
-    expect(() => R.assertNoDuplicates(['a', 'a'])).toThrowError(
-      code('key-rotation-mismatch'),
-    );
-    expect(() =>
-      R.assertNoDuplicates([1, 1], 'key-versions-mismatch'),
-    ).toThrowError(code('key-versions-mismatch'));
-  });
 });

@@ -1,4 +1,14 @@
+import type {
+  CursorPage,
+  CursorPageRequest,
+} from '../../shared/domain/pagination.js';
 import type { SpaceRoleKey } from './space-membership.js';
+
+export type SpaceMember = {
+  userId: string;
+  roleKey: SpaceRoleKey;
+  joinedAt: Date;
+};
 
 export abstract class SpaceRoleRepository {
   /** Sets (replaces) the user's role in the space; clears a tombstone. */
@@ -20,6 +30,12 @@ export abstract class SpaceRoleRepository {
     userId: string,
   ): Promise<void>;
   abstract activeMemberIds(orgId: string, spaceId: string): Promise<string[]>;
+  /** Active space-scope assignments, with role. */
+  abstract listMembers(
+    orgId: string,
+    spaceId: string,
+    page: CursorPageRequest,
+  ): Promise<CursorPage<SpaceMember>>;
   /**
    * User ids of the active space_manager assignments, read with `SELECT ... FOR UPDATE` in a stable order.
    * REQUIRES an active unit of work; call it before evaluating `SpaceMembershipRules.isLastManager` for
