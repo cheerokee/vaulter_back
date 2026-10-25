@@ -25,7 +25,14 @@ export function pinoHttpOptions(config: ConfigService): Options {
     level: config.get<string>('LOG_LEVEL') ?? 'info',
     genReqId,
     // Cabeçalhos por caminho; todo o resto passa por scrubSensitive em qualquer profundidade.
-    formatters: { log: (obj) => scrubSensitive(obj) },
+    formatters: {
+      // req/res (IncomingMessage/ServerResponse) ficam de fora: os serializers abaixo já escolhem os campos.
+      log: ({ req, res, ...rest }) => ({
+        ...scrubSensitive(rest),
+        ...(req !== undefined ? { req } : {}),
+        ...(res !== undefined ? { res } : {}),
+      }),
+    },
     redact: { paths: REDACT_PATHS, censor: '[REDACTED]' },
     // Só método, URL e id: sem corpo e sem cabeçalhos.
     serializers: {

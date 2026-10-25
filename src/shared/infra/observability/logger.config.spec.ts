@@ -88,5 +88,41 @@ describe('logger config', () => {
       logger.info({ userId: 'u1', nested: { n: 2 } }, 'hi');
       expect(output()).toContain('u1');
     });
+
+    it('keeps Error details in { err }', () => {
+      const { logger, output } = capture();
+      logger.error({ err: new Error('boom') }, 'x');
+      const line = JSON.parse(output());
+      expect(line.err.message).toBe('boom');
+      expect(line.err.stack).toContain('boom');
+    });
+
+    it('keeps the message of an Error but redacts its sensitive own props', () => {
+      const { logger, output } = capture();
+      const err = Object.assign(new Error('upstream failed'), {
+        response: { wrappedKey: 'SECRET1' },
+      });
+      logger.error({ err }, 'x');
+      expect(output()).toContain('upstream failed');
+      expect(output()).not.toContain('SECRET1');
+    });
+
+    it('does not deep-walk non-plain objects such as ServerResponse', () => {
+      const { logger, output } = capture();
+      let touched = false;
+      class FakeServerResponse {
+        get socket() {
+          touched = true;
+          return {};
+        }
+        statusCode = 200;
+      }
+      logger.info(
+        { res: new FakeServerResponse(), other: new FakeServerResponse() },
+        'x',
+      );
+      expect(touched).toBe(false);
+      expect(output()).toContain('"msg":"x"');
+    });
   });
 });

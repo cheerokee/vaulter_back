@@ -31,3 +31,24 @@ describe('scrubSensitive', () => {
     );
   });
 });
+
+describe('scrubSensitive with errors and class instances', () => {
+  it('keeps name, message and stack of an Error and scrubs own props', () => {
+    const err = Object.assign(new Error('boom'), {
+      response: { wrappedKey: 'S' },
+    });
+    const out = scrubSensitive({ err }) as any;
+    expect(out.err.message).toBe('boom');
+    expect(out.err.name).toBe('Error');
+    expect(out.err.stack).toContain('boom');
+    expect(out.err.response.wrappedKey).toBe('[REDACTED]');
+  });
+
+  it('passes non-plain objects through untouched', () => {
+    class Sock {
+      authProof = 'x';
+    }
+    const s = new Sock();
+    expect((scrubSensitive({ s }) as any).s).toBe(s);
+  });
+});

@@ -37,6 +37,23 @@ export function scrubSensitive<T>(value: T): T {
   return scrub(value, new WeakMap()) as T;
 }
 
+function isPlainObject(value: object): boolean {
+  const proto = Object.getPrototypeOf(value);
+  return proto === Object.prototype || proto === null;
+}
+
+function scrubEntries(
+  value: object,
+  out: Record<string, unknown>,
+  seen: WeakMap<object, unknown>,
+): void {
+  for (const [k, v] of Object.entries(value)) {
+    out[k] = LOWER.has(k.toLowerCase()) ? REDACTED : scrub(v, seen);
+  }
+}
+
+// Só objetos simples e arrays são percorridos. Error vira objeto simples preservando
+// name/message/stack (não enumeráveis); o resto (streams, sockets, ServerResponse, Buffer...) passa direto.
 function scrub(value: unknown, seen: WeakMap<object, unknown>): unknown {
   if (value === null || typeof value !== 'object') return value;
   if (seen.has(value)) return seen.get(value);
@@ -47,10 +64,20 @@ function scrub(value: unknown, seen: WeakMap<object, unknown>): unknown {
     return arr;
   }
   if (value instanceof Date) return new Date(value.getTime());
+  if (value instanceof Error) {
+    const out: Record<string, unknown> = {
+      name: value.name,
+      message: value.message,
+      stack: value.stack,
+    };
+    seen.set(value, out);
+    if ('cause' in value) out.cause = scrub(value.cause, seen);
+    scrubEntries(value, out, seen);
+    return out;
+  }
+  if (!isPlainObject(value)) return value;
   const out: Record<string, unknown> = {};
   seen.set(value, out);
-  for (const [k, v] of Object.entries(value)) {
-    out[k] = LOWER.has(k.toLowerCase()) ? REDACTED : scrub(v, seen);
-  }
+  scrubEntries(value, out, seen);
   return out;
 }
