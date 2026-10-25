@@ -1,5 +1,5 @@
 import { performance } from 'node:perf_hooks';
-import { ServiceUnavailableException } from '@nestjs/common';
+import { LoadSheddingException } from '../../../shared/infra/http/load-shedding.exception.js';
 import sodium from 'libsodium-wrappers-sumo';
 import { MEM_LIMIT, OPS_LIMIT } from './argon2.worker.js';
 import { SodiumAuthProofHasher } from './sodium-auth-proof-hasher.js';
@@ -113,7 +113,7 @@ describe('SodiumAuthProofHasher', () => {
     const rejected = results.filter((r) => r.status === 'rejected');
     expect(rejected.length).toBeGreaterThan(0);
     for (const r of rejected) {
-      expect(r.reason).toBeInstanceOf(ServiceUnavailableException);
+      expect(r.reason).toBeInstanceOf(LoadSheddingException);
     }
     expect(results.some((r) => r.status === 'fulfilled')).toBe(true);
     await h.onApplicationShutdown();

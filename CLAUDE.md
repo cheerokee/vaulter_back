@@ -337,8 +337,12 @@ Os valores do `.env.example` para os segredos são **só de desenvolvimento**; p
 - O Argon2id roda num pool de `worker_threads` (`ARGON2_POOL_SIZE`), fora do event loop. O arquivo do worker só
   pode usar TypeScript **apagável** (sem enums, namespaces ou parameter properties), pois é carregado sem o
   passo de transformação do Nest. A fila é limitada (`ARGON2_MAX_QUEUE`, padrão `threads × 64`, ~1,6 s de
-  atraso): cheia, a requisição recebe 503 (`service-unavailable`) em vez de a fila crescer sem limite. O pool é
-  destruído em `onApplicationShutdown`, depois de o HTTP parar de aceitar. Cada hash ativo ocupa ~19 MiB: dimensione o pool pela memória do container.
+  atraso): cheia, a requisição recebe 503 (`service-unavailable`) em vez de a fila crescer sem limite. Essa recusa
+  é uma `LoadSheddingException` (`shared/infra/http`): o filtro só loga em `warn` e **não** manda ao Sentry, para
+  um ataque não virar uma enxurrada de eventos. Use a mesma exceção para qualquer recusa por carga.
+- O `main.ts` chama `app.enableShutdownHooks()`: no SIGTERM o HTTP para de aceitar e só depois os
+  `onApplicationShutdown` rodam (o pool é destruído sem matar logins em andamento). Cada hash ativo ocupa
+  ~19 MiB: dimensione o pool pela memória do container.
 
 ## Rotação de segredos
 - **Semente do JWT (`AUTH_JWT_SIGNING_SEED`)**: rotação em **3 fases**, necessária com mais de uma instância

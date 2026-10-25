@@ -11,12 +11,14 @@ import {
   PermissionDeniedError,
   UnauthenticatedError,
 } from '../../domain/errors.js';
+import { LoadSheddingException } from './load-shedding.exception.js';
 import { ProblemDetailsFilter } from './problem-details.filter.js';
 import { RequestValidationError } from './request-validation.error.js';
 
 vi.mock('@sentry/nestjs', () => ({ captureException: vi.fn() }));
 
 vi.spyOn(Logger.prototype, 'error').mockImplementation(() => undefined);
+vi.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
 
 const BASE = 'https://errors.example.invalid';
 
@@ -164,6 +166,16 @@ describe('ProblemDetailsFilter', () => {
       expect(res.body.type).toBe(`${BASE}/service-unavailable`);
       expect(res.body.detail).toBe('An unexpected error occurred');
       expect(spy).toHaveBeenCalledOnce();
+    });
+
+    it('answers load shedding with 503 without reporting it to Sentry', () => {
+      const spy = vi.mocked(Sentry.captureException);
+      spy.mockClear();
+      const res = run(new LoadSheddingException());
+      expect(res.statusCode).toBe(503);
+      expect(res.body.type).toBe(`${BASE}/service-unavailable`);
+      expect(res.body.detail).toBe('An unexpected error occurred');
+      expect(spy).not.toHaveBeenCalled();
     });
   });
 });

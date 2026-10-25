@@ -18,6 +18,7 @@ import {
   UnauthenticatedError,
 } from '../../domain/errors.js';
 import { newId } from '../../domain/id.js';
+import { LoadSheddingException } from './load-shedding.exception.js';
 import {
   type InvalidField,
   RequestValidationError,
@@ -123,7 +124,11 @@ export class ProblemDetailsFilter implements ExceptionFilter {
       if (status < 500) {
         return { status, code, detail: exception.message };
       }
-      this.report(exception, requestId);
+      if (exception instanceof LoadSheddingException) {
+        this.logger.warn(`Request shed under load (requestId=${requestId})`);
+      } else {
+        this.report(exception, requestId);
+      }
       return { status, code, detail: 'An unexpected error occurred' };
     }
     // Errors from Express middleware (body-parser: 413, malformed JSON 400...) are http-errors.

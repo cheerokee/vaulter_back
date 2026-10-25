@@ -3,12 +3,12 @@ import { availableParallelism } from 'node:os';
 import {
   Injectable,
   Optional,
-  ServiceUnavailableException,
   type OnApplicationShutdown,
   type OnModuleInit,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Piscina } from 'piscina';
+import { LoadSheddingException } from '../../../shared/infra/http/load-shedding.exception.js';
 import { AuthProofHasher } from '../../application/ports/auth-proof-hasher.js';
 import type { Argon2Job } from './argon2.worker.js';
 
@@ -65,13 +65,13 @@ export class SodiumAuthProofHasher
     return false;
   }
 
-  /** Queue-full rejections become a 503 (the filter hides the detail); other errors pass through. */
+  /** Queue-full rejections become a 503 load-shedding error (warned, not sent to Sentry); other errors pass through. */
   private async run(job: Argon2Job): Promise<string | boolean> {
     try {
       return (await this.getPool().run(job)) as string | boolean;
     } catch (error) {
       if (error instanceof Error && error.message === QUEUE_FULL_MESSAGE) {
-        throw new ServiceUnavailableException();
+        throw new LoadSheddingException();
       }
       throw error;
     }
