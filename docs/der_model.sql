@@ -247,7 +247,7 @@ CREATE TABLE spaces (
   cloud_mode ENUM('encrypted_backup', 'active_cloud') NOT NULL DEFAULT 'encrypted_backup',
   allow_online_llm TINYINT NOT NULL DEFAULT 1 COMMENT 'v1: só o campo; todos permitidos',
   current_key_version INT NOT NULL DEFAULT 1,
-  key_rotation_required TINYINT NOT NULL DEFAULT 0 COMMENT 'troca de chave pendente após saída; estado do backend, não sincroniza o significado',
+  key_rotation_required TINYINT NOT NULL DEFAULT 0 COMMENT 'flag de coordenação do backend: troca de chave pendente após a saída de um membro',
   sync_version BIGINT NOT NULL COMMENT 'versão de sincronização: sequência global do servidor, muda a cada insert/update/exclusão',
   PRIMARY KEY (id),
   INDEX fk_spaces_organizations_idx (organization_id),
