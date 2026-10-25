@@ -52,6 +52,20 @@ export class Space extends Entity<SpaceProps> {
     this.props = { ...this.props, keyRotationRequired: true };
   }
 
+  /**
+   * Who may generate a new key version: anyone in the space while a rotation is pending (someone left), only a
+   * manager otherwise (manual rotation, e.g. a suspected leak). Bounds the version count: add, rewrap and recover
+   * need every version in one request.
+   */
+  assertRotationAllowed(byManager: boolean): void {
+    if (!this.props.keyRotationRequired && !byManager) {
+      throw new ConflictError(
+        'key-rotation-not-required',
+        'No key rotation is pending; only a space manager can rotate the key now.',
+      );
+    }
+  }
+
   /** Accepts only the immediate next version; clears the pending-rotation flag. */
   completeRotation(nextVersion: number): void {
     if (nextVersion !== this.props.currentKeyVersion + 1) {

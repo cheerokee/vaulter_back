@@ -263,6 +263,61 @@ describe('Space members and key rotation (e2e)', () => {
     expect(await membersMissingVersions(spaceId)).toEqual([]);
   });
 
+  it('without a pending rotation only a manager rotates: reader and editor get 409 key-rotation-not-required', async () => {
+    const { kit, spaceId, keys } = await setup('Manual Rotation');
+    await expectStatus(
+      s.addMember(owner.token, spaceId, recipientOf(ana), keys),
+      201,
+    );
+    await expectStatus(
+      s.addMember(owner.token, spaceId, recipientOf(bia), keys, 'space_reader'),
+      201,
+    );
+    const v2 = await generateSpaceKey();
+    const recipients = [recipientOf(owner), recipientOf(ana), recipientOf(bia)];
+    for (const u of [bia, ana]) {
+      const res = await s.rotate(u.token, spaceId, {
+        version: 2,
+        key: v2,
+        recipients,
+        kitPublicKey: kit.publicKey,
+      });
+      expect(res.status).toBe(409);
+      expect(res.body.type).toMatch(/\/key-rotation-not-required$/);
+    }
+    expect(await spaceRow(spaceId)).toEqual({
+      current_key_version: 1,
+      key_rotation_required: false,
+    });
+    // the manager may rotate manually (e.g. a suspected leak)
+    await expectStatus(
+      s.rotate(owner.token, spaceId, {
+        version: 2,
+        key: v2,
+        recipients,
+        kitPublicKey: kit.publicKey,
+      }),
+      201,
+    );
+    expect(await membersMissingVersions(spaceId)).toEqual([]);
+    // with a pending rotation (ana left), any member may rotate, a reader included
+    await c.http().post(`/spaces/${spaceId}/leave`).set(h(ana)).expect(204);
+    const v3 = await generateSpaceKey();
+    await expectStatus(
+      s.rotate(bia.token, spaceId, {
+        version: 3,
+        key: v3,
+        recipients: [recipientOf(owner), recipientOf(bia)],
+        kitPublicKey: kit.publicKey,
+      }),
+      201,
+    );
+    expect(await spaceRow(spaceId)).toEqual({
+      current_key_version: 3,
+      key_rotation_required: false,
+    });
+  });
+
   it('protects the last manager (422) on demote, remove and leave; others can leave and change roles', async () => {
     const { spaceId, keys } = await setup('Last Manager');
     await expectStatus(
@@ -319,8 +374,15 @@ describe('Space members and key rotation (e2e)', () => {
   it('a join concurrent with a rotation leaves nobody without the new version and gives none to outsiders', async () => {
     for (let round = 0; round < 3; round++) {
       const { kit, spaceId, keys } = await setup(`Race ${round}`);
+      // ana is a manager: without a pending rotation only a manager may rotate
       await expectStatus(
-        s.addMember(owner.token, spaceId, recipientOf(ana), keys),
+        s.addMember(
+          owner.token,
+          spaceId,
+          recipientOf(ana),
+          keys,
+          'space_manager',
+        ),
         201,
       );
       const v2 = await generateSpaceKey();

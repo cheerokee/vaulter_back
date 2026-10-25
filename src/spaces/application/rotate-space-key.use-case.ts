@@ -21,7 +21,9 @@ export type RotateSpaceKeyInput = {
   grants: { userId: string; wrappedKey: string }[];
 };
 
-// Nova versão da chave (decisão 6). Qualquer membro ativo (não precisa ser Gestor). Com o espaço travado:
+// Nova versão da chave (decisão 6). Com troca pendente (`keyRotationRequired`), qualquer membro ativo; sem ela,
+// só o Gestor (troca manual, ex.: suspeita de vazamento) — senão 409 `key-rotation-not-required`, o que limita
+// o número de versões (pôr membro, retrancar e reabrir mandam todas num pedido só). Com o espaço travado:
 // versão = atual + 1 e o conjunto de destinatários = exatamente os membros ativos lidos sob o lock (quem saiu
 // não recebe a versão nova; quem entrou no meio não fica de fora). Divergência: 409 `key-rotation-mismatch`,
 // para o app recarregar. A auditoria leva só a versão.
@@ -49,7 +51,12 @@ export class RotateSpaceKeyUseCase {
       ...input.grants.map((g) => g.wrappedKey),
     ]);
     return this.uow.run(async () => {
-      const { space } = await this.access.lockAsMember(spaceId, actor.userId);
+      const { space, roleKey } = await this.access.lockAsMember(
+        spaceId,
+        actor.userId,
+      );
+      // Sob o lock: sem troca pendente, só o Gestor troca (409 `key-rotation-not-required`).
+      space.assertRotationAllowed(roleKey === 'space_manager');
       const orgId = space.organizationId;
       const fingerprint = await this.kit.assertCurrent(
         orgId,

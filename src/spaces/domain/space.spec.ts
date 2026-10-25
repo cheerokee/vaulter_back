@@ -62,4 +62,14 @@ describe('Space', () => {
     expect(s.currentKeyVersion).toBe(1);
     expect(s.keyRotationRequired).toBe(true);
   });
+
+  it('rotation allowed while pending for anyone, otherwise only for a manager', () => {
+    const s = make();
+    expect(() => s.assertRotationAllowed(false)).toThrow(
+      expect.objectContaining({ code: 'key-rotation-not-required' }),
+    );
+    expect(() => s.assertRotationAllowed(true)).not.toThrow();
+    s.markRotationRequired();
+    expect(() => s.assertRotationAllowed(false)).not.toThrow();
+  });
 });

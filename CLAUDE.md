@@ -328,7 +328,9 @@ exportam); nenhum dos dois importa `spaces`.
     cópia de todas as versões** (`space_key_grants`), senão perde o histórico;
   - quem **sai** (da organização ou do espaço) ou é removido deixa `keyRotationRequired = true`; um membro faz a
     **troca** (`rotate`): versão nova, uma cópia por membro ativo (até `SPACE_MAX_MEMBERS`) e a cópia do kit, o
-    que limpa a flag. A versão da troca não tem teto;
+    que limpa a flag. A versão da troca não tem teto, mas **sem a flag só o Gestor troca** (manual, ex.: suspeita
+    de vazamento; os outros: 409 `key-rotation-not-required`) e a rota tem limite de 10/h por usuário
+    (`RATE_LIMITS.spaceKeyRotation`) — senão um Leitor inflaria as versões além de `MAX_KEY_VERSIONS`;
   - **retrancar** (`rewrap`) regrava o kit da organização para todas as versões quando o kit muda, com a impressão
     do kit informada (`RecoveryKit`; 409 `recovery-key-changed` se divergir);
   - **órfão** (nenhum membro com papel): só um admin com `org.members.manage` reabre, **pelo kit**
@@ -478,6 +480,7 @@ Os valores do `.env.example` para os segredos são **só de desenvolvimento**; p
   | `PUT /me/password` **e** `PUT /organizations/:id/recovery-key` (reautenticação) | 5 por 15 min por usuário, **um orçamento só para as duas** |
   | `POST /invitations/preview` (pública) | 30/min por IP |
   | `POST /invitations/accept` | 10/min por IP |
+  | `POST /spaces/:id/keys` (troca da chave do espaço) | 10/h por usuário (`userIdTracker`, contador próprio) |
   Rota com `@Throttle` próprio tem contador próprio (por rota). Os contadores por e-mail não vão em cabeçalho.
   **Reautenticação:** toda rota que confere a prova da senha atual (`currentAuthProof`) leva `@ThrottleReauth()`
   (`throttling.decorators.ts`): throttler nomeado `reauth` (`REAUTH_THROTTLER`, `RATE_LIMITS.reauth`), chaveado só

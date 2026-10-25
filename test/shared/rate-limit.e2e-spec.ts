@@ -189,6 +189,33 @@ describe('rate limiting (e2e)', () => {
     }
   }, 60_000);
 
+  it('limits POST /spaces/:id/keys to 10 per hour per user, on its own counter, whatever the IP', async () => {
+    const user = await c.signUp(account, 'rotate-limit@example.com');
+    const rotate = (ip: string) =>
+      c
+        .http()
+        .post('/spaces/0190f3c0-0000-7000-8000-000000000000/keys')
+        .set(c.bearer(user.token))
+        .set('X-Forwarded-For', ip)
+        .send({});
+    for (let i = 0; i < 10; i++) {
+      expect((await rotate(`198.51.100.${i + 110}`)).status).toBe(422);
+    }
+    const res = await rotate('198.51.100.130');
+    expect(res.status).toBe(429);
+    expect(res.body.type).toMatch(/\/too-many-requests$/);
+    expect(Number(res.headers['retry-after'])).toBeGreaterThan(60);
+    // another user is not affected
+    const other = await c.signUp(account, 'rotate-limit-2@example.com');
+    const ok = await c
+      .http()
+      .post('/spaces/0190f3c0-0000-7000-8000-000000000000/keys')
+      .set(c.bearer(other.token))
+      .set('X-Forwarded-For', '198.51.100.130')
+      .send({});
+    expect(ok.status).toBe(422);
+  }, 60_000);
+
   it('authenticates before throttling /me/password (unauthenticated gets 401, never 429)', async () => {
     for (let i = 0; i < 8; i++) {
       const res = await c

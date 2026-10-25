@@ -26,6 +26,8 @@ import { GetMyKeysUseCase } from './get-my-keys.use-case.js';
 import { RecoverOrphanSpaceUseCase } from './recover-orphan-space.use-case.js';
 import { RewrapRecoveryUseCase } from './rewrap-recovery.use-case.js';
 import { RotateSpaceKeyUseCase } from './rotate-space-key.use-case.js';
+import type { SpaceRoleKey } from '../domain/space-membership.js';
+import { Space } from '../domain/space.js';
 
 const kit = makeSpaceKit();
 const d = kit.deps;
@@ -87,6 +89,56 @@ describe('RotateSpaceKeyUseCase', () => {
     recoveryWrappedKey: wk(20),
     grants: allGrants,
   };
+  const members: [string, SpaceRoleKey][] = [
+    [MANAGER, 'space_manager'],
+    [EDITOR, 'space_editor'],
+    [READER, 'space_reader'],
+  ];
+  // Default for this block: a rotation is pending (someone left), so any member may rotate.
+  beforeEach(() => kit.addSpace(SPACE_ID, ORG_ID, members, { rotation: true }));
+
+  it('no rotation pending: a reader or editor gets 409 key-rotation-not-required, nothing written', async () => {
+    kit.addSpace(SPACE_ID, ORG_ID, members);
+    for (const who of [READER, EDITOR]) {
+      await expect(
+        useCase().execute(actor(who), SPACE_ID, input),
+      ).rejects.toMatchObject({
+        constructor: ConflictError,
+        code: 'key-rotation-not-required',
+      });
+    }
+    expect(m.keys.addVersion).not.toHaveBeenCalled();
+    expect(m.grants.upsert).not.toHaveBeenCalled();
+    expect(m.spaces.save).not.toHaveBeenCalled();
+    expect(m.audit.record).not.toHaveBeenCalled();
+  });
+
+  it('no rotation pending: a manager may rotate manually (e.g. suspected leak)', async () => {
+    kit.addSpace(SPACE_ID, ORG_ID, members);
+    await expect(
+      useCase().execute(actor(MANAGER), SPACE_ID, input),
+    ).resolves.toEqual({ currentVersion: 2 });
+    expect(m.keys.addVersion).toHaveBeenCalledTimes(1);
+  });
+
+  it('the pending flag is read from the LOCKED space (authoritative)', async () => {
+    kit.addSpace(SPACE_ID, ORG_ID, members);
+    // Pre-check sees a pending rotation, the locked row no longer has it (someone rotated meanwhile).
+    m.spaces.findById.mockImplementationOnce(async () =>
+      Space.restore(
+        {
+          organizationId: ORG_ID,
+          name: 'Manuais',
+          currentKeyVersion: 1,
+          keyRotationRequired: true,
+        },
+        SPACE_ID,
+      ),
+    );
+    await expect(
+      useCase().execute(actor(READER), SPACE_ID, input),
+    ).rejects.toMatchObject({ code: 'key-rotation-not-required' });
+  });
 
   it('any member rotates: new version with the org fingerprint, a copy per member, flag cleared, audited', async () => {
     kit.addSpace(

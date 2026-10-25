@@ -145,7 +145,12 @@ quando a pessoa sai da organização (abaixo).
 - O `organizations` não pode importar o `spaces` (a dependência é no sentido contrário): ele chama um gancho,
   `MemberRemovedHooks`, no padrão dos ganchos de cadastro, e o `spaces` se inscreve.
 
-**Trocar a chave (nova versão)** (qualquer membro com cópia da chave atual; o app faz em segundo plano)
+**Trocar a chave (nova versão)** (com troca pendente, qualquer membro com cópia da chave atual; o app faz em
+segundo plano)
+- **Quem pode (revisão final):** com a troca pendente (`keyRotationRequired`), qualquer membro; **sem** pendência,
+  só o **Gestor** (troca manual, ex.: suspeita de vazamento). Os outros recebem 409 `key-rotation-not-required`.
+  A rota tem limite próprio de **10 trocas por hora por usuário**. Isso limita o número de versões, que pôr
+  membro, retrancar e reabrir precisam mandar todas num pedido só.
 - **No app:** vê a pendência, gera a chave nova e manda: `version` = atual + 1, uma cópia para **cada membro
   ativo** do espaço e a cópia para o kit atual da organização.
 - **No backend:**
@@ -190,7 +195,7 @@ quando a pessoa sai da organização (abaixo).
 | `DELETE /spaces/:id/members/:userId` | tira alguém | Gestor |
 | `POST /spaces/:id/leave` | sai | membro do espaço |
 | `GET /spaces/:id/keys` | minhas cópias trancadas (todas as versões) e a versão atual | membro do espaço |
-| `POST /spaces/:id/keys` | nova versão (`version`, `grants[]`, `recoveryWrappedKey`) | membro com a chave atual |
+| `POST /spaces/:id/keys` | nova versão (`version`, `grants[]`, `recoveryPublicKey`, `recoveryWrappedKey`) | com troca pendente, qualquer membro; sem ela, só o Gestor (10/h por usuário) |
 | `PUT /spaces/:id/keys/recovery` | retranca todas as versões para o kit atual (`versions[]`) | membro do espaço |
 | `POST /spaces/:id/managers` | admin promove um membro existente a Gestor quando o espaço ficou sem Gestor | admin da org |
 | `POST /spaces/:id/recover` | admin reabre um espaço órfão pelo kit (`grants[]`, `currentAuthProof`) | admin da org |
@@ -231,7 +236,8 @@ O convite (`POST /organizations/:id/invitations`) ganha `spaces` opcional.
   - **versões:** pôr membro, retrancar para o kit e reabrir pelo kit mandam **todas as versões num pedido só**, e
     isso cresce com as versões (cada saída do espaço = uma troca = uma versão). O DTO aceita até 500 versões
     (500 × ~142 bytes ≈ 71 kB, abaixo do limite padrão de 100 kB do corpo JSON). A versão da troca nunca tem
-    teto. Quando algum espaço se aproximar: aumentar o limite do corpo JSON nessas rotas, ou aceitar as versões
+    teto, mas a troca só é aceita com pendência ou pelo Gestor, com 10 trocas por hora por usuário: um Leitor não
+    consegue inflar as versões até travar o espaço. Quando algum espaço se aproximar: aumentar o limite do corpo JSON nessas rotas, ou aceitar as versões
     em lotes por faixa de versão.
 - **Sincronizáveis:** `spaces`, `space_keys` e `space_key_grants` levam `sync_version`. Remover é lápide.
 - **Pendências:** as flags ("troca de chave pendente", "retrancar para o kit pendente") e as pendências de
@@ -239,7 +245,8 @@ O convite (`POST /organizations/:id/invitations`) ganha `spaces` opcional.
 - **DER:** as mudanças entram no `.sql` e no `.mwb`: `organization_id` em `role_assignments` usado no escopo
   espaço, `space_keys.recovery_key_fingerprint`, a flag de troca de chave pendente e a tabela de pendências de
   trancar.
-- **Rate limit:** `POST /spaces/:id/recover` usa o mesmo limite de reautenticação por usuário de
+- **Rate limit:** `POST /spaces/:id/keys` tem contador próprio por usuário (10 por hora, `RATE_LIMITS.spaceKeyRotation`).
+  `POST /spaces/:id/recover` usa o mesmo limite de reautenticação por usuário de
   `PUT /me/password` e da troca do kit (`@ThrottleReauth`).
 
 ## 9. Fica a cargo de quem construir

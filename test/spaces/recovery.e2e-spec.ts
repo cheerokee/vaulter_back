@@ -124,7 +124,8 @@ describe('Space recovery kit, orphan spaces and managers (e2e)', () => {
     expect(old.status).toBe(409);
     expect(old.body.type).toMatch(/\/recovery-key-changed$/);
     const v3 = await generateSpaceKey();
-    const oldRotation = await s.rotate(ana.token, spaceId, {
+    // (no rotation pending: the manager rotates)
+    const oldRotation = await s.rotate(owner.token, spaceId, {
       version: 3,
       key: v3,
       recipients: [recipientOf(owner), recipientOf(ana)],
@@ -135,7 +136,7 @@ describe('Space recovery kit, orphan spaces and managers (e2e)', () => {
 
     // a rotation with the new kit only covers v3: v1 and v2 stay pending
     await expectStatus(
-      s.rotate(ana.token, spaceId, {
+      s.rotate(owner.token, spaceId, {
         version: 3,
         key: v3,
         recipients: [recipientOf(owner), recipientOf(ana)],

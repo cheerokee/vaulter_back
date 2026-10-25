@@ -17,6 +17,11 @@ export const RATE_LIMITS = {
    * `POST /spaces/:id/recover`).
    */
   reauth: { limit: 5, ttl: 15 * MINUTE },
+  /**
+   * Troca da chave de um espaço (`POST /spaces/:id/keys`): por usuário, contador próprio. Cada troca é uma versão
+   * nova, e pôr membro/retrancar/reabrir mandam todas as versões num pedido só.
+   */
+  spaceKeyRotation: { limit: 10, ttl: HOUR },
   /** Prévia pública e aceite de convite: por IP. */
   invitationPreview: { limit: 30, ttl: MINUTE },
   invitationAccept: { limit: 10, ttl: MINUTE },

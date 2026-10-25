@@ -8,11 +8,14 @@ import {
   Put,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
+import { Throttle } from '@nestjs/throttler';
 import {
   type AuthContext,
   CurrentAuth,
 } from '../../../shared/infra/http/auth.decorators.js';
+import { RATE_LIMITS } from '../../../shared/infra/http/rate-limits.js';
 import { ThrottleReauth } from '../../../shared/infra/http/throttling.decorators.js';
+import { userIdTracker } from '../../../shared/infra/http/user-id.tracker.js';
 import { uuidPipe } from '../../../shared/infra/http/uuid-pipe.js';
 import { GetMyKeysUseCase } from '../../application/get-my-keys.use-case.js';
 import { RecoverOrphanSpaceUseCase } from '../../application/recover-orphan-space.use-case.js';
@@ -45,6 +48,10 @@ export class SpaceKeysController {
     return myKeysResponse(await this.myKeys.execute(auth, id));
   }
 
+  /** Per-user limit on its own counter (each rotation adds a version for good). */
+  @Throttle({
+    default: { ...RATE_LIMITS.spaceKeyRotation, getTracker: userIdTracker },
+  })
   @ApiBearerAuth()
   @Post('keys')
   async doRotate(
