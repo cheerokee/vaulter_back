@@ -285,5 +285,13 @@ describe('Invitation rate limits (e2e)', () => {
         .send({ token: WELL_FORMED_UNKNOWN });
     for (let i = 0; i < 10; i++) expect((await hit()).status).toBe(422);
     expect((await hit()).status).toBe(429);
+    // the tracker is the IP: the same user from another IP is not throttled
+    const other = await c
+      .http()
+      .post('/invitations/accept')
+      .set('X-Forwarded-For', '198.51.100.10')
+      .set(c.bearer(user.token))
+      .send({ token: WELL_FORMED_UNKNOWN });
+    expect(other.status).toBe(422);
   }, 60_000);
 });

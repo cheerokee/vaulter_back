@@ -30,7 +30,6 @@ import { invitationResponse, pageResponse } from './dto/responses.js';
 import { uuidPipe } from './uuid-pipes.js';
 
 @ApiTags('organizations')
-@ApiBearerAuth()
 @Controller()
 export class InvitationsController {
   constructor(
@@ -41,6 +40,7 @@ export class InvitationsController {
     private readonly accept: AcceptInvitationUseCase,
   ) {}
 
+  @ApiBearerAuth()
   @Post('organizations/:id/invitations')
   async doCreate(
     @CurrentAuth() auth: AuthContext,
@@ -54,6 +54,7 @@ export class InvitationsController {
     return { invitation: invitationResponse(invitation), token };
   }
 
+  @ApiBearerAuth()
   @Get('organizations/:id/invitations')
   async doList(
     @CurrentAuth() auth: AuthContext,
@@ -67,6 +68,7 @@ export class InvitationsController {
     return pageResponse(page, invitationResponse);
   }
 
+  @ApiBearerAuth()
   @Delete('organizations/:id/invitations/:invitationId')
   @HttpCode(204)
   async doRevoke(
@@ -91,6 +93,7 @@ export class InvitationsController {
   }
 
   @Throttle({ default: RATE_LIMITS.invitationAccept })
+  @ApiBearerAuth()
   @Post('invitations/accept')
   @HttpCode(200)
   async doAccept(
