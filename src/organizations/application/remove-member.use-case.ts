@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import type { Actor } from '../../identity/application/dto/actor.js';
+import { MemberRemovedHooks } from '../../shared/application/member-removed-hooks.js';
 import { UnitOfWork } from '../../shared/infra/db/unit-of-work.js';
 import { InvitationRepository } from '../domain/invitation.repository.js';
 import { MembershipRules } from '../domain/membership.js';
@@ -21,6 +22,7 @@ export class RemoveMemberUseCase {
     private readonly audit: AuditLog,
     private readonly uow: UnitOfWork,
     private readonly invitations: InvitationRepository,
+    private readonly memberRemovedHooks: MemberRemovedHooks,
   ) {}
 
   execute(actor: Actor, orgId: string, userId: string): Promise<void> {
@@ -39,6 +41,15 @@ export class RemoveMemberUseCase {
       MembershipRules.assertCanRemove(target, ctx);
       // Lápide no vínculo e na atribuição de papel da organização.
       await this.memberships.remove(orgId, userId);
+      const now = new Date();
+      // Módulos dependentes (ex.: espaços) reagem à saída, na mesma transação: se um falhar, nada é removido.
+      await this.memberRemovedHooks.run({
+        organizationId: orgId,
+        userId,
+        actorId: actor.userId,
+        reason: 'removed',
+        now,
+      });
       await this.audit.record({
         organizationId: orgId,
         userId: actor.userId,
@@ -50,7 +61,7 @@ export class RemoveMemberUseCase {
         orgId,
         userId,
         actor.userId,
-        new Date(),
+        now,
       );
     });
   }

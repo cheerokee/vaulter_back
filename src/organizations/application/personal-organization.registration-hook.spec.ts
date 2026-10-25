@@ -101,6 +101,7 @@ describe('PersonalOrganizationRegistrationHook', () => {
       kit.deps.audit,
       kit.deps.uow,
       kit.deps.access,
+      kit.deps.invitationHooks,
     );
     const hook = new PersonalOrganizationRegistrationHook(
       hooks as unknown as RegistrationHooks,
@@ -126,6 +127,7 @@ describe('PersonalOrganizationRegistrationHook', () => {
       kit.deps.audit,
       kit.deps.uow,
       kit.deps.access,
+      kit.deps.invitationHooks,
     );
     const hook = new PersonalOrganizationRegistrationHook(
       hooks as unknown as RegistrationHooks,

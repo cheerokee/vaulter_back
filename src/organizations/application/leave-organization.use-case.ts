@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import type { Actor } from '../../identity/application/dto/actor.js';
+import { MemberRemovedHooks } from '../../shared/application/member-removed-hooks.js';
 import { UnitOfWork } from '../../shared/infra/db/unit-of-work.js';
 import { InvitationRepository } from '../domain/invitation.repository.js';
 import { MembershipRules } from '../domain/membership.js';
@@ -21,6 +22,7 @@ export class LeaveOrganizationUseCase {
     private readonly audit: AuditLog,
     private readonly uow: UnitOfWork,
     private readonly invitations: InvitationRepository,
+    private readonly memberRemovedHooks: MemberRemovedHooks,
   ) {}
 
   execute(actor: Actor, orgId: string): Promise<void> {
@@ -38,6 +40,15 @@ export class LeaveOrganizationUseCase {
       );
       MembershipRules.assertCanLeave(ctx);
       await this.memberships.remove(orgId, actor.userId);
+      const now = new Date();
+      // Módulos dependentes (ex.: espaços) reagem à saída, na mesma transação: se um falhar, a pessoa não sai.
+      await this.memberRemovedHooks.run({
+        organizationId: orgId,
+        userId: actor.userId,
+        actorId: actor.userId,
+        reason: 'left',
+        now,
+      });
       await this.audit.record({
         organizationId: orgId,
         userId: actor.userId,
@@ -48,7 +59,7 @@ export class LeaveOrganizationUseCase {
         orgId,
         actor.userId,
         actor.userId,
-        new Date(),
+        now,
       );
     });
   }

@@ -17,6 +17,8 @@ import {
 import type { OrganizationRepository } from '../../src/organizations/domain/organization.repository.js';
 import { FACTORY_ROLES } from '../../src/organizations/domain/rbac-catalog.js';
 import type { RoleAssignmentRepository } from '../../src/organizations/domain/role-assignment.repository.js';
+import type { InvitationHooks } from '../../src/shared/application/invitation-hooks.js';
+import type { MemberRemovedHooks } from '../../src/shared/application/member-removed-hooks.js';
 import type { UnitOfWork } from '../../src/shared/infra/db/unit-of-work.js';
 
 export const NOW = new Date('2026-10-25T12:00:00Z');
@@ -120,6 +122,8 @@ export function makeKit() {
   const directory = { findPublicByIds: vi.fn() };
   const verifier = { verify: vi.fn() };
   const codec = { generate: vi.fn(), hash: vi.fn() };
+  const memberRemovedHooks = { run: vi.fn() };
+  const invitationHooks = { validateAndRecord: vi.fn(), onAccepted: vi.fn() };
   const uow = {
     run: vi.fn(async (work: () => Promise<unknown>) => {
       depth++;
@@ -186,6 +190,15 @@ export function makeKit() {
       tag('invitations.revokePendingCreatedBy');
       return [];
     });
+    memberRemovedHooks.run.mockImplementation(async () =>
+      tag('memberRemovedHooks.run'),
+    );
+    invitationHooks.validateAndRecord.mockImplementation(async () =>
+      tag('invitationHooks.validateAndRecord'),
+    );
+    invitationHooks.onAccepted.mockImplementation(async () =>
+      tag('invitationHooks.onAccepted'),
+    );
     auditRepo.append.mockImplementation(async () => tag('audit.append'));
     directory.findPublicByIds.mockImplementation(async (ids: string[]) =>
       ids.map((id) => ({
@@ -225,6 +238,8 @@ export function makeKit() {
       verifier,
       codec,
       uow,
+      memberRemovedHooks,
+      invitationHooks,
     },
     deps: {
       orgs: orgs as unknown as OrganizationRepository,
@@ -235,6 +250,8 @@ export function makeKit() {
       verifier: verifier as unknown as CurrentAuthProofVerifier,
       codec: codec as unknown as InvitationTokenCodec,
       uow: uow as unknown as UnitOfWork,
+      memberRemovedHooks: memberRemovedHooks as unknown as MemberRemovedHooks,
+      invitationHooks: invitationHooks as unknown as InvitationHooks,
       access,
       audit,
     },

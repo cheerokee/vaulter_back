@@ -1,5 +1,10 @@
 import { Injectable } from '@nestjs/common';
 import type { Actor } from '../../identity/application/dto/actor.js';
+import {
+  InvitationHooks,
+  type InvitationSpaceIntent,
+} from '../../shared/application/invitation-hooks.js';
+import { DomainValidationError } from '../../shared/domain/errors.js';
 import { UnitOfWork } from '../../shared/infra/db/unit-of-work.js';
 import { Invitation } from '../domain/invitation.js';
 import { InvitationRepository } from '../domain/invitation.repository.js';
@@ -19,6 +24,8 @@ import { InvitationTokenCodec } from './ports/invitation-token-codec.js';
 export type CreateInvitationInput = {
   roleKey: OrgRoleKey;
   email?: string | null;
+  /** Spaces the invitee should get access to once they accept; handled by the `spaces` module via hooks. */
+  spaces?: InvitationSpaceIntent[];
 };
 
 // O `token` sai daqui UMA vez (o app monta o link). Ele nunca é logado nem auditado; o banco guarda só o hash.
@@ -32,6 +39,7 @@ export class CreateInvitationUseCase {
     private readonly codec: InvitationTokenCodec,
     private readonly audit: AuditLog,
     private readonly uow: UnitOfWork,
+    private readonly hooks: InvitationHooks,
   ) {}
 
   execute(
@@ -39,7 +47,14 @@ export class CreateInvitationUseCase {
     orgId: string,
     input: CreateInvitationInput,
   ): Promise<{ invitation: InvitationView; token: string }> {
+    const spaces = input.spaces ?? [];
     return this.uow.run(async () => {
+      if (new Set(spaces.map((s) => s.spaceId)).size !== spaces.length) {
+        throw new DomainValidationError(
+          'duplicate-space',
+          'A space can appear only once in an invitation.',
+        );
+      }
       await this.access.requirePermission(
         orgId,
         actor.userId,
@@ -61,6 +76,15 @@ export class CreateInvitationUseCase {
         now,
       });
       await this.invitations.create(invitation);
+      // Só com espaços; o `spaces` valida e grava as intenções (ou lança, e o convite não existe).
+      if (spaces.length > 0) {
+        await this.hooks.validateAndRecord({
+          organizationId: orgId,
+          invitationId: invitation.id,
+          actorId: actor.userId,
+          spaces,
+        });
+      }
       await this.audit.record({
         organizationId: orgId,
         userId: actor.userId,

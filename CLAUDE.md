@@ -243,6 +243,17 @@ src/organizations/
   `organizations.personal` cria a organização pessoal (dono = admin) e, com `inviteToken`, tenta aceitar o convite
   (`invitation.accepted` na resposta do cadastro; convite inválido não derruba o cadastro, só erro de domínio em
   savepoint).
+- **Ganchos de saída e de convite** (`MemberRemovedHooks`, `InvitationHooks`, em `src/shared/application/`, globais
+  como o de cadastro; mesma regra de assinatura): o `spaces` reage sem o `organizations` importá-lo.
+  `MemberRemovedHooks.run({ organizationId, userId, actorId, reason: 'removed' | 'left', now })` roda no unit of
+  work de `RemoveMemberUseCase`/`LeaveOrganizationUseCase`, depois da lápide do vínculo; erro desfaz a saída.
+  `InvitationHooks.validateAndRecord({ organizationId, invitationId, actorId, spaces })` roda na criação do convite
+  (só com `spaces` preenchido; sem nenhum inscrito -> 422 `spaces-not-supported`, a intenção nunca some) e
+  `onAccepted({ organizationId, invitationId, userId, now })` no aceite, depois do vínculo (também quando a pessoa
+  já era membro e o convite só foi consumido; vale para a rota logada e para o gancho de cadastro). O DTO aceita
+  `spaces` (até 20, sem `spaceId` repetido -> 422 `duplicate-space`).
+- **`OrganizationDirectory`** (exportado, junto com `OrganizationAccess` e `AuditLog`): `isActiveMember(orgId, userId)`
+  e `recoveryPublicKey(orgId)` (`null` se não houver), sem lançar para org/usuário inexistente.
 - **`OrganizationAccess` é o padrão para os próximos módulos (spaces, hubs):** `requireMember(orgId, userId)` ->
   **404** para não membro (não revela que a organização existe); `requirePermission(orgId, userId, permissao)` ->
   **403** para membro sem a permissão. Todo caso de uso que toca dado de organização chama um dos dois primeiro;

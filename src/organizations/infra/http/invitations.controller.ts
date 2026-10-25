@@ -50,6 +50,7 @@ export class InvitationsController {
     const { invitation, token } = await this.create.execute(auth, id, {
       roleKey: dto.roleKey,
       email: dto.email,
+      spaces: dto.spaces,
     });
     return { invitation: invitationResponse(invitation), token };
   }

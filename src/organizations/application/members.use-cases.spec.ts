@@ -261,7 +261,31 @@ describe('RemoveMemberUseCase', () => {
       d.audit,
       d.uow,
       d.invitations,
+      d.memberRemovedHooks,
     );
+
+  it('runs the member-removed hooks inside the unit of work, after the tombstone, with reason removed', async () => {
+    await useCase().execute(actor(ADMIN), ORG_ID, MEMBER);
+    expect(m.memberRemovedHooks.run).toHaveBeenCalledWith({
+      organizationId: ORG_ID,
+      userId: MEMBER,
+      actorId: ADMIN,
+      reason: 'removed',
+      now: NOW,
+    });
+    const t = kit.trace;
+    expect(t.indexOf('memberRemovedHooks.run')).toBeGreaterThan(
+      t.indexOf('memberships.remove'),
+    );
+    expect(t.every((x) => !x.endsWith('@out'))).toBe(true);
+  });
+
+  it('a hook that throws propagates (the unit of work rolls back)', async () => {
+    m.memberRemovedHooks.run.mockRejectedValue(new Error('boom'));
+    await expect(
+      useCase().execute(actor(ADMIN), ORG_ID, MEMBER),
+    ).rejects.toThrow('boom');
+  });
 
   it('removes a member (tombstone) and audits member.removed', async () => {
     await useCase().execute(actor(ADMIN), ORG_ID, MEMBER);
@@ -345,6 +369,7 @@ describe('LeaveOrganizationUseCase', () => {
       d.audit,
       d.uow,
       d.invitations,
+      d.memberRemovedHooks,
     );
 
   it('a member leaves and member.left is audited', async () => {
@@ -354,6 +379,29 @@ describe('LeaveOrganizationUseCase', () => {
     expect(kit.audited()).toEqual([
       { organizationId: ORG_ID, userId: MEMBER, action: 'member.left' },
     ]);
+  });
+
+  it('runs the member-removed hooks inside the unit of work, after the tombstone, with reason left', async () => {
+    await useCase().execute(actor(MEMBER), ORG_ID);
+    expect(m.memberRemovedHooks.run).toHaveBeenCalledWith({
+      organizationId: ORG_ID,
+      userId: MEMBER,
+      actorId: MEMBER,
+      reason: 'left',
+      now: NOW,
+    });
+    const t = kit.trace;
+    expect(t.indexOf('memberRemovedHooks.run')).toBeGreaterThan(
+      t.indexOf('memberships.remove'),
+    );
+    expect(t.every((x) => !x.endsWith('@out'))).toBe(true);
+  });
+
+  it('a hook that throws propagates (the unit of work rolls back)', async () => {
+    m.memberRemovedHooks.run.mockRejectedValue(new Error('boom'));
+    await expect(useCase().execute(actor(MEMBER), ORG_ID)).rejects.toThrow(
+      'boom',
+    );
   });
 
   it('leaving revokes the pending invitations the member created', async () => {

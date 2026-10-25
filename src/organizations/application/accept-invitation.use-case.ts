@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import type { Actor } from '../../identity/application/dto/actor.js';
 import { UserDirectory } from '../../identity/application/user-directory.js';
+import { InvitationHooks } from '../../shared/application/invitation-hooks.js';
 import { UnitOfWork } from '../../shared/infra/db/unit-of-work.js';
 import { InvitationRepository } from '../domain/invitation.repository.js';
 import type { OrgRoleKey } from '../domain/membership.js';
@@ -43,6 +44,7 @@ export class AcceptInvitationUseCase {
     private readonly audit: AuditLog,
     private readonly uow: UnitOfWork,
     private readonly access: OrganizationAccess,
+    private readonly hooks: InvitationHooks,
   ) {}
 
   async execute(actor: Actor, token: string): Promise<AcceptInvitationResult> {
@@ -85,6 +87,8 @@ export class AcceptInvitationUseCase {
       const existing = await this.memberships.find(orgId, user.userId);
       if (existing) {
         await this.consume(orgId, invitation.id, user.userId, now);
+        // Já era membro: o convite foi consumido, mas o `spaces` ainda decide o que fazer com as intenções dele.
+        await this.notifyAccepted(orgId, invitation.id, user.userId, now);
         return {
           organizationId: orgId,
           roleKey: existing.roleKey,
@@ -111,11 +115,27 @@ export class AcceptInvitationUseCase {
         action: 'member.joined',
         metadata: { invitationId: invitation.id, roleKey: invitation.roleKey },
       });
+      await this.notifyAccepted(orgId, invitation.id, user.userId, now);
       return {
         organizationId: orgId,
         roleKey: invitation.roleKey,
         alreadyMember: false,
       };
+    });
+  }
+
+  // Dentro da transação do aceite (rota logada e gancho de cadastro passam por aqui): erro desfaz o aceite.
+  private notifyAccepted(
+    organizationId: string,
+    invitationId: string,
+    userId: string,
+    now: Date,
+  ): Promise<void> {
+    return this.hooks.onAccepted({
+      organizationId,
+      invitationId,
+      userId,
+      now,
     });
   }
 

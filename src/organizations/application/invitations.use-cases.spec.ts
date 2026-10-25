@@ -49,6 +49,7 @@ describe('CreateInvitationUseCase', () => {
       d.codec,
       d.audit,
       d.uow,
+      d.invitationHooks,
     );
 
   it('issues the invitation with only the hash stored, returns the token once and audits without it', async () => {
@@ -95,6 +96,70 @@ describe('CreateInvitationUseCase', () => {
       expect(JSON.stringify(spy.mock.calls)).not.toContain(TOKEN);
     }
     expect(kit.trace.every((t) => !t.endsWith('@out'))).toBe(true);
+  });
+
+  describe('spaces', () => {
+    const SPACE_A = '019a1b2c-0000-7000-8000-0000000000f1';
+    const SPACE_B = '019a1b2c-0000-7000-8000-0000000000f2';
+
+    it('does not call the hooks without spaces (absent or empty)', async () => {
+      await useCase().execute(actor(ADMIN), ORG_ID, { roleKey: 'org_member' });
+      await useCase().execute(actor(ADMIN), ORG_ID, {
+        roleKey: 'org_member',
+        spaces: [],
+      });
+      expect(m.invitationHooks.validateAndRecord).not.toHaveBeenCalled();
+    });
+
+    it('passes the spaces to validateAndRecord inside the unit of work, after the invitation row', async () => {
+      const spaces = [
+        { spaceId: SPACE_A, roleKey: 'space_reader' as const },
+        { spaceId: SPACE_B, roleKey: 'space_manager' as const },
+      ];
+      const out = await useCase().execute(actor(ADMIN), ORG_ID, {
+        roleKey: 'org_member',
+        spaces,
+      });
+      expect(m.invitationHooks.validateAndRecord).toHaveBeenCalledWith({
+        organizationId: ORG_ID,
+        invitationId: out.invitation.id,
+        actorId: ADMIN,
+        spaces,
+      });
+      const t = kit.trace;
+      expect(t.indexOf('invitationHooks.validateAndRecord')).toBeGreaterThan(
+        t.indexOf('invitations.create'),
+      );
+      expect(t.every((x) => !x.endsWith('@out'))).toBe(true);
+    });
+
+    it('a hook that throws propagates', async () => {
+      m.invitationHooks.validateAndRecord.mockRejectedValue(
+        new PermissionDeniedError('permission-denied', 'no'),
+      );
+      await expect(
+        useCase().execute(actor(ADMIN), ORG_ID, {
+          roleKey: 'org_member',
+          spaces: [{ spaceId: SPACE_A, roleKey: 'space_reader' }],
+        }),
+      ).rejects.toMatchObject({ code: 'permission-denied' });
+    });
+
+    it('duplicate spaceId -> 422 duplicate-space, nothing written', async () => {
+      await expect(
+        useCase().execute(actor(ADMIN), ORG_ID, {
+          roleKey: 'org_member',
+          spaces: [
+            { spaceId: SPACE_A, roleKey: 'space_reader' },
+            { spaceId: SPACE_A, roleKey: 'space_editor' },
+          ],
+        }),
+      ).rejects.toMatchObject({
+        constructor: DomainValidationError,
+        code: 'duplicate-space',
+      });
+      expect(m.invitations.create).not.toHaveBeenCalled();
+    });
   });
 
   it('checks the seat limit with the active member count', async () => {
@@ -270,6 +335,7 @@ describe('AcceptInvitationUseCase', () => {
       d.audit,
       d.uow,
       d.access,
+      d.invitationHooks,
     );
   const invited = (overrides = {}) =>
     m.invitations.findByTokenHash.mockResolvedValue(makeInvitation(overrides));
@@ -316,6 +382,40 @@ describe('AcceptInvitationUseCase', () => {
       'audit.append',
     ]);
     expect(kit.trace.every((t) => !t.endsWith('@out'))).toBe(true);
+  });
+
+  it('calls onAccepted inside the unit of work after the membership, with the right context', async () => {
+    invited({ email: 'c1@x.com' });
+    await useCase().execute(actor(STRANGER), TOKEN);
+    expect(m.invitationHooks.onAccepted).toHaveBeenCalledWith({
+      organizationId: ORG_ID,
+      invitationId: INV_ID,
+      userId: STRANGER,
+      now: NOW,
+    });
+    const t = kit.trace;
+    expect(t.indexOf('invitationHooks.onAccepted')).toBeGreaterThan(
+      t.indexOf('roles.assignOrgRole'),
+    );
+    expect(t.every((x) => !x.endsWith('@out'))).toBe(true);
+  });
+
+  it('calls onAccepted also when the user was already a member (invitation just consumed)', async () => {
+    invited({});
+    await useCase().execute(actor(MEMBER), TOKEN);
+    expect(m.memberships.add).not.toHaveBeenCalled();
+    expect(m.invitationHooks.onAccepted).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not call onAccepted when the invitation is invalid; a throwing hook propagates', async () => {
+    invited({ email: 'someone@else.com' });
+    await expect(useCase().execute(actor(STRANGER), TOKEN)).rejects.toThrow();
+    expect(m.invitationHooks.onAccepted).not.toHaveBeenCalled();
+    invited({ email: 'c1@x.com' });
+    m.invitationHooks.onAccepted.mockRejectedValue(new Error('boom'));
+    await expect(useCase().execute(actor(STRANGER), TOKEN)).rejects.toThrow(
+      'boom',
+    );
   });
 
   it('e-mail invitation for another account -> invitation-invalid, nothing written', async () => {

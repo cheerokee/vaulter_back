@@ -11,6 +11,7 @@ import { LeaveOrganizationUseCase } from './application/leave-organization.use-c
 import { ListInvitationsUseCase } from './application/list-invitations.use-case.js';
 import { ListMembersUseCase } from './application/list-members.use-case.js';
 import { ListMyOrganizationsUseCase } from './application/list-my-organizations.use-case.js';
+import { OrganizationDirectory } from './application/organization-directory.js';
 import { OrganizationAccess } from './application/organization-access.js';
 import { PersonalOrganizationRegistrationHook } from './application/personal-organization.registration-hook.js';
 import { InvitationTokenCodec } from './application/ports/invitation-token-codec.js';
@@ -78,6 +79,7 @@ import { UserOrganizationTypeormEntity } from './infra/db/user-organization.enti
     { provide: AuditLogRepository, useClass: AuditLogTypeormRepository },
     { provide: InvitationTokenCodec, useClass: SodiumInvitationTokenCodec },
     OrganizationAccess,
+    OrganizationDirectory,
     AuditLog,
     CreateOrganizationUseCase,
     ListMyOrganizationsUseCase,
@@ -95,6 +97,11 @@ import { UserOrganizationTypeormEntity } from './infra/db/user-organization.enti
     AcceptInvitationUseCase,
     PersonalOrganizationRegistrationHook,
   ],
-  exports: [OrganizationAccess, AuditLog, AcceptInvitationUseCase],
+  exports: [
+    OrganizationAccess,
+    OrganizationDirectory,
+    AuditLog,
+    AcceptInvitationUseCase,
+  ],
 })
 export class OrganizationsModule {}
