@@ -1,7 +1,9 @@
-import { Module } from '@nestjs/common';
+import { Global, Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
+import { UnitOfWork } from '../shared/infra/db/unit-of-work.js';
 import { typeOrmOptions } from './typeorm.options.js';
 
+@Global()
 @Module({
   imports: [
     TypeOrmModule.forRootAsync({
@@ -12,5 +14,7 @@ import { typeOrmOptions } from './typeorm.options.js';
       }),
     }),
   ],
+  providers: [UnitOfWork],
+  exports: [UnitOfWork],
 })
 export class DatabaseModule {}

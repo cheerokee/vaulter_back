@@ -1,7 +1,7 @@
 import { Injectable } from '@nestjs/common';
-import { InjectRepository } from '@nestjs/typeorm';
-import { QueryFailedError, Repository } from 'typeorm';
+import { DataSource, QueryFailedError, type Repository } from 'typeorm';
 import { ConflictError } from '../../../shared/domain/errors.js';
+import { currentManager } from '../../../shared/infra/db/unit-of-work.js';
 import type { User } from '../../domain/user.js';
 import { UserRepository } from '../../domain/user.repository.js';
 import { UserTypeormEntity } from './user.entity.js';
@@ -11,11 +11,13 @@ const UNIQUE_VIOLATION = '23505';
 
 @Injectable()
 export class UserTypeormRepository extends UserRepository {
-  constructor(
-    @InjectRepository(UserTypeormEntity)
-    private readonly repo: Repository<UserTypeormEntity>,
-  ) {
+  constructor(private readonly dataSource: DataSource) {
     super();
+  }
+
+  // Resolvido a cada operação: dentro de um UnitOfWork.run, usa a transação ativa.
+  private get repo(): Repository<UserTypeormEntity> {
+    return currentManager(this.dataSource).getRepository(UserTypeormEntity);
   }
 
   async findById(id: string): Promise<User | null> {

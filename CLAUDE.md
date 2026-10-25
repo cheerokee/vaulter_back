@@ -207,7 +207,10 @@ test/support/        helpers e fixtures de teste compartilhados (cliente de crip
    como **classe abstrata** (serve de token de DI).
 2. `application/`: um caso de uso `@Injectable()` por arquivo, dependendo só dos contratos; DTOs de saída.
 3. `infra/db/`: entidade TypeORM (`*.entity.ts`, estendendo as bases de `shared/infra/db`, com **todas** as
-   constraints nos metadados), mapper domínio ↔ entidade e repositório que implementa o contrato.
+   constraints nos metadados), mapper domínio ↔ entidade e repositório que implementa o contrato. O repositório
+   injeta o `DataSource` (não `@InjectRepository`) e resolve o `Repository` **a cada operação** com
+   `currentManager(this.dataSource).getRepository(Entidade)` (ex.: um getter `private get repo()`), para entrar na
+   transação do `UnitOfWork` quando houver uma — veja "Unit of work" em Banco de dados.
 4. Migration em `src/database/migrations/` (`addSyncVersionTrigger` / `enableOrganizationRls` quando couber;
    dado de cliente tem `organization_id` e RLS); `migration:generate` depois dela deve sair vazio.
 5. `infra/http/`: controllers e DTOs de borda. Rotas exigem token por padrão (guard global); abra uma rota com
@@ -240,6 +243,14 @@ test/support/        helpers e fixtures de teste compartilhados (cliente de crip
   `runInOrganizationScope(dataSource, orgId, work)` ou, nos repositórios de dado de cliente, estendendo
   `OrganizationScopedRepository` (todo método recebe `organizationId` e filtra por ele; o RLS é a segunda trava).
   **Testes de RLS precisam passar pelo login de runtime** — o dono é superusuário e ignora RLS.
+- **Unit of work** (`src/shared/infra/db/unit-of-work.ts`, provider global do `DatabaseModule`): caso de uso que
+  grava em mais de um repositório (inclusive de outro módulo) envolve o trabalho em `await uow.run(async () => ...)`
+  — uma transação só, desfeita inteira se algo lançar erro. O `EntityManager` da transação viaja num
+  `AsyncLocalStorage`; os repositórios o pegam com `currentManager(dataSource)` (fora de `run`, é o
+  `dataSource.manager`, em autocommit como antes). `run` aninhado reaproveita a transação ativa (sem savepoint).
+  `uow.setContext({ organizationId?, userId? })` grava `app.organization_id` / `app.user_id` (`set_config(..., true)`,
+  vale até o fim da transação) para o RLS; fora de `run` lança erro. `runInOrganizationScope` usa o mesmo
+  mecanismo: dentro de um `run`, entra na transação dele.
 - **Banco de teste:** os e2e rodam em `DB_TEST_DATABASE` (padrão `${DB_DATABASE}_test`), criado e migrado pelo
   `globalSetup`; o banco de desenvolvimento nunca é truncado.
 - **Enums do DER** viram `varchar` + `CHECK` (alterar enum nativo depois é caro). **Índices únicos parciais**

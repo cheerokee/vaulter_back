@@ -1,12 +1,12 @@
 import { Injectable } from '@nestjs/common';
-import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { DataSource, type Repository } from 'typeorm';
 import {
   decodeCursor,
   encodeCursor,
   type CursorPage,
   type CursorPageRequest,
 } from '../../../shared/domain/pagination.js';
+import { currentManager } from '../../../shared/infra/db/unit-of-work.js';
 import type { Session, SessionRevokedReason } from '../../domain/session.js';
 import { SessionRepository } from '../../domain/session.repository.js';
 import { UserSessionTypeormEntity } from './user-session.entity.js';
@@ -14,11 +14,15 @@ import { UserSessionMapper } from './user-session.mapper.js';
 
 @Injectable()
 export class UserSessionTypeormRepository extends SessionRepository {
-  constructor(
-    @InjectRepository(UserSessionTypeormEntity)
-    private readonly repo: Repository<UserSessionTypeormEntity>,
-  ) {
+  constructor(private readonly dataSource: DataSource) {
     super();
+  }
+
+  // Resolvido a cada operação: dentro de um UnitOfWork.run, usa a transação ativa.
+  private get repo(): Repository<UserSessionTypeormEntity> {
+    return currentManager(this.dataSource).getRepository(
+      UserSessionTypeormEntity,
+    );
   }
 
   async create(session: Session): Promise<void> {
