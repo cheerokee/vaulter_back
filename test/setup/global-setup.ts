@@ -1,4 +1,5 @@
-import { DataSource } from 'typeorm';
+/// <reference types="vite/client" />
+import { DataSource, type DataSourceOptions } from 'typeorm';
 import { typeOrmOptions } from '../../src/database/typeorm.options.js';
 
 // Roda uma vez antes dos e2e: cria o banco de teste (se faltar), garante extensão e login de runtime
@@ -25,10 +26,10 @@ export default async function globalSetup(): Promise<void> {
     );
   }
 
-  const admin = new DataSource({
-    ...typeOrmOptions('migration'),
-    database: 'postgres',
-  });
+  const baseOptions = typeOrmOptions('migration') as DataSourceOptions & {
+    type: 'postgres';
+  };
+  const admin = new DataSource({ ...baseOptions, database: 'postgres' });
   await admin.initialize();
   try {
     const exists = await admin.query(
@@ -63,7 +64,7 @@ export default async function globalSetup(): Promise<void> {
   }
 
   const migrator = new DataSource({
-    ...typeOrmOptions('migration'),
+    ...baseOptions,
     migrations: Object.values(migrationModules).flatMap((mod) =>
       Object.values(mod),
     ),

@@ -33,6 +33,10 @@ export type ApprovalStatus =
   'ck_role_assignments_space_scope',
   `"scope_type" <> 'space' OR ("space_id" IS NOT NULL AND "organization_id" IS NOT NULL)`,
 )
+@Check(
+  'ck_role_assignments_space_id_scope',
+  `"scope_type" = 'space' OR "space_id" IS NULL`,
+)
 @Index('ix_role_assignments_sync_version', ['syncVersion'])
 @Index('fk_role_assignments_roles_idx', ['roleId'])
 @Index('ix_role_assignments_user_scope', ['userId', 'scopeType'])

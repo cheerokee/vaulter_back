@@ -55,8 +55,12 @@ describe('RBAC catalog (migration data)', () => {
     for (const k of Object.keys(FACTORY_ROLES)) actual[k] = [];
     for (const l of links) actual[l.role_key].push(l.permission_key);
     for (const k of Object.keys(actual)) {
-      expect(actual[k].sort((a, b) => a.localeCompare(b))).toEqual(
-        [...FACTORY_ROLES[k as never]].sort((a, b) => a.localeCompare(b)),
+      expect(
+        actual[k].sort((a: string, b: string) => a.localeCompare(b)),
+      ).toEqual(
+        ([...FACTORY_ROLES[k as never]] as string[]).sort((a, b) =>
+          a.localeCompare(b),
+        ),
       );
     }
   });

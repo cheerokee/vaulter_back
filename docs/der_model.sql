@@ -442,7 +442,7 @@ CREATE TABLE role_assignments (
   app_installation_id CHAR(36) NULL,
   scope_type ENUM('organization', 'space', 'hub') NOT NULL,
   organization_id CHAR(36) NULL,
-  space_id CHAR(36) NULL,
+  space_id CHAR(36) NULL COMMENT 'só em scope_type = space (check no Postgres)',
   hub_id CHAR(36) NULL,
   granted_by_user_id CHAR(36) NULL COMMENT 'em espaço: precisa ser alguém de dentro (o admin não se coloca sozinho)',
   approval_status ENUM('not_required', 'pending', 'approved', 'rejected') NOT NULL DEFAULT 'not_required' COMMENT 'papel de instalação num hub: o dono do hub aprova; só vale quando approved',

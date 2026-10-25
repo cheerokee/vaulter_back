@@ -80,7 +80,7 @@ describe('Session', () => {
       Session.start({
         userId: 'u1',
         deviceName: device.name,
-        devicePlatform: device.platform as never,
+        devicePlatform: (device as { platform?: string }).platform as never,
         refreshTokenHash: 'h1',
         idleDays: 30,
         now,

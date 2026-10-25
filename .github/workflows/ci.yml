@@ -60,6 +60,7 @@ jobs:
       - run: npm ci
       - run: npm run build
       - run: npm run lint
+      - run: npm run typecheck
       - run: npm test
       # Mesmo SQL do .docker/postgres/init/02-app-role.sh: login de runtime da API.
       - name: Create runtime database role

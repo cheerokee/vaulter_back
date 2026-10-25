@@ -14,6 +14,7 @@ import { RoleAssignmentRepository } from '../../src/organizations/domain/role-as
 import { newId } from '../../src/shared/domain/id.js';
 import {
   UnitOfWork,
+  type UnitOfWorkContext,
   runWithContext,
 } from '../../src/shared/infra/db/unit-of-work.js';
 import {
@@ -86,7 +87,7 @@ describe('organizations repositories (e2e, app role)', () => {
 
   // SQL direto pelo papel de runtime, com o contexto dado (ou nenhum).
   const asApp = (
-    ctx: { organizationId?: string; userId?: string },
+    ctx: UnitOfWorkContext,
     sql: string,
     params: unknown[] = [],
   ): Promise<Record<string, unknown>[]> =>
