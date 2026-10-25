@@ -80,16 +80,21 @@ export class Invitation extends Entity<InvitationProps> {
       : this.props.status;
   }
 
-  canBeAcceptedBy(email: string, now: Date): boolean {
+  /** `email` is the accepting account's e-mail; when the invitation has one, it must match (normalized). */
+  canBeAcceptedBy(email: string | null, now: Date): boolean {
     if (this.effectiveStatus(now) !== 'pending') return false;
     return (
-      this.props.email === null || this.props.email === normalizeEmail(email)
+      this.props.email === null ||
+      (email !== null && this.props.email === normalizeEmail(email))
     );
   }
 
-  accept(userId: string, now: Date, email?: string): void {
-    if (email !== undefined && !this.canBeAcceptedBy(email, now)) invalid();
-    if (this.effectiveStatus(now) !== 'pending') invalid();
+  /**
+   * In-memory transition. Use cases persist acceptance through `InvitationRepository.markAccepted`
+   * (the atomic, concurrency-safe path); this keeps the entity consistent and holds the rule.
+   */
+  accept(userId: string, now: Date, email: string | null): void {
+    if (!this.canBeAcceptedBy(email, now)) invalid();
     this.props = {
       ...this.props,
       status: 'accepted',
@@ -98,6 +103,10 @@ export class Invitation extends Entity<InvitationProps> {
     };
   }
 
+  /**
+   * In-memory transition: throws `invitation-invalid` unless pending. Use cases persist revocation
+   * through `InvitationRepository.revoke` (conditional on pending); this mirrors the rule.
+   */
   revoke(): void {
     if (this.props.status !== 'pending') invalid();
     this.props = { ...this.props, status: 'revoked' };

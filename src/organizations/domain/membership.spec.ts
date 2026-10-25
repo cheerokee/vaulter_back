@@ -1,4 +1,5 @@
 import { DomainValidationError } from '../../shared/domain/errors.js';
+import { Organization } from './organization.js';
 import { MembershipRules } from './membership.js';
 
 const admin = { userId: 'u1', roleKey: 'org_admin' } as const;
@@ -109,5 +110,28 @@ describe('MembershipRules', () => {
         }),
       ),
     ).toBe('cannot-leave-personal');
+  });
+
+  it('derives isLastAdmin from the locked admin list', () => {
+    expect(MembershipRules.isLastAdmin(['u1'], 'u1')).toBe(true);
+    expect(MembershipRules.isLastAdmin(['u1', 'u3'], 'u1')).toBe(false);
+    expect(MembershipRules.isLastAdmin(['u1'], 'u2')).toBe(false);
+    expect(MembershipRules.isLastAdmin([], 'u1')).toBe(false);
+  });
+
+  it('builds the context from the organization and admin list', () => {
+    const org = Organization.createPersonal({
+      name: 'Ana',
+      ownerId: 'u1',
+      now: new Date(),
+    });
+    expect(MembershipRules.contextFor(org, ['u1'], 'u1')).toEqual({
+      isLastAdmin: true,
+      isPersonalOwner: true,
+    });
+    expect(MembershipRules.contextFor(org, ['u1', 'u2'], 'u2')).toEqual({
+      isLastAdmin: false,
+      isPersonalOwner: false,
+    });
   });
 });

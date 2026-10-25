@@ -28,12 +28,8 @@ function assertName(raw: string): string {
 }
 
 export class Organization extends Entity<OrganizationProps> {
-  /** `ownerId` is the creator, who becomes admin through a membership (not stored on the organization). */
-  static create(input: {
-    name: string;
-    ownerId: string;
-    now: Date;
-  }): Organization {
+  /** The creator becomes admin through a membership; nothing about them is stored here. */
+  static create(input: { name: string; now: Date }): Organization {
     return new Organization({
       name: assertName(input.name),
       isPersonal: false,
@@ -62,6 +58,12 @@ export class Organization extends Entity<OrganizationProps> {
   }
 
   static restore(props: OrganizationProps, id: string): Organization {
+    // Data integrity (not user input): a personal org has an owner, a regular one does not.
+    if (props.isPersonal !== (props.personalOwnerUserId !== null)) {
+      throw new Error(
+        `Organization ${id} is inconsistent: isPersonal and personalOwnerUserId disagree.`,
+      );
+    }
     return new Organization(props, id);
   }
 
@@ -85,6 +87,13 @@ export class Organization extends Entity<OrganizationProps> {
     const outcome = this.props.recoveryPublicKey ? 'replaced' : 'registered';
     this.props = { ...this.props, recoveryPublicKey: key };
     return outcome;
+  }
+
+  isPersonalOwner(userId: string): boolean {
+    return (
+      this.props.personalOwnerUserId !== null &&
+      this.props.personalOwnerUserId === userId
+    );
   }
 
   get name(): string {

@@ -63,18 +63,24 @@ describe('Invitation', () => {
 
   it('transitions: accept and revoke are single-use', () => {
     const a = Invitation.issue(base);
-    a.accept('u2', now);
+    a.accept('u2', now, null);
     expect(a.status).toBe('accepted');
     expect(a.acceptedBy).toBe('u2');
     expect(a.canBeAcceptedBy('x@y.com', now)).toBe(false);
-    expect(() => a.accept('u3', now)).toThrow(DomainValidationError);
+    expect(() => a.accept('u3', now, null)).toThrow(DomainValidationError);
     expect(() => a.revoke()).toThrow(DomainValidationError);
 
     const r = Invitation.issue(base);
     r.revoke();
     expect(r.status).toBe('revoked');
     expect(r.canBeAcceptedBy('x@y.com', now)).toBe(false);
-    expect(() => r.accept('u2', now)).toThrow(DomainValidationError);
+    expect(() => r.accept('u2', now, null)).toThrow(DomainValidationError);
+  });
+
+  it('requires an account e-mail when the invitation has one', () => {
+    const inv = Invitation.issue({ ...base, email: 'ana@example.com' });
+    expect(inv.canBeAcceptedBy(null, now)).toBe(false);
+    expect(() => inv.accept('u2', now, null)).toThrow(DomainValidationError);
   });
 
   it('refuses to accept when the e-mail does not match', () => {

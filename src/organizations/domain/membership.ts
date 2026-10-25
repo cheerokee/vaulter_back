@@ -28,6 +28,26 @@ function fail(code: string, message: string): never {
 }
 
 export const MembershipRules = {
+  /**
+   * `adminIds` = user ids of the active org_admin assignments, read under lock (see
+   * RoleAssignmentRepository.lockOrgAdmins). True when the target is an admin and the only one.
+   */
+  isLastAdmin(adminIds: readonly string[], targetUserId: string): boolean {
+    return adminIds.length === 1 && adminIds[0] === targetUserId;
+  },
+
+  /** Builds the context from the locked admin list and the organization (no trust in callers). */
+  contextFor(
+    organization: { isPersonalOwner(userId: string): boolean },
+    adminIds: readonly string[],
+    targetUserId: string,
+  ): MembershipContext {
+    return {
+      isLastAdmin: MembershipRules.isLastAdmin(adminIds, targetUserId),
+      isPersonalOwner: organization.isPersonalOwner(targetUserId),
+    };
+  },
+
   assertCanRemove(target: MembershipTarget, ctx: MembershipContext): void {
     void target;
     if (ctx.isPersonalOwner) {
