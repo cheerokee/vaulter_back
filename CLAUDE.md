@@ -467,9 +467,14 @@ Os valores do `.env.example` para os segredos são **só de desenvolvimento**; p
 - JWKS público para o hub validar tokens offline.
 - Exclusão de conta (LGPD) precisa revogar as sessões.
 - Organizações: avisar admins por notificação (convite aceito, membro saiu); exclusão de organização; papéis
-  próprios (modo avançado: `role_permission` com RLS por organização, hoje o catálogo é só leitura); escopos de
-  espaço/hub nas policies de `role_assignments` (entram com os módulos `spaces`/`hubs`); quem sai e volta mantém o
-  `joinedAt` original (o vínculo é reativado, não recriado); trava de assentos quando houver limites (`SeatPolicy`).
+  próprios (modo avançado: `role_permission` com RLS por organização, hoje o catálogo é só leitura); escopo de
+  hub nas policies de `role_assignments` (entra com o módulo `hubs`; o de espaço já existe); quem sai e volta mantém
+  o `joinedAt` original (o vínculo é reativado, não recriado); trava de assentos quando houver limites (`SeatPolicy`).
+- Espaços: quem sai do espaço e volta também mantém o `joinedAt` original (a atribuição em `role_assignments` é
+  reativada, não recriada); **assinar cada versão da chave** com a Ed25519 de quem fez a troca e o app conferir as
+  chaves públicas dos membros antes de trancar (proteção contra um servidor malicioso ativo, que hoje poderia
+  injetar uma chave pública ou uma versão forjada); o **storage deve recusar gravação enquanto
+  `keyRotationRequired`** (conteúdo novo não pode sair cifrado com uma versão que quem saiu conhece).
 - Limites residuais conhecidos do rate limit (veja a seção abaixo): janela fixa (rajada de até 2x na virada),
   dependência da ordem dos guards, falha fechada com o Postgres fora do ar e bloqueio do e-mail da vítima.
 

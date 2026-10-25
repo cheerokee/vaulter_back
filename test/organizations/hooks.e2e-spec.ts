@@ -162,6 +162,49 @@ describe('Organization hooks (e2e)', () => {
     }
   });
 
+  it('a throwing onAccepted (non-domain error) fails the acceptance with a generic 500: no membership, invitation still pending', async () => {
+    const owner = await c.signUp(account, 'hk-acc-owner@example.com', 'Olivia');
+    const guest = await c.signUp(account, 'hk-acc-guest@example.com', 'Guest');
+    const org = (await c.createOrg(owner.token, 'Accept Hook Inc').expect(201))
+      .body.id as string;
+    const inv = await c.invite(owner.token, org, 'org_member').expect(201);
+    const invitationId = inv.body.invitation.id as string;
+    const hooks = app.get(InvitationHooks);
+    hooks.register({
+      name: 'e2e-throwing-accept',
+      validateAndRecord: () => Promise.resolve(),
+      onAccepted: () => Promise.reject(new Error('accept hook exploded')),
+    });
+    try {
+      const res = await c.acceptInvite(guest.token, inv.body.token);
+      expect(res.status).toBe(500);
+      expect(res.body.type).toMatch(/\/internal-error$/);
+      expect(JSON.stringify(res.body)).not.toContain('accept hook exploded');
+      expect(
+        await count(
+          `SELECT count(*) AS n FROM user_organization WHERE organization_id = $1 AND user_id = $2`,
+          [org, guest.userId],
+        ),
+      ).toBe(0);
+      expect(
+        await count(
+          `SELECT count(*) AS n FROM organization_invitations WHERE id = $1 AND status = 'pending' AND accepted_by_user_id IS NULL`,
+          [invitationId],
+        ),
+      ).toBe(1);
+      expect(
+        await count(
+          `SELECT count(*) AS n FROM audit_logs WHERE organization_id = $1 AND action = 'member.joined' AND user_id = $2`,
+          [org, guest.userId],
+        ),
+      ).toBe(0);
+    } finally {
+      hooks.unregister('e2e-throwing-accept');
+    }
+    // the invitation was not burned: it still works once the hook is gone
+    await c.acceptInvite(guest.token, inv.body.token).expect(200);
+  });
+
   it('DTO: duplicate spaceId and more than 20 spaces -> 422', async () => {
     const owner = await c.signUp(account, 'hk-dto@example.com', 'Olivia');
     const org = (await c.createOrg(owner.token, 'Dto Inc').expect(201)).body

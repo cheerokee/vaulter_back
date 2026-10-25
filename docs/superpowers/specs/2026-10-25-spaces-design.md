@@ -197,7 +197,7 @@ segundo plano)
 | Método e rota | O que faz | Quem pode |
 |---|---|---|
 | `GET /organizations/:orgId/spaces` | espaços da organização **em que eu estou** (com meu papel e as pendências que me cabem), por cursor | membro da org |
-| `POST /organizations/:orgId/spaces` | cria (`name`, `wrappedKey`, `recoveryWrappedKey`) | `org.spaces.create` |
+| `POST /organizations/:orgId/spaces` | cria (`name`, `wrappedKey`, `recoveryPublicKey`, `recoveryWrappedKey`) | `org.spaces.create` |
 | `GET /spaces/:id` | detalhes, versão atual, flags de pendência | membro do espaço |
 | `PATCH /spaces/:id` | renomeia | Gestor |
 | `GET /spaces/:id/members` | membros e papéis (com `publicKey`) | membro do espaço |
@@ -207,7 +207,7 @@ segundo plano)
 | `POST /spaces/:id/leave` | sai | membro do espaço |
 | `GET /spaces/:id/keys` | minhas cópias trancadas (todas as versões) e a versão atual | membro do espaço |
 | `POST /spaces/:id/keys` | nova versão (`version`, `grants[]`, `recoveryPublicKey`, `recoveryWrappedKey`) | com troca pendente, qualquer membro; sem ela, só o Gestor (10/h por usuário) |
-| `PUT /spaces/:id/keys/recovery` | retranca todas as versões para o kit atual (`versions[]`) | membro do espaço |
+| `PUT /spaces/:id/keys/recovery` | retranca para o kit atual as versões ainda no kit antigo, ou todas (`recoveryPublicKey`, `versions[]`) | membro do espaço |
 | `POST /spaces/:id/managers` | admin promove um membro existente a Gestor quando o espaço ficou sem Gestor | admin da org |
 | `POST /spaces/:id/recover/copies` | cópias do kit de todas as versões de um espaço órfão (`currentAuthProof`) | admin da org (`org.members.manage`) |
 | `POST /spaces/:id/recover` | admin reabre um espaço órfão pelo kit (`grants[]`, `currentAuthProof`) | admin da org |
@@ -270,3 +270,14 @@ O convite (`POST /organizations/:id/invitations`) ganha `spaces` opcional.
 - Os nomes dos ganchos de saída da organização e a ordem das operações na transação.
 - Os rate limits das rotas novas (o padrão global basta, salvo justificativa).
 - A ordem das tarefas e como fatiar os commits.
+
+## 10. Pendências futuras (revisão final)
+
+- **Assinatura de cada versão da chave:** quem faz a troca assina a versão nova (e as cópias) com a própria chave
+  Ed25519, e o app confere as chaves públicas dos membros antes de trancar para eles. Hoje o backend é confiável
+  para entregar as chaves públicas certas; a assinatura protege contra um **servidor malicioso ativo** (que poderia
+  injetar uma chave pública sua ou uma versão forjada).
+- **Storage recusa gravação com troca pendente:** enquanto `keyRotationRequired` estiver ligado, o módulo de storage
+  não aceita conteúdo novo (ele sairia cifrado com uma versão que quem saiu conhece).
+- **Reentrada no espaço:** quem sai e volta mantém o `joinedAt` original (a atribuição é reativada, não recriada),
+  como na organização.

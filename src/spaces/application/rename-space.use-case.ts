@@ -40,9 +40,12 @@ export class RenameSpaceUseCase {
         action: 'space.renamed',
         metadata: { spaceId: space.id },
       });
+      // Relida depois do save (ainda sob o lock): o updated_at é o que o banco gravou, não o da leitura.
+      const saved =
+        (await this.spaces.findById(space.organizationId, space.id)) ?? space;
       const versions = await this.keys.versions(space.organizationId, space.id);
       return toSpaceView(
-        space,
+        saved,
         roleKey,
         await this.kit.isRewrapRequired(space.organizationId, versions),
       );

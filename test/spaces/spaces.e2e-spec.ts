@@ -288,6 +288,16 @@ describe('Spaces endpoints (e2e)', () => {
       .expect(200);
     expect(renamed.body).toMatchObject({ id: spaceId, name: 'Renomeado' });
     expect(renamed.body.updatedAt).toMatch(/Z$/);
+    // the response carries the post-update updatedAt: the same a fresh read returns, after the creation
+    expect(Date.parse(renamed.body.updatedAt)).toBeGreaterThan(
+      Date.parse(renamed.body.createdAt),
+    );
+    const reread = await c
+      .http()
+      .get(`/spaces/${spaceId}`)
+      .set(h(owner))
+      .expect(200);
+    expect(reread.body.updatedAt).toBe(renamed.body.updatedAt);
     // the editor sees the space without the manager-only count
     const asMember = await c
       .http()

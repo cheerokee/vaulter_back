@@ -27,6 +27,7 @@ import { CreateSpaceUseCase } from './create-space.use-case.js';
 import { GetSpaceUseCase } from './get-space.use-case.js';
 import { ListSpacesUseCase } from './list-spaces.use-case.js';
 import { RenameSpaceUseCase } from './rename-space.use-case.js';
+import { Space } from '../domain/space.js';
 
 const kit = makeSpaceKit();
 const d = kit.deps;
@@ -322,6 +323,31 @@ describe('RenameSpaceUseCase', () => {
         metadata: { spaceId: SPACE_ID },
       },
     ]);
+  });
+
+  it('returns the post-update updatedAt (read back after the save, as the database set it)', async () => {
+    const saved = new Date('2026-10-25T12:34:56Z');
+    m.spaces.save.mockImplementationOnce(async (sp: Space) => {
+      kit.spacesById.set(
+        sp.id,
+        Space.restore(
+          {
+            organizationId: sp.organizationId,
+            name: sp.name,
+            currentKeyVersion: sp.currentKeyVersion,
+            keyRotationRequired: sp.keyRotationRequired,
+            createdAt: sp.createdAt,
+            updatedAt: saved,
+          },
+          sp.id,
+        ),
+      );
+    });
+    const view = await useCase().execute(actor(MANAGER), SPACE_ID, {
+      name: 'Diretoria',
+    });
+    expect(view.updatedAt).toEqual(saved);
+    expect(view.name).toBe('Diretoria');
   });
 
   it('an editor gets 403, the admin outside the space 404, an invalid name 422', async () => {

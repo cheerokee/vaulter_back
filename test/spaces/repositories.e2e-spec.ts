@@ -454,15 +454,37 @@ describe('spaces repositories (e2e, app role)', () => {
           [roleId, bob, org.id, space.id],
         ),
       ).rejects.toMatchObject({ code: '23505' });
-      // Só linha de espaço leva space_id: o papel de runtime não pendura um espaço numa atribuição de
-      // outro escopo.
+    });
+
+    it('ck_role_assignments_space_id_scope: only space rows carry space_id, even for the runtime role', async () => {
+      const ana = await makeUser('ana@x.com');
+      const cid = await makeUser('cid@x.com');
+      const org = await makeOrg('A', [ana], [cid]);
+      const { space } = await makeSpace(org.id, ana);
+      const [{ id: roleId }] = (await admin.query(
+        `SELECT id FROM roles WHERE key = 'org_member' AND organization_id IS NULL`,
+      )) as { id: string }[];
+      // O papel de runtime não pendura um espaço numa atribuição de outro escopo.
       await expect(
         asApp(
           { organizationId: org.id },
           `INSERT INTO role_assignments (role_id, user_id, scope_type, organization_id, space_id) VALUES ($1, $2, 'organization', $3, $4)`,
           [roleId, cid, org.id, space.id],
         ),
-      ).rejects.toMatchObject({ code: '23514' });
+      ).rejects.toMatchObject({
+        code: '23514',
+        constraint: 'ck_role_assignments_space_id_scope',
+      });
+      // Nem o dono.
+      await expect(
+        admin.query(
+          `INSERT INTO role_assignments (role_id, user_id, scope_type, organization_id, space_id) VALUES ($1, $2, 'organization', $3, $4)`,
+          [roleId, cid, org.id, space.id],
+        ),
+      ).rejects.toMatchObject({
+        code: '23514',
+        constraint: 'ck_role_assignments_space_id_scope',
+      });
     });
 
     it('the runtime role cannot DELETE from the space tables', async () => {
