@@ -26,6 +26,7 @@ describe('scrubSensitive', () => {
         'kdfSalt',
         'kdf_params',
         'password',
+        'set-cookie',
       ]),
     );
   });

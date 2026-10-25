@@ -2,7 +2,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import { ConfigService } from '@nestjs/config';
 import type { Options } from 'pino-http';
 import { newId } from '../../domain/id.js';
-import { SENSITIVE_KEYS } from './sensitive-fields.js';
+import { scrubSensitive } from './sensitive-fields.js';
 
 const VALID_REQUEST_ID = /^[A-Za-z0-9-]{1,64}$/;
 
@@ -10,7 +10,6 @@ export const REDACT_PATHS: string[] = [
   'req.headers.authorization',
   'req.headers.cookie',
   'res.headers["set-cookie"]',
-  ...SENSITIVE_KEYS.map((k) => `*.${k}`),
 ];
 
 export function genReqId(req: IncomingMessage, res: ServerResponse): string {
@@ -25,6 +24,8 @@ export function pinoHttpOptions(config: ConfigService): Options {
   return {
     level: config.get<string>('LOG_LEVEL') ?? 'info',
     genReqId,
+    // Cabeçalhos por caminho; todo o resto passa por scrubSensitive em qualquer profundidade.
+    formatters: { log: (obj) => scrubSensitive(obj) },
     redact: { paths: REDACT_PATHS, censor: '[REDACTED]' },
     // Só método, URL e id: sem corpo e sem cabeçalhos.
     serializers: {

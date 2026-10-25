@@ -1,22 +1,20 @@
 import type { ArgumentsHost } from '@nestjs/common';
-import { HttpException, NotFoundException } from '@nestjs/common';
+import { HttpException, Logger, NotFoundException } from '@nestjs/common';
+import * as Sentry from '@sentry/nestjs';
 import { QueryFailedError } from 'typeorm';
 import {
   ConflictError,
+  DomainError,
   DomainValidationError,
   HubOfflineError,
   NotFoundError,
   PermissionDeniedError,
   UnauthenticatedError,
 } from '../../domain/errors.js';
-import * as Sentry from '@sentry/nestjs';
-import { DomainError } from '../../domain/errors.js';
 import { ProblemDetailsFilter } from './problem-details.filter.js';
 import { RequestValidationError } from './request-validation.error.js';
 
 vi.mock('@sentry/nestjs', () => ({ captureException: vi.fn() }));
-
-import { Logger } from '@nestjs/common';
 
 vi.spyOn(Logger.prototype, 'error').mockImplementation(() => undefined);
 

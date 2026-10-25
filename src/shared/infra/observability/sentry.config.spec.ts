@@ -46,4 +46,16 @@ describe('sentryOptions', () => {
       n: 1,
     });
   });
+
+  it('drops query_string and scrubs span data in transactions', async () => {
+    const o = sentryOptions({});
+    const event = {
+      type: 'transaction',
+      request: { query_string: 'token=abc', url: '/x' },
+      spans: [{ data: { refreshToken: 'r', n: 1 } }, {}],
+    } as any;
+    const out = (await o.beforeSendTransaction!(event, {})) as any;
+    expect(out.request.query_string).toBeUndefined();
+    expect(out.spans[0].data).toEqual({ refreshToken: '[REDACTED]', n: 1 });
+  });
 });

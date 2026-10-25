@@ -17,6 +17,8 @@ const BASE_KEYS = [
   'refreshToken',
   'authorization',
   'cookie',
+  'setCookie',
+  'set-cookie',
   'password',
 ] as const;
 

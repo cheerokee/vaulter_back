@@ -2,7 +2,8 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import { Writable } from 'node:stream';
 import { pino } from 'pino';
 import { isUuidV7 } from '../../domain/id.js';
-import { genReqId, REDACT_PATHS } from './logger.config.js';
+import { ConfigService } from '@nestjs/config';
+import { genReqId, pinoHttpOptions } from './logger.config.js';
 
 function fakes(header?: string) {
   const headers: Record<string, string> = {};
@@ -31,35 +32,61 @@ describe('logger config', () => {
     }
   });
 
-  it('redacts sensitive values in log output', () => {
-    let out = '';
-    const stream = new Writable({
-      write(chunk, _enc, cb) {
-        out += chunk.toString();
-        cb();
-      },
-    });
-    const logger = pino(
-      { redact: { paths: REDACT_PATHS, censor: '[REDACTED]' } },
-      stream,
-    );
-    logger.info(
-      {
-        req: { headers: { authorization: 'Bearer abc', cookie: 'sid=1' } },
-        res: { headers: { 'set-cookie': 'sid=2' } },
-        user: { authProof: 'proof-secret', refresh_token: 'rt-secret' },
-      },
-      'hi',
-    );
-    for (const secret of [
-      'Bearer abc',
-      'sid=1',
-      'sid=2',
-      'proof-secret',
-      'rt-secret',
-    ]) {
-      expect(out).not.toContain(secret);
+  describe('redaction', () => {
+    function capture() {
+      let out = '';
+      const stream = new Writable({
+        write(chunk, _enc, cb) {
+          out += chunk.toString();
+          cb();
+        },
+      });
+      const opts = pinoHttpOptions(
+        new ConfigService({ LOG_LEVEL: 'info', LOG_PRETTY: false }),
+      );
+      const logger = pino(
+        { redact: opts.redact, formatters: opts.formatters },
+        stream,
+      );
+      return { logger, output: () => out };
     }
-    expect(out).toContain('[REDACTED]');
+
+    it.each([
+      ['top-level key', { authProof: 'SECRET1' }],
+      ['top-level refreshToken', { refreshToken: 'SECRET1' }],
+      ['depth 1', { user: { refresh_token: 'SECRET1' } }],
+      ['depth 3', { body: { user: { authProof: 'SECRET1' } } }],
+      ['deep error response', { err: { response: { wrappedKey: 'SECRET1' } } }],
+      ['capitalized Authorization', { Authorization: 'Bearer SECRET1' }],
+      ['array of objects', { items: [{ ok: 1 }, { kdfSalt: 'SECRET1' }] }],
+      ['set-cookie', { headers: { 'Set-Cookie': 'SECRET1' } }],
+    ])('never writes the secret: %s', (_name, payload) => {
+      const { logger, output } = capture();
+      logger.info(payload, 'hi');
+      expect(output()).not.toContain('SECRET1');
+      expect(output()).toContain('[REDACTED]');
+    });
+
+    it('redacts request and response header paths', () => {
+      const { logger, output } = capture();
+      logger.info(
+        {
+          req: {
+            headers: { authorization: 'Bearer SECRET1', cookie: 'SECRET2' },
+          },
+          res: { headers: { 'set-cookie': 'SECRET3' } },
+        },
+        'hi',
+      );
+      for (const s of ['SECRET1', 'SECRET2', 'SECRET3']) {
+        expect(output()).not.toContain(s);
+      }
+    });
+
+    it('keeps non-sensitive fields', () => {
+      const { logger, output } = capture();
+      logger.info({ userId: 'u1', nested: { n: 2 } }, 'hi');
+      expect(output()).toContain('u1');
+    });
   });
 });

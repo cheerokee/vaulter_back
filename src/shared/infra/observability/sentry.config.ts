@@ -1,9 +1,9 @@
 import type { Breadcrumb, ErrorEvent, NodeOptions } from '@sentry/nestjs';
+import { scrubSensitive } from './sensitive-fields.js';
 
 type TransactionEvent = Parameters<
   NonNullable<NodeOptions['beforeSendTransaction']>
 >[0];
-import { scrubSensitive } from './sensitive-fields.js';
 
 // Nunca envia corpo de requisição; cabeçalhos, extra, contexts e breadcrumbs passam pela limpeza.
 function scrubEvent<T extends ErrorEvent | TransactionEvent>(event: T): T {
@@ -13,12 +13,19 @@ function scrubEvent<T extends ErrorEvent | TransactionEvent>(event: T): T {
       event.request.headers = scrubSensitive(event.request.headers);
     }
     delete event.request.cookies;
+    delete event.request.query_string;
   }
   if (event.extra) event.extra = scrubSensitive(event.extra);
   if (event.contexts) event.contexts = scrubSensitive(event.contexts);
   if (event.breadcrumbs) {
     event.breadcrumbs = event.breadcrumbs.map((b: Breadcrumb) =>
       b.data ? { ...b, data: scrubSensitive(b.data) } : b,
+    );
+  }
+  const spans = (event as { spans?: { data?: unknown }[] }).spans;
+  if (spans) {
+    (event as { spans?: unknown[] }).spans = spans.map((sp) =>
+      sp.data ? { ...sp, data: scrubSensitive(sp.data) } : sp,
     );
   }
   return event;
