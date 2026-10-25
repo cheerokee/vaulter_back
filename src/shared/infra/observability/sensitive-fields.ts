@@ -25,6 +25,7 @@ const BASE_KEYS = [
   'refreshTokenHash',
   'secret',
   'token',
+  'inviteToken',
 ] as const;
 
 const toSnake = (k: string) =>

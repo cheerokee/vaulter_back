@@ -20,6 +20,7 @@ npm test             # testes unitários (Vitest)
 npm run test:e2e     # testes e2e (Vitest + supertest) — sobem o AppModule, precisam do banco; rodar DENTRO do
                      # container: docker exec vaulter-back-app npm run test:e2e
 npm run migration:show                 # status das migrations (veja Banco de dados)
+npm run schema:check                   # drift: falha se as entidades divergirem do banco migrado
 npm run lint         # oxlint com checagem de tipos
 npm run format       # Prettier em src/ e test/
 ```
@@ -125,7 +126,8 @@ couber (spec de contas, §12).
   transferência internacional com salvaguardas (o backup é cifrado e ilegível para nós). Região é
   configuração: se um cliente exigir dados no Brasil, a organização dele pode ir para um bucket em `sa-east-1`.
 - **CI:** GitHub Actions (`.github/workflows/ci.yml`) em todo push na `develop`/`main` e em PR: `build`, `lint`,
-  `test` e `test:e2e` (com PostgreSQL 18 + pgvector como serviço). Manter verde; se quebrar, consertar antes de seguir.
+  `test`, `migration:run` + `schema:check` (drift entidades × migrations) e `test:e2e` (com PostgreSQL 18 + pgvector
+  como serviço). Manter verde; se quebrar, consertar antes de seguir.
 
 ## Arquitetura
 Monólito modular: **uma aplicação Nest só**, um módulo por contexto (`identity`, `organizations`, `spaces`,
@@ -249,8 +251,10 @@ src/organizations/
   sair concorrentes se serializam e a organização nunca fica sem admin (`last-admin`, 422). Dono da organização
   pessoal: `personal-owner-protected` / `cannot-leave-personal`.
 - **RBAC:** catálogo (permissões, dependências, papéis de fábrica e suas permissões) é semeado por **migration
-  imutável** (`CreateRbacCatalog`; mudar o catálogo = nova migration) e o e2e confere banco == `rbac-catalog.ts`. O
-  papel de runtime só **lê** o catálogo. Papéis de fábrica: `org_admin` (`org.members.manage`, `org.spaces.create`,
+  imutável** (`CreateRbacCatalog`; mudar o catálogo = nova migration) e o e2e confere banco == `rbac-catalog.ts`.
+  `permissions`, `permission_dependency` e `role_permission` são só leitura para o runtime **por GRANT** (só
+  `SELECT`); em `roles`, os papéis de fábrica (`organization_id IS NULL`) são protegidos pelo **RLS**, e o runtime
+  pode gravar papéis da própria organização (base dos papéis próprios futuros). Papéis de fábrica: `org_admin` (`org.members.manage`, `org.spaces.create`,
   `org.hubs.approve`, `org.billing`), `org_member` (nenhuma), `space_reader/editor/manager`, `hub_owner/operator/...`
   (detalhe na spec §6). Atribuição em `role_assignments` (escopo organização/espaço/hub); a API de membros só mexe em
   `org_admin`/`org_member`.
@@ -343,7 +347,9 @@ src/organizations/
   Migrations geradas já saem formatadas pelo Prettier.
 - Sempre revisar o SQL gerado antes de rodar, e escrever o `down` de migrations manuais.
 - A entidade TypeORM deve descrever **todas** as constraints (CHECK, índices, únicos parciais) nos metadados: depois
-  de uma migration, `migration:generate` precisa sair vazio.
+  de uma migration, `migration:generate` precisa sair vazio. `npm run schema:check` (`scripts/schema-check.sh`, roda
+  no CI depois do `migration:run`) automatiza isso: falha se o `schema:log` do TypeORM imprimir qualquer SQL contra
+  o `DB_DATABASE` migrado.
 
 ## Variáveis do `.env` (além das de infraestrutura do compose)
 Validadas na subida por `src/shared/infra/config/env.validation.ts` (faltou ou inválido: a API não sobe).

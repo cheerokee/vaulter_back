@@ -77,4 +77,8 @@ jobs:
           $$;
           GRANT app_runtime TO vaulter_app;
           SQL
+      # Migra o banco do job (DB_DATABASE) e confere que as entidades descrevem exatamente esse schema:
+      # o schema:check falha se o schema:log do TypeORM imprimir qualquer SQL (drift = falta migration).
+      - run: npm run migration:run
+      - run: npm run schema:check
       - run: npm run test:e2e

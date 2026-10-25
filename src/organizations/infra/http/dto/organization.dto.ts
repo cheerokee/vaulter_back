@@ -10,18 +10,20 @@ import {
   type HubLinkPolicy,
 } from '../../../domain/organization.js';
 
+/** Same bound as the domain (Organization: 1..255). */
+const ORGANIZATION_NAME_MAX = 255;
 const BASE64URL = /^[A-Za-z0-9_-]+$/;
 
 export class CreateOrganizationDto {
   @IsString()
-  @MaxLength(200)
+  @MaxLength(ORGANIZATION_NAME_MAX)
   name!: string;
 }
 
 export class UpdateOrganizationDto {
   @IsOptional()
   @IsString()
-  @MaxLength(200)
+  @MaxLength(ORGANIZATION_NAME_MAX)
   name?: string;
 
   @IsOptional()

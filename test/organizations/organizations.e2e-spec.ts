@@ -106,6 +106,26 @@ describe('Organizations endpoints (e2e)', () => {
       .expect(422);
   });
 
+  it('accepts names up to 255 characters, like the domain', async () => {
+    const owner = await c.signUp(account, 'name-len@example.com');
+    const created = await c.createOrg(owner.token, 'n'.repeat(255)).expect(201);
+    expect(created.body.name).toHaveLength(255);
+    const tooLong = await c.createOrg(owner.token, 'n'.repeat(256)).expect(422);
+    expect(tooLong.body.type).toMatch(/validation-failed$/);
+    await c
+      .http()
+      .patch(`/organizations/${created.body.id as string}`)
+      .set(c.bearer(owner.token))
+      .send({ name: 'm'.repeat(255) })
+      .expect(200);
+    await c
+      .http()
+      .patch(`/organizations/${created.body.id as string}`)
+      .set(c.bearer(owner.token))
+      .send({ name: 'm'.repeat(256) })
+      .expect(422);
+  });
+
   it('validates path ids as UUID with validation-failed', async () => {
     const ana = await c.signUp(account, 'uuid@example.com');
     const res = await c
@@ -237,9 +257,11 @@ describe('Organizations endpoints (e2e)', () => {
         .set(c.bearer(by.token))
         .send({ roleKey: 'org_member' });
     const results = await Promise.all([demote(a, b), demote(b, a)]);
+    // Sob o lock, quem perde a corrida já foi rebaixado: não tem mais org.members.manage (403), nunca last-admin.
     const statuses = results.map((r) => r.status).sort((x, y) => x - y);
-    expect(statuses[0]).toBe(200);
-    expect([403, 422]).toContain(statuses[1]);
+    expect(statuses).toEqual([200, 403]);
+    const loser = results.find((r) => r.status === 403)!;
+    expect(loser.body.type).toMatch(/\/permission-denied$/);
     const rows = await (
       await adminDataSource()
     ).query(

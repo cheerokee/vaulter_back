@@ -31,6 +31,23 @@ describe('database runtime role (e2e)', () => {
     ]);
   });
 
+  it('audit_logs is append-only for the app role: UPDATE and DELETE are permission denied', async () => {
+    // Privilege check, before RLS: denied even with no organization in context (no rows visible).
+    await expect(
+      appDs.query(`UPDATE audit_logs SET action = 'tampered'`),
+    ).rejects.toMatchObject({ code: '42501' });
+    await expect(appDs.query('DELETE FROM audit_logs')).rejects.toMatchObject({
+      code: '42501',
+    });
+    const [privs] = await appDs.query(
+      `SELECT has_table_privilege('audit_logs', 'INSERT') AS ins,
+              has_table_privilege('audit_logs', 'SELECT') AS sel,
+              has_table_privilege('audit_logs', 'UPDATE') AS upd,
+              has_table_privilege('audit_logs', 'DELETE') AS del`,
+    );
+    expect(privs).toEqual({ ins: true, sel: true, upd: false, del: false });
+  });
+
   it('app role cannot DELETE', async () => {
     await expect(appDs.query('DELETE FROM role_probe')).rejects.toMatchObject({
       code: '42501',

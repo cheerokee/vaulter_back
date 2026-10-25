@@ -32,8 +32,14 @@ describe('scrubSensitive', () => {
         'refresh_token_hash',
         'secret',
         'token',
+        'inviteToken',
+        'invite_token',
       ]),
     );
+    expect(scrubSensitive({ inviteToken: 't', invite_token: 't' })).toEqual({
+      inviteToken: '[REDACTED]',
+      invite_token: '[REDACTED]',
+    });
   });
 });
 
