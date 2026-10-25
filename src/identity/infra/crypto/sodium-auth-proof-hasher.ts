@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, type OnModuleInit } from '@nestjs/common';
 import { getSodium } from '../../../shared/infra/crypto/sodium.js';
 import { AuthProofHasher } from '../../application/ports/auth-proof-hasher.js';
 
@@ -8,8 +8,17 @@ const MEM_LIMIT = 19_922_944;
 const DUMMY_PROOF = 'dummy-auth-proof-for-timing-equalisation';
 
 @Injectable()
-export class SodiumAuthProofHasher extends AuthProofHasher {
+export class SodiumAuthProofHasher
+  extends AuthProofHasher
+  implements OnModuleInit
+{
   private dummyHash?: Promise<string>;
+
+  /** Warms the dummy hash so the first unknown-email verify costs the same as later ones. */
+  async onModuleInit(): Promise<void> {
+    this.dummyHash ??= this.hash(DUMMY_PROOF);
+    await this.dummyHash;
+  }
 
   async hash(authProof: string): Promise<string> {
     const sodium = await getSodium();

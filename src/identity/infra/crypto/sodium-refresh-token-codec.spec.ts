@@ -33,4 +33,11 @@ describe('SodiumRefreshTokenCodec', () => {
     expect(codec.parse(`notuuid.${secret}`)).toBeNull();
     expect(codec.parse('')).toBeNull();
   });
+
+  it('returns null early for tokens longer than 128 characters', async () => {
+    const id = newId();
+    const { token } = await codec.generate(id);
+    expect(codec.parse(token + 'A'.repeat(100))).toBeNull();
+    expect(codec.parse('A'.repeat(1_000_000))).toBeNull();
+  });
 });

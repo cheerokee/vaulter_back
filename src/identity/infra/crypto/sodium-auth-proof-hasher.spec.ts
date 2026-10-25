@@ -25,4 +25,13 @@ describe('SodiumAuthProofHasher', () => {
     expect(await hasher.verifyAgainstDummy(proof)).toBe(false);
     expect(await hasher.verifyAgainstDummy(proof)).toBe(false);
   });
+
+  it('onModuleInit warms the dummy hash', async () => {
+    const fresh = new SodiumAuthProofHasher();
+    const spy = vi.spyOn(fresh, 'hash');
+    await fresh.onModuleInit();
+    expect(spy).toHaveBeenCalledTimes(1);
+    await fresh.verifyAgainstDummy(proof);
+    expect(spy).toHaveBeenCalledTimes(1);
+  });
 });

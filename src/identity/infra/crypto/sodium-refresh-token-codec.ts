@@ -8,6 +8,7 @@ const sodium = await getSodium();
 const B64 = sodium.base64_variants.URLSAFE_NO_PADDING;
 const SECRET_BYTES = 32;
 const SECRET_CHARS = 43;
+const MAX_TOKEN_CHARS = 128;
 const SECRET_FORMAT = /^[A-Za-z0-9_-]{42}[AEIMQUYcgkosw048]$/;
 
 // The stored hash is BLAKE2b-256 of the DECODED secret bytes (not of its text), hex-encoded.
@@ -26,6 +27,7 @@ export class SodiumRefreshTokenCodec extends RefreshTokenCodec {
   }
 
   parse(token: string): { sessionId: string; hash: string } | null {
+    if (token.length > MAX_TOKEN_CHARS) return null;
     const parts = token.split('.');
     if (parts.length !== 2) return null;
     const [sessionId, secretText] = parts as [string, string];
