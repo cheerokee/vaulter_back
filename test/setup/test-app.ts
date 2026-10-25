@@ -5,6 +5,7 @@ import { Test } from '@nestjs/testing';
 import { DataSource } from 'typeorm';
 import { AppModule } from '../../src/app.module.js';
 import { configureApp } from '../../src/shared/infra/http/configure-app.js';
+import { seedRbacCatalog } from '../../src/database/rbac-catalog-seed.js';
 import { typeOrmOptions } from '../../src/database/typeorm.options.js';
 
 let admin: DataSource | undefined;
@@ -50,7 +51,7 @@ export async function adminDataSource(): Promise<DataSource> {
   return admin;
 }
 
-// Esvazia todas as tabelas, exceto o histórico de migrations.
+// Esvazia todas as tabelas, exceto o histórico de migrations, e repõe o catálogo RBAC.
 export async function resetDatabase(): Promise<void> {
   const ds = await adminDataSource();
   const tables: { tablename: string }[] = await ds.query(
@@ -59,4 +60,6 @@ export async function resetDatabase(): Promise<void> {
   if (tables.length === 0) return;
   const list = tables.map((t) => `"${t.tablename}"`).join(', ');
   await ds.query(`TRUNCATE ${list} RESTART IDENTITY CASCADE`);
+  // O catálogo RBAC é dado de migration: volta com os mesmos ids após o reset.
+  if (list.includes('"permissions"')) await seedRbacCatalog(ds);
 }
