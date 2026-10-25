@@ -1,0 +1,52 @@
+name: CI
+
+on:
+  push:
+    branches: [develop, main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    # Mesmo banco do docker-compose (PostgreSQL 18 + pgvector), para os testes e2e.
+    services:
+      db:
+        image: pgvector/pgvector:pg18
+        env:
+          POSTGRES_DB: vaulter
+          POSTGRES_USER: vaulter
+          POSTGRES_PASSWORD: vaulter
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U vaulter -d vaulter"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+
+    env:
+      DB_HOST: localhost
+      DB_PORT: 5432
+      DB_DATABASE: vaulter
+      DB_USERNAME: vaulter
+      DB_PASSWORD: vaulter
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - run: npm ci
+      - run: npm run build
+      - run: npm run lint
+      - run: npm test
+      - run: npm run test:e2e

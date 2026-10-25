@@ -105,7 +105,8 @@ couber (spec de contas, §12).
   Sentry), então só a ida app → backend cruza o continente; mais barata e com todos os serviços. LGPD permite
   transferência internacional com salvaguardas (o backup é cifrado e ilegível para nós). Região é
   configuração: se um cliente exigir dados no Brasil, a organização dele pode ir para um bucket em `sa-east-1`.
-- **CI:** GitHub Actions rodando `build`, `test` e `lint` desde o primeiro commit de código.
+- **CI:** GitHub Actions (`.github/workflows/ci.yml`) em todo push na `develop`/`main` e em PR: `build`, `lint`,
+  `test` e `test:e2e` (com PostgreSQL 18 + pgvector como serviço). Manter verde; se quebrar, consertar antes de seguir.
 
 ## Arquitetura
 Monólito modular: **uma aplicação Nest só**, um módulo por contexto (`identity`, `organizations`, `spaces`,
