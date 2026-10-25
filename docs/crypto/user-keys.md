@@ -98,3 +98,43 @@ Valores **somente para teste**, fixados em `test/support/client-crypto.spec.ts`.
 - chave privada (hex): `202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f`
 - nonce (hex): `404142434445464748494a4b4c4d4e4f5051525354555657`
 - `encryptedPrivateKey` (base64url, 73 bytes): `AUBBQkNERUZHSElKS0xNTk9QUVJTVFVWVyVmvEhw5hdU_i8_F5QXRdBzxrOQEYU4T5WNY0ytgSvemr3tpmGm9ofdjXdxwLdS-A`
+
+## Chave de espaço
+
+Contrato entre backend, app e hub para as cópias trancadas da chave de um espaço (spec de espaços, §5).
+
+- **Chave do espaço:** 32 bytes aleatórios (`randombytes_buf(32)`), gerados no app de quem cria o espaço ou de
+  quem troca a versão. O backend nunca a vê.
+- **Cópia trancada para um destinatário:**
+
+```
+0x01 ‖ crypto_box_seal(chaveDoEspaço (32), publicKeyX25519DoDestinatário (32))
+```
+
+  1 + 32 + 48 (sobrecarga do `crypto_box_seal`) = **81 bytes**, em base64url sem padding (**108 caracteres**).
+  O primeiro byte é a versão do formato (`0x01`); versão diferente deve ser rejeitada.
+- **Destinatários:** a `publicKey` do usuário e a `recoveryPublicKey` da organização (o kit). Hubs e
+  instalações de app entram depois, com o mesmo formato.
+- **Impressão do kit:** `recoveryKeyFingerprint` = hex de `crypto_generichash(32, bytesDaRecoveryPublicKey)`
+  (BLAKE2b-256 dos bytes decodificados, **64 caracteres hex**). O backend grava a impressão em cada versão da
+  chave para saber para qual kit ela está trancada; assim calcula quais versões precisam ser **retrancadas**
+  quando a organização troca de kit. A impressão vem da chave atual da organização, nunca do cliente.
+- **Validação no backend:** só formato, tamanho e byte de versão. Ele não consegue conferir se a cópia abre;
+  quem garante isso é o app.
+
+**Regras**
+- Toda versão da chave é trancada para **todos** os membros ativos do espaço e para o kit.
+- Quem entra no espaço recebe a cópia de **todas** as versões existentes, não só da atual.
+- Quando um membro sai (do espaço ou da organização), o espaço pede uma **nova versão** da chave, trancada só
+  para quem ficou.
+- A chave do espaço **nunca** trafega em claro, nem em log, auditoria ou erro.
+
+### Vetor de teste (chave de espaço, v1)
+
+Valores **somente para teste**, fixados em `test/support/client-crypto.spec.ts`. O selo é aleatório, então o
+vetor prova a **abertura**, não os bytes: qualquer cliente deve abrir a cópia abaixo e obter a chave esperada.
+
+- chave privada do destinatário (hex): `606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f`
+- `publicKey` do destinatário (`crypto_scalarmult_base`, base64url): `Z13VdO13iTELPS52gfN5C0ZsdzsVIf7PNld5WDcepS8`
+- cópia trancada (base64url, 81 bytes): `AdwKH5FH2gGEG0G0xcaboGdZ8hzlNG7cZBdOFFlZj7sTux3htnYMie3AYgYtHttohH7FgzBVdy6pRWaiouIlD9NZRXGuuEuFP1THe9YvfTnX`
+- chave do espaço esperada (hex): `000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f`

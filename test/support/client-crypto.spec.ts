@@ -6,6 +6,10 @@ import {
   rewrapPrivateKey,
   deriveKeys,
   sealPrivateKey,
+  generateSpaceKey,
+  sealSpaceKey,
+  openSpaceKey,
+  recoveryKitKeypair,
   TEST_KDF_PARAMS,
 } from './client-crypto.js';
 
@@ -169,3 +173,78 @@ describe('client-crypto', () => {
     expect(await encode(blob)).toBe(VECTOR.encryptedPrivateKey);
   }, 30_000);
 });
+
+describe('space key helpers', () => {
+  const b64 = async (v: Uint8Array) =>
+    (await getSodium()).to_base64(
+      v,
+      (await getSodium()).base64_variants.URLSAFE_NO_PADDING,
+    );
+
+  it('generates 32 random bytes', async () => {
+    const a = await generateSpaceKey();
+    expect(a).toHaveLength(32);
+    expect(await b64(a)).not.toBe(await b64(await generateSpaceKey()));
+  });
+
+  it('seals to 81 bytes with version 1 and opens with the right pair', async () => {
+    const pair = await recoveryKitKeypair();
+    const key = await generateSpaceKey();
+    const wrapped = await sealSpaceKey(key, pair.publicKey);
+    expect(wrapped).toMatch(/^[A-Za-z0-9_-]{108}$/);
+    const raw = Buffer.from(wrapped, 'base64url');
+    expect(raw).toHaveLength(81);
+    expect(raw[0]).toBe(1);
+    expect(
+      await openSpaceKey(wrapped, pair.publicKey, pair.privateKey),
+    ).toEqual(key);
+  });
+
+  it('does not open with the wrong pair', async () => {
+    const pair = await recoveryKitKeypair();
+    const other = await recoveryKitKeypair();
+    const wrapped = await sealSpaceKey(
+      await generateSpaceKey(),
+      pair.publicKey,
+    );
+    await expect(
+      openSpaceKey(wrapped, other.publicKey, other.privateKey),
+    ).rejects.toThrow();
+  });
+
+  it('rejects an unsupported version when opening', async () => {
+    const pair = await recoveryKitKeypair();
+    const wrapped = await sealSpaceKey(
+      await generateSpaceKey(),
+      pair.publicKey,
+    );
+    const raw = Buffer.from(wrapped, 'base64url');
+    raw[0] = 2;
+    await expect(
+      openSpaceKey(raw.toString('base64url'), pair.publicKey, pair.privateKey),
+    ).rejects.toThrow('unsupported');
+  });
+
+  it('opens the documented v1 space key test vector', async () => {
+    const sodium = await getSodium();
+    const privateKey = sodium.from_hex(SPACE_VECTOR.privateKeyHex);
+    const publicKey = await b64(sodium.crypto_scalarmult_base(privateKey));
+    expect(publicKey).toBe(SPACE_VECTOR.publicKey);
+    const opened = await openSpaceKey(
+      SPACE_VECTOR.wrappedKey,
+      publicKey,
+      privateKey,
+    );
+    expect(sodium.to_hex(opened)).toBe(SPACE_VECTOR.spaceKeyHex);
+  });
+});
+
+const SPACE_VECTOR = {
+  privateKeyHex:
+    '606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f',
+  publicKey: 'Z13VdO13iTELPS52gfN5C0ZsdzsVIf7PNld5WDcepS8',
+  spaceKeyHex:
+    '000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f',
+  wrappedKey:
+    'AdwKH5FH2gGEG0G0xcaboGdZ8hzlNG7cZBdOFFlZj7sTux3htnYMie3AYgYtHttohH7FgzBVdy6pRWaiouIlD9NZRXGuuEuFP1THe9YvfTnX',
+};

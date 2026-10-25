@@ -177,3 +177,55 @@ export async function rewrapPrivateKey(
   const salt = sodium.randombytes_buf(sodium.crypto_pwhash_SALTBYTES);
   return wrap(privateKey, newPassword, salt, kdfParams);
 }
+
+const SPACE_KEY_VERSION = 1;
+
+/** Space key: 32 random bytes. */
+export async function generateSpaceKey(): Promise<Uint8Array> {
+  const sodium = await getSodium();
+  return sodium.randombytes_buf(32);
+}
+
+/** 0x01 || crypto_box_seal(spaceKey, recipient X25519 public key) -> 81 bytes, base64url. */
+export async function sealSpaceKey(
+  spaceKey: Uint8Array,
+  recipientPublicKeyB64u: string,
+): Promise<string> {
+  const sodium = await getSodium();
+  const sealed = sodium.crypto_box_seal(
+    spaceKey,
+    await fromB64(recipientPublicKeyB64u),
+  );
+  const blob = new Uint8Array(1 + sealed.length);
+  blob[0] = SPACE_KEY_VERSION;
+  blob.set(sealed, 1);
+  return b64(blob);
+}
+
+/** Throws when the version is unsupported or the pair does not open the copy. */
+export async function openSpaceKey(
+  wrappedB64u: string,
+  publicKeyB64u: string,
+  privateKey: Uint8Array,
+): Promise<Uint8Array> {
+  const sodium = await getSodium();
+  const blob = await fromB64(wrappedB64u);
+  if (blob[0] !== SPACE_KEY_VERSION) {
+    throw new Error('unsupported wrapped key format version');
+  }
+  return sodium.crypto_box_seal_open(
+    blob.slice(1),
+    await fromB64(publicKeyB64u),
+    privateKey,
+  );
+}
+
+/** Organization recovery kit keypair (X25519). */
+export async function recoveryKitKeypair(): Promise<{
+  publicKey: string;
+  privateKey: Uint8Array;
+}> {
+  const sodium = await getSodium();
+  const pair = sodium.crypto_box_keypair();
+  return { publicKey: await b64(pair.publicKey), privateKey: pair.privateKey };
+}
