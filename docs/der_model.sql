@@ -113,11 +113,14 @@ CREATE TABLE organizations (
   hub_link_policy ENUM('any_member_hub', 'admin_approved') NOT NULL DEFAULT 'any_member_hub',
   plan VARCHAR(50) NOT NULL DEFAULT 'free' COMMENT 'decide se a nuvem ativa está liberada',
   -- Kit de recuperação: a parte privada é mostrada uma vez ao cliente; aqui só a pública, para trancar as
-  -- chaves dos espaços (space_keys.recovery_wrapped_key).
-  recovery_public_key TEXT NOT NULL,
+  -- chaves dos espaços (space_keys.recovery_wrapped_key). Nulo até o primeiro espaço ou ação explícita.
+  recovery_public_key TEXT NULL,
+  personal_owner_user_id CHAR(36) NULL COMMENT 'dono da organização pessoal; nulo nas demais; garante uma pessoal por conta',
   sync_version BIGINT NOT NULL COMMENT 'versão de sincronização: sequência global do servidor, muda a cada insert/update/exclusão',
   PRIMARY KEY (id),
-  INDEX ix_organizations_sync_version (sync_version)
+  UNIQUE INDEX uq_organizations_personal_owner (personal_owner_user_id),
+  INDEX ix_organizations_sync_version (sync_version),
+  CONSTRAINT fk_organizations_personal_owner FOREIGN KEY (personal_owner_user_id) REFERENCES users (id)
 );
 
 -- Ser membro da organização. O que o membro pode fazer vem de role_assignments (escopo organização).
@@ -133,6 +136,34 @@ CREATE TABLE user_organization (
   CONSTRAINT fk_user_organization_organizations FOREIGN KEY (organization_id) REFERENCES organizations (id),
   CONSTRAINT fk_user_organization_users FOREIGN KEY (user_id) REFERENCES users (id),
   INDEX ix_user_organization_sync_version (sync_version)
+);
+
+-- Convites para entrar na organização. Só do backend (não sincroniza com hub/app). Uso único, validade de
+-- 7 dias; o token só existe como hash (o valor em claro vai apenas no link enviado).
+CREATE TABLE organization_invitations (
+  id CHAR(36) NOT NULL,
+  created_at DATETIME NOT NULL,
+  updated_at DATETIME NULL,
+  deleted_at DATETIME NULL,
+  organization_id CHAR(36) NOT NULL,
+  token_hash VARCHAR(128) NOT NULL COMMENT 'hash do token do convite; o token em claro nunca é guardado',
+  email VARCHAR(255) NULL COMMENT 'e-mail convidado; nulo = convite por link aberto',
+  role_id CHAR(36) NOT NULL COMMENT 'papel concedido ao aceitar',
+  status ENUM('pending', 'accepted', 'revoked', 'expired') NOT NULL DEFAULT 'pending',
+  expires_at DATETIME NOT NULL,
+  created_by_user_id CHAR(36) NOT NULL,
+  accepted_by_user_id CHAR(36) NULL,
+  accepted_at DATETIME NULL,
+  PRIMARY KEY (id),
+  UNIQUE INDEX uq_organization_invitations_token_hash (token_hash),
+  INDEX fk_organization_invitations_organizations_idx (organization_id),
+  INDEX fk_organization_invitations_roles_idx (role_id),
+  INDEX fk_organization_invitations_created_by_idx (created_by_user_id),
+  INDEX fk_organization_invitations_accepted_by_idx (accepted_by_user_id),
+  CONSTRAINT fk_organization_invitations_organizations FOREIGN KEY (organization_id) REFERENCES organizations (id),
+  CONSTRAINT fk_organization_invitations_roles FOREIGN KEY (role_id) REFERENCES roles (id),
+  CONSTRAINT fk_organization_invitations_created_by FOREIGN KEY (created_by_user_id) REFERENCES users (id),
+  CONSTRAINT fk_organization_invitations_accepted_by FOREIGN KEY (accepted_by_user_id) REFERENCES users (id)
 );
 
 -- ---------------------------------------------------------------------------------------------------
