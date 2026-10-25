@@ -142,6 +142,20 @@ src/
   Migrations geradas já saem formatadas pelo Prettier.
 - Sempre revisar o SQL gerado antes de rodar, e escrever o `down` de migrations manuais.
 
+## Documentação da API (interna × externa)
+Dois públicos, nunca misturados: o **time** e os **integradores** (apps como Orion e Salte). A externa não pode
+expor nada interno (cifra, infraestrutura, conexão do hub, endpoints de app/hub).
+- **Referência gerada do código** com `@nestjs/swagger`, em **dois documentos**:
+  - **interno:** todos os endpoints; só em desenvolvimento/ambiente interno;
+  - **público:** **só** os controllers marcados como públicos (`@ApiTags('public')`) — os endpoints `/v1` da API
+    de integração. Endpoint sem a marca nunca aparece na externa; marcar é decisão consciente, revisada.
+- **Guias para integradores** em Markdown em `docs/integrators/` (primeiros passos, autenticação com
+  `private_key_jwt`, apps × instalações, permissões, hub online/offline, caixa de entrada, erros, limites,
+  versões e changelog). Nascem **junto com o módulo de integração**, não antes; mudou o comportamento público,
+  atualiza o guia no mesmo commit.
+- **Interna de produto/arquitetura** continua no `valter-valt-ai` (specs e decisões); o que for técnico do
+  backend fica em `docs/` deste repositório.
+
 ## Git
 - **Todo o desenvolvimento acontece na `develop`** (branch padrão). Não criar branches de feature nem trocar
   de branch sem o Jonas pedir.
