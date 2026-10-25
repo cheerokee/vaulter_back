@@ -18,6 +18,7 @@ import {
   type ValidationArguments,
   type ValidatorConstraintInterface,
 } from 'class-validator';
+import { parseTrustProxy } from '../http/trust-proxy.js';
 
 // 32 bytes em base64url sem padding = 43 caracteres, e o último só pode ter 4 bits úteis.
 const BASE64URL_32_BYTES = /^[A-Za-z0-9_-]{42}[AEIMQUYcgkosw048]$/;
@@ -45,6 +46,24 @@ class PreviousJwtKeysConstraint implements ValidatorConstraintInterface {
 
   defaultMessage(): string {
     return 'AUTH_JWT_PREVIOUS_KEYS must be kid:seed[,kid:seed...], each seed 32 bytes base64url, kids distinct and different from AUTH_JWT_KEY_ID';
+  }
+}
+
+/** TRUST_PROXY: false | true | hop count | comma-separated IPs/CIDRs (see parseTrustProxy). */
+@ValidatorConstraint({ name: 'trustProxy', async: false })
+class TrustProxyConstraint implements ValidatorConstraintInterface {
+  validate(value: unknown): boolean {
+    if (typeof value !== 'string') return false;
+    try {
+      parseTrustProxy(value);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  defaultMessage(): string {
+    return 'TRUST_PROXY must be false, true, a hop count or a comma-separated list of IPs/CIDRs';
   }
 }
 
@@ -119,6 +138,9 @@ export class EnvironmentVariables {
   @Min(0)
   @Max(1)
   SENTRY_TRACES_SAMPLE_RATE: number = 0;
+
+  @Validate(TrustProxyConstraint)
+  TRUST_PROXY: string = 'false';
 
   @IsString()
   @IsNotEmpty()

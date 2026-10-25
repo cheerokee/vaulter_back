@@ -1,4 +1,5 @@
 import type { INestApplication } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { Logger } from 'nestjs-pino';
 import { Test } from '@nestjs/testing';
 import { DataSource } from 'typeorm';
@@ -8,10 +9,26 @@ import { typeOrmOptions } from '../../src/database/typeorm.options.js';
 
 let admin: DataSource | undefined;
 
-export async function createTestApp(): Promise<INestApplication> {
+/** `env` patches ConfigService.get/getOrThrow for those keys only; defaults stay untouched. */
+export async function createTestApp(
+  options: { env?: Record<string, string> } = {},
+): Promise<INestApplication> {
   const moduleRef = await Test.createTestingModule({
     imports: [AppModule],
   }).compile();
+  const env = options.env;
+  if (env) {
+    const config = moduleRef.get(ConfigService);
+    const { get, getOrThrow } = config;
+    const patch = <T>(orig: (k: string) => T) =>
+      function (this: ConfigService, key: string): T {
+        return key in env ? (env[key] as T) : orig.call(this, key);
+      };
+    config.get = patch(get.bind(config)) as typeof config.get;
+    config.getOrThrow = patch(
+      getOrThrow.bind(config),
+    ) as typeof config.getOrThrow;
+  }
   const app = moduleRef.createNestApplication({ bufferLogs: true });
   app.useLogger(app.get(Logger));
   configureApp(app);

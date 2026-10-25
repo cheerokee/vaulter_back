@@ -64,7 +64,10 @@ export class JoseAccessTokenService
       if (sep <= 0 || this.publicKeys.has(kid)) {
         throw new Error('Invalid AUTH_JWT_PREVIOUS_KEYS');
       }
-      this.publicKeys.set(kid, (await derive(item.slice(sep + 1), false)).publicKey);
+      this.publicKeys.set(
+        kid,
+        (await derive(item.slice(sep + 1), false)).publicKey,
+      );
     }
   }
 

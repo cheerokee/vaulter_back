@@ -36,6 +36,21 @@ describe('validateEnv', () => {
     expect(env.LOG_LEVEL).toBe('info');
   });
 
+  it('defaults TRUST_PROXY to false and accepts valid values', () => {
+    expect(validateEnv(validConfig()).TRUST_PROXY).toBe('false');
+    for (const v of ['true', '1', '10.0.0.0/8, 127.0.0.1']) {
+      expect(
+        validateEnv({ ...validConfig(), TRUST_PROXY: v }).TRUST_PROXY,
+      ).toBe(v);
+    }
+  });
+
+  it('rejects an invalid TRUST_PROXY', () => {
+    expect(() =>
+      validateEnv({ ...validConfig(), TRUST_PROXY: 'maybe' }),
+    ).toThrow(/TRUST_PROXY/);
+  });
+
   it('rejects a signing seed that is not 32 bytes of base64url', () => {
     expect(() =>
       validateEnv({ ...validConfig(), AUTH_JWT_SIGNING_SEED: 'short' }),

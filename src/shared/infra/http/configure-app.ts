@@ -4,6 +4,7 @@ import {
   ValidationPipe,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { parseTrustProxy } from './trust-proxy.js';
 import { setupSwagger } from './swagger.js';
 import { ProblemDetailsFilter } from './problem-details.filter.js';
 import {
@@ -29,6 +30,11 @@ export function configureApp(app: INestApplication): void {
   const baseUrl = config
     .getOrThrow<string>('PROBLEM_TYPE_BASE_URL')
     .replace(/\/$/, '');
+  // Express: decides whether X-Forwarded-For feeds req.ip (sessions' lastIp, rate-limit key).
+  app
+    .getHttpAdapter()
+    .getInstance()
+    .set('trust proxy', parseTrustProxy(config.get<string>('TRUST_PROXY')));
   app.useGlobalPipes(
     new ValidationPipe({
       whitelist: true,
