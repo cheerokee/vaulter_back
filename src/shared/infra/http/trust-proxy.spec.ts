@@ -34,6 +34,10 @@ describe('parseTrustProxy', () => {
     'loopback; drop',
     '10.0.0.1,abc',
     'fd00::/129',
+    '10.0.0.0/08',
+    '10.0.0.0/001',
+    'fe80::1%eth0',
+    'fe80::1%eth0/64',
   ])('rejects %s', (raw) => {
     expect(() => parseTrustProxy(raw)).toThrow();
   });

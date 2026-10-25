@@ -47,6 +47,26 @@ describe('SodiumAuthProofHasher', () => {
     await fresh.onModuleDestroy();
   });
 
+  it('throws a clear error after onModuleDestroy instead of recreating a pool', async () => {
+    const h = new SodiumAuthProofHasher();
+    await h.onModuleInit();
+    await h.onModuleDestroy();
+    await expect(h.hash(proof)).rejects.toThrow(/destroyed/);
+    await expect(h.verify('x', proof)).rejects.toThrow(/destroyed/);
+    await expect(h.verifyAgainstDummy(proof)).rejects.toThrow(/destroyed/);
+  });
+
+  it('does not cache a failed dummy hash forever', async () => {
+    const h = new SodiumAuthProofHasher();
+    const spy = vi
+      .spyOn(h, 'hash')
+      .mockRejectedValueOnce(new Error('transient'));
+    await expect(h.verifyAgainstDummy(proof)).rejects.toThrow('transient');
+    spy.mockRestore();
+    expect(await h.verifyAgainstDummy(proof)).toBe(false);
+    await h.onModuleDestroy();
+  });
+
   it('keeps the event loop free during parallel verifications', async () => {
     const hash = await hasher.hash(proof);
     await hasher.verify(hash, proof); // warm every worker path

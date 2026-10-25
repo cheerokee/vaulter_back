@@ -26,6 +26,7 @@ export class SodiumAuthProofHasher
 {
   private pool?: Piscina;
   private dummyHash?: Promise<string>;
+  private destroyed = false;
 
   constructor(@Optional() private readonly config?: ConfigService) {
     super();
@@ -34,13 +35,13 @@ export class SodiumAuthProofHasher
   /** Creates the pool and warms the dummy hash so the first unknown-email verify costs the same as later ones. */
   async onModuleInit(): Promise<void> {
     this.getPool();
-    this.dummyHash ??= this.hash(DUMMY_PROOF);
-    await this.dummyHash;
+    await this.getDummyHash();
   }
 
   async onModuleDestroy(): Promise<void> {
     const pool = this.pool;
     this.pool = undefined;
+    this.destroyed = true;
     await pool?.destroy();
   }
 
@@ -57,12 +58,26 @@ export class SodiumAuthProofHasher
   }
 
   async verifyAgainstDummy(authProof: string): Promise<false> {
-    this.dummyHash ??= this.hash(DUMMY_PROOF);
-    await this.verify(await this.dummyHash, authProof);
+    await this.verify(await this.getDummyHash(), authProof);
     return false;
   }
 
+  /** Cached dummy hash; a rejected attempt is dropped so a transient failure is retried. */
+  private getDummyHash(): Promise<string> {
+    if (!this.dummyHash) {
+      const attempt = this.hash(DUMMY_PROOF);
+      this.dummyHash = attempt;
+      attempt.catch(() => {
+        if (this.dummyHash === attempt) this.dummyHash = undefined;
+      });
+    }
+    return this.dummyHash;
+  }
+
   private getPool(): Piscina {
+    if (this.destroyed) {
+      throw new Error('SodiumAuthProofHasher has been destroyed');
+    }
     if (!this.pool) {
       const size = Number(this.config?.get('ARGON2_POOL_SIZE'));
       const threads =

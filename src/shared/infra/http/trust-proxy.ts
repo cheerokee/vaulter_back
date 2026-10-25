@@ -3,10 +3,11 @@ import { isIP } from 'node:net';
 function isIpOrCidr(item: string): boolean {
   const [addr, prefix, ...rest] = item.split('/');
   if (rest.length > 0 || !addr) return false;
+  if (addr.includes('%')) return false; // zone ids are not valid in trust proxy
   const version = isIP(addr);
   if (version === 0) return false;
   if (prefix === undefined) return true;
-  if (!/^\d{1,3}$/.test(prefix)) return false;
+  if (!/^(0|[1-9]\d{0,2})$/.test(prefix)) return false;
   return Number(prefix) <= (version === 4 ? 32 : 128);
 }
 

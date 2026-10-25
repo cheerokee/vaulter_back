@@ -38,15 +38,15 @@ describe('trust proxy (e2e)', () => {
   }, 60_000);
 
   it('ignores a forged X-Forwarded-For with TRUST_PROXY=false', async () => {
-    const app = await createTestApp();
+    const app = await createTestApp({ env: { TRUST_PROXY: 'false' } });
     try {
       const ip = await lastIpAfterForgedLogin(
         app,
         'tp-false@example.com',
         account,
       );
-      expect(ip).toEqual(expect.any(String));
       expect(ip).not.toBe(FORGED);
+      expect(['127.0.0.1', '::1', '::ffff:127.0.0.1']).toContain(ip);
     } finally {
       await app.close();
     }

@@ -19,15 +19,20 @@ export async function createTestApp(
   const env = options.env;
   if (env) {
     const config = moduleRef.get(ConfigService);
-    const { get, getOrThrow } = config;
-    const patch = <T>(orig: (k: string) => T) =>
-      function (this: ConfigService, key: string): T {
-        return key in env ? (env[key] as T) : orig.call(this, key);
-      };
-    config.get = patch(get.bind(config)) as typeof config.get;
-    config.getOrThrow = patch(
-      getOrThrow.bind(config),
-    ) as typeof config.getOrThrow;
+    const origGet = config.get.bind(config) as (
+      key: string,
+      ...rest: unknown[]
+    ) => unknown;
+    const origGetOrThrow = config.getOrThrow.bind(config) as (
+      key: string,
+      ...rest: unknown[]
+    ) => unknown;
+    config.get = ((key: string, ...rest: unknown[]) =>
+      key in env ? env[key] : origGet(key, ...rest)) as typeof config.get;
+    config.getOrThrow = ((key: string, ...rest: unknown[]) =>
+      key in env
+        ? env[key]
+        : origGetOrThrow(key, ...rest)) as typeof config.getOrThrow;
   }
   const app = moduleRef.createNestApplication({ bufferLogs: true });
   app.useLogger(app.get(Logger));
