@@ -74,6 +74,7 @@ export class UserSessionTypeormRepository extends SessionRepository {
       .where('id = :id', { id: session.id })
       .andWhere('refresh_token_hash = :expectedHash', { expectedHash })
       .andWhere('revoked_at IS NULL')
+      .andWhere('deleted_at IS NULL')
       .execute();
     return result.affected === 1;
   }
@@ -94,7 +95,8 @@ export class UserSessionTypeormRepository extends SessionRepository {
       .update(UserSessionTypeormEntity)
       .set({ revokedAt: now, revokedReason: reason })
       .where('user_id = :userId', { userId })
-      .andWhere('revoked_at IS NULL');
+      .andWhere('revoked_at IS NULL')
+      .andWhere('deleted_at IS NULL');
     if (exceptSessionId)
       qb.andWhere('id <> :exceptSessionId', { exceptSessionId });
     await qb.execute();

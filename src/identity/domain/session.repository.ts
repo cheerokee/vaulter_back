@@ -15,7 +15,7 @@ export abstract class SessionRepository {
   ): Promise<CursorPage<Session>>;
   /**
    * Conditional UPDATE: persists the session's new refresh state only if the stored hash
-   * still equals `expectedHash` and the session is not revoked. Returns false otherwise.
+   * still equals `expectedHash` and the session is not revoked. Expiry is NOT checked here: the caller does it. Returns false otherwise.
    */
   abstract rotateRefreshToken(
     session: Session,

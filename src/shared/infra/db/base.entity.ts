@@ -7,7 +7,7 @@ import {
 } from 'typeorm';
 
 export abstract class BaseTypeormEntity {
-  @PrimaryColumn('uuid')
+  @PrimaryColumn('uuid', { default: () => 'uuidv7()' })
   id!: string;
 
   @CreateDateColumn({ type: 'timestamptz' })
