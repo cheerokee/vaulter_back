@@ -4,6 +4,10 @@ import { AccessTokenService } from './application/ports/access-token-service.js'
 import { AuthProofHasher } from './application/ports/auth-proof-hasher.js';
 import { DecoySaltFactory } from './application/ports/decoy-salt-factory.js';
 import { RefreshTokenCodec } from './application/ports/refresh-token-codec.js';
+import { LoginUseCase } from './application/login.use-case.js';
+import { PreLoginUseCase } from './application/pre-login.use-case.js';
+import { RegisterUserUseCase } from './application/register-user.use-case.js';
+import { SessionIssuer } from './application/session-issuer.js';
 import { SessionRepository } from './domain/session.repository.js';
 import { UserRepository } from './domain/user.repository.js';
 import { JoseAccessTokenService } from './infra/crypto/jose-access-token-service.js';
@@ -26,6 +30,10 @@ import { UserTypeormRepository } from './infra/db/user.typeorm-repository.js';
     { provide: AccessTokenService, useClass: JoseAccessTokenService },
     { provide: RefreshTokenCodec, useClass: SodiumRefreshTokenCodec },
     { provide: DecoySaltFactory, useClass: SodiumDecoySaltFactory },
+    SessionIssuer,
+    PreLoginUseCase,
+    RegisterUserUseCase,
+    LoginUseCase,
   ],
 })
 export class IdentityModule {}
