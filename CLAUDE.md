@@ -183,8 +183,8 @@ src/
   400 JSON malformado) também saem como problem+json. Stack trace, SQL e mensagem crua do banco vão só
   para o log, nunca para a resposta.
 - O modelo de dados e as regras de negócio vêm da spec
-  `valter-valt-ai/docs/superpowers/specs/2026-10-24-organizacoes-espacos-e-nuvem-design.md` e do DER em
-  `docs/der_model.sql`.
+  `valter-valt-ai/docs/superpowers/specs/2026-10-24-organizacoes-espacos-e-nuvem-design.md`, do DER em
+  `docs/der_model.sql` e, para organizações, de `docs/superpowers/specs/2026-10-25-organizations-design.md`.
 
 ## Módulo de referência: `identity`
 `src/identity/` é o modelo a copiar; `src/shared/` é a base comum (Entity/UUID v7, erros, paginação, filtro
@@ -218,6 +218,66 @@ test/support/        helpers e fixtures de teste compartilhados (cliente de crip
 6. `<modulo>.module.ts`: `TypeOrmModule.forFeature([...])` e `{ provide: Contrato, useClass: Implementacao }`.
 7. Testes: unitários com contratos simulados via `vi`, ao lado do código; e2e em `test/<modulo>/`, reaproveitando
    `test/support/`.
+
+## Módulo `organizations`
+`src/organizations/` (organizações, membros, papéis/RBAC, convites, chave de recuperação, auditoria, assentos).
+Spec: `docs/superpowers/specs/2026-10-25-organizations-design.md` (§6 = catálogo RBAC, §7 = rotas).
+```
+src/organizations/
+  domain/        organization, membership (MembershipRules), invitation, recovery-key, email, seat-policy,
+                 rbac-catalog (fonte da verdade em código); *.repository.ts abstratos
+  application/   um use-case por arquivo; organization-access.ts (padrão para os outros módulos);
+                 membership-guard.ts (lock + contexto de membro); audit-log.ts; invitation-errors.ts;
+                 personal-organization.registration-hook.ts; ports/ (gerador/hash do token de convite)
+  infra/         db/ (entidades, mappers, repositórios), crypto/, http/ (3 controllers, dto/, uuid-pipes.ts)
+```
+- **Dependência em uma direção só: `organizations` -> `identity`**, e apenas por contratos exportados da
+  `application/` do identity: `UserDirectory` (nome/e-mail/chave pública de usuários) e
+  `CurrentAuthProofVerifier` (reautenticação). O `identity` nunca importa `organizations`.
+- **Ganchos de cadastro** (`RegistrationHooks`, `src/shared/application/registration-hooks.ts`): é como um módulo
+  reage ao cadastro sem o `identity` conhecê-lo. O módulo assina em `onModuleInit` (`register({ name, onRegistered })`,
+  `unregister` no destroy); os ganchos rodam em sequência **dentro da transação do cadastro** (erro desfaz tudo) e
+  os resultados são mesclados (dois ganchos devolvendo o mesmo campo = erro de programação). Hoje:
+  `organizations.personal` cria a organização pessoal (dono = admin) e, com `inviteToken`, tenta aceitar o convite
+  (`invitation.accepted` na resposta do cadastro; convite inválido não derruba o cadastro, só erro de domínio em
+  savepoint).
+- **`OrganizationAccess` é o padrão para os próximos módulos (spaces, hubs):** `requireMember(orgId, userId)` ->
+  **404** para não membro (não revela que a organização existe); `requirePermission(orgId, userId, permissao)` ->
+  **403** para membro sem a permissão. Todo caso de uso que toca dado de organização chama um dos dois primeiro;
+  ids malformados viram 404/422 antes de chegar ao banco. Operações que mudam admins/membros usam
+  `lockMembershipContext` (trava `org_admin` com `FOR UPDATE`, reconfere o acesso sob o lock): remover, rebaixar ou
+  sair concorrentes se serializam e a organização nunca fica sem admin (`last-admin`, 422). Dono da organização
+  pessoal: `personal-owner-protected` / `cannot-leave-personal`.
+- **RBAC:** catálogo (permissões, dependências, papéis de fábrica e suas permissões) é semeado por **migration
+  imutável** (`CreateRbacCatalog`; mudar o catálogo = nova migration) e o e2e confere banco == `rbac-catalog.ts`. O
+  papel de runtime só **lê** o catálogo. Papéis de fábrica: `org_admin` (`org.members.manage`, `org.spaces.create`,
+  `org.hubs.approve`, `org.billing`), `org_member` (nenhuma), `space_reader/editor/manager`, `hub_owner/operator/...`
+  (detalhe na spec §6). Atribuição em `role_assignments` (escopo organização/espaço/hub); a API de membros só mexe em
+  `org_admin`/`org_member`.
+- **RLS das tabelas da organização:** policies só com `current_setting` (`app.organization_id`, `app.user_id`,
+  `app.invitation_token_hash`); **sem `SECURITY DEFINER`** — funciona com dono não superusuário (Postgres gerenciado).
+  `app.invitation_token_hash` deixa a prévia/aceite ler **só** o convite do token antes de haver organização no
+  contexto. Em código, `runInOrganizationScope`/`uow.withContext` (escopo restaurado ao sair). **Unidades aninhadas
+  dentro de um mesmo `uow.run` precisam ser sequenciais** — nunca `Promise.all` de `run`/`withContext` (a transação
+  e o contexto são uma conexão só).
+- **Convites:** o token do link (43 chars base64url) aparece **uma única vez**, na resposta da criação; no banco só o
+  hash. O token **sempre vai no corpo** (`POST /invitations/preview`, `POST /invitations/accept`), nunca em URL (log,
+  histórico, Referer). Vale 7 dias, uso único (aceite concorrente: um ganha, o outro 422). Convite com e-mail só serve
+  para esse e-mail. Prévia pública devolve só nome da organização, de quem convidou e validade (sem e-mail). Qualquer
+  falha (inexistente, expirado, revogado, usado, outro e-mail) é o **mesmo erro** `invitation-invalid` (422), para
+  não virar oráculo. O cadastro aceita `inviteToken`.
+- **Chave de recuperação da organização:** `PUT /organizations/:id/recovery-key` só **substitui** (nunca apaga),
+  exige `org.members.manage` **e** reautenticação (`currentAuthProof`, verificada por `CurrentAuthProofVerifier`) e é
+  auditada (`registered`/`replaced`, sem a prova nem a chave privada).
+- **Auditoria (`audit_logs`):** *append-only* — o papel de runtime tem só `INSERT`/`SELECT` (sem `UPDATE`/`DELETE`),
+  via `AuditLog.record` dentro da mesma transação da ação. Ações: `organization.created`, `organization.updated`,
+  `organization.recovery_key.registered|replaced`, `member.joined`, `member.left`, `member.removed`,
+  `member.role_changed`, `invitation.created`, `invitation.revoked`. `metadata` nunca leva segredo/token.
+- **Assentos:** assento = membro ativo (convite pendente não conta). `SeatPolicy` (hoje ilimitado) é checada ao criar
+  e ao aceitar convite. TODO ao entrarem limites reais: travar a linha da organização (`FOR UPDATE`) antes de contar,
+  senão requisições concorrentes estouram o limite.
+- Rotas autenticadas marcam `@ApiBearerAuth()` por método (a prévia de convite é `@Public()` e não deve aparecer
+  com cadeado no Swagger). Nenhuma rota daqui entra na doc pública.
 
 ## Banco de dados (TypeORM + migrations)
 - **TypeORM 1.x** + `@nestjs/typeorm`, driver `pg`. Config de conexão em `src/database/typeorm.options.ts`,
@@ -310,6 +370,10 @@ Os valores do `.env.example` para os segredos são **só de desenvolvimento**; p
 ## Pendências antes de produção
 - JWKS público para o hub validar tokens offline.
 - Exclusão de conta (LGPD) precisa revogar as sessões.
+- Organizações: avisar admins por notificação (convite aceito, membro saiu); exclusão de organização; papéis
+  próprios (modo avançado: `role_permission` com RLS por organização, hoje o catálogo é só leitura); escopos de
+  espaço/hub nas policies de `role_assignments` (entram com os módulos `spaces`/`hubs`); quem sai e volta mantém o
+  `joinedAt` original (o vínculo é reativado, não recriado); trava de assentos quando houver limites (`SeatPolicy`).
 - Limites residuais conhecidos do rate limit (veja a seção abaixo): janela fixa (rajada de até 2x na virada),
   dependência da ordem dos guards, falha fechada com o Postgres fora do ar e bloqueio do e-mail da vítima.
 
@@ -327,6 +391,8 @@ Os valores do `.env.example` para os segredos são **só de desenvolvimento**; p
   | `POST /auth/login` | 10/min por IP **e** 5/min por e-mail normalizado |
   | `POST /auth/refresh` | 60/min por IP |
   | `PUT /me/password` | 5 por 15 min por usuário |
+  | `POST /invitations/preview` (pública) | 30/min por IP |
+  | `POST /invitations/accept` | 10/min por IP |
   Rota com `@Throttle` próprio tem contador próprio (por rota). Os contadores por e-mail não vão em cabeçalho.
 - Estourou: **429 `problem+json`** (`type` `.../too-many-requests`) com `Retry-After` em segundos.
 - Tabela `rate_limit_hits` (UNLOGGED) é **exceção documentada** às regras de timestamps/lápides/sem `DELETE`:
