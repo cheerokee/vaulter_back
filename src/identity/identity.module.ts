@@ -4,6 +4,11 @@ import { AccessTokenService } from './application/ports/access-token-service.js'
 import { AuthProofHasher } from './application/ports/auth-proof-hasher.js';
 import { DecoySaltFactory } from './application/ports/decoy-salt-factory.js';
 import { RefreshTokenCodec } from './application/ports/refresh-token-codec.js';
+import { AuthenticateAccessTokenUseCase } from './application/authenticate-access-token.use-case.js';
+import { RefreshSessionUseCase } from './application/refresh-session.use-case.js';
+import { LogoutUseCase } from './application/logout.use-case.js';
+import { ListSessionsUseCase } from './application/list-sessions.use-case.js';
+import { RevokeSessionUseCase } from './application/revoke-session.use-case.js';
 import { LoginUseCase } from './application/login.use-case.js';
 import { PreLoginUseCase } from './application/pre-login.use-case.js';
 import { RegisterUserUseCase } from './application/register-user.use-case.js';
@@ -34,6 +39,11 @@ import { UserTypeormRepository } from './infra/db/user.typeorm-repository.js';
     PreLoginUseCase,
     RegisterUserUseCase,
     LoginUseCase,
+    AuthenticateAccessTokenUseCase,
+    RefreshSessionUseCase,
+    LogoutUseCase,
+    ListSessionsUseCase,
+    RevokeSessionUseCase,
   ],
 })
 export class IdentityModule {}

@@ -7,6 +7,7 @@ import type { User } from '../domain/user.js';
 import type { SessionTokens } from './dto/session-tokens.js';
 import { AccessTokenService } from './ports/access-token-service.js';
 import { RefreshTokenCodec } from './ports/refresh-token-codec.js';
+import { refreshIdleDays } from './refresh-idle-days.js';
 
 export type DeviceInput = { name: string; platform: DevicePlatform };
 export type ClientInfo = { ip: string | null; userAgent: string | null };
@@ -35,9 +36,7 @@ export class SessionIssuer {
       deviceName: device.name,
       devicePlatform: device.platform,
       refreshTokenHash: refresh.hash,
-      idleDays: Number(
-        this.config.getOrThrow<number>('AUTH_REFRESH_TOKEN_IDLE_DAYS'),
-      ),
+      idleDays: refreshIdleDays(this.config),
       now,
       ip: client.ip,
       userAgent: client.userAgent,
