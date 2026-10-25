@@ -276,34 +276,66 @@ Validadas na subida por `src/shared/infra/config/env.validation.ts` (faltou ou i
 | `LOG_LEVEL` / `LOG_PRETTY` | nível do pino / saída legível | `info` / `false` |
 | `SENTRY_DSN` / `SENTRY_ENVIRONMENT` / `SENTRY_TRACES_SAMPLE_RATE` | Sentry (sem DSN, desligado) | vazio / `development` / `0` |
 | `AUTH_JWT_ISSUER` | `iss` dos tokens | obrigatória |
+| `AUTH_JWT_AUDIENCE` | `aud` dos tokens de acesso (validado na verificação) | obrigatória |
 | `AUTH_JWT_KEY_ID` | `kid` do cabeçalho do JWT | obrigatória |
 | `AUTH_JWT_SIGNING_SEED` | semente Ed25519 (32 bytes em base64url) — **segredo** | obrigatória |
+| `AUTH_JWT_PREVIOUS_KEYS` | chaves antigas só para **verificar**, `kid:seed[,kid:seed...]`, sem espaços (rotação) | vazio |
 | `AUTH_ACCESS_TOKEN_TTL_SECONDS` | validade do access token | `900` |
 | `AUTH_REFRESH_TOKEN_IDLE_DAYS` | inatividade máxima do refresh | `30` |
 | `IDENTITY_DECOY_SALT_KEY` | chave do salt falso do pré-login (32 bytes em base64url) — **segredo** | obrigatória |
+| `TRUST_PROXY` | confiança em `X-Forwarded-For`: `false`, `true`, nº de saltos ou lista de IPs/CIDRs; só ligar atrás de proxy conhecido | `false` |
+| `RATE_LIMIT_ENABLED` | liga o rate limit (os e2e rodam com `false`) | `true` |
+| `ARGON2_POOL_SIZE` | threads do pool do Argon2id (inteiro >= 1) | `min(4, núcleos)` |
 
 Os valores do `.env.example` para os segredos são **só de desenvolvimento**; produção gera os próprios:
 `node -e "console.log(require('crypto').randomBytes(32).toString('base64url'))"`.
 
 ## Pendências antes de produção
-- Rate limiting no login, refresh e troca de senha (`@nestjs/throttler`; o Argon2 roda no event loop).
-- Argon2id fora do event loop (pool de `worker_threads` ou binding nativo assíncrono): cada verificação leva
-  ~24 ms e bloqueia o loop.
-- `trust proxy` configurado para `req.ip`/`lastIp` corretos atrás de load balancer.
-- `typ: at+jwt` e `aud` nos tokens de acesso, antes de existir outro tipo de JWT ou validação offline no hub.
-- Política de rotação de segredos: `AUTH_JWT_SIGNING_SEED` (via `kid`), `IDENTITY_DECOY_SALT_KEY` e a senha do
-  role de runtime do banco (`02-app-role.sh` não troca a senha de um role já existente).
 - JWKS público para o hub validar tokens offline.
 - Exclusão de conta (LGPD) precisa revogar as sessões.
+- Limites residuais conhecidos do rate limit (veja a seção abaixo): janela fixa (rajada de até 2x na virada),
+  dependência da ordem dos guards, falha fechada com o Postgres fora do ar e bloqueio do e-mail da vítima.
 
 ## Rate limit
-- `@nestjs/throttler` com guard global (`ThrottlingModule`, registrado **depois** do `IdentityModule` para o guard de
-  token rodar antes) e storage no Postgres (`PostgresThrottlerStorage`, upsert atômico; várias instâncias dividem
-  os contadores). Limites em `src/shared/infra/http/rate-limits.ts`; chave por IP (`req.ip`, respeita `TRUST_PROXY`),
-  por e-mail normalizado no login e por usuário em `PUT /me/password`. O padrão global é por IP **e por rota**.
-- Tabela `rate_limit_hits` (UNLOGGED) é **exceção documentada** à regra de timestamps/lápides/sem `DELETE`: contador
-  técnico, fora do TypeORM (sem entidade), e só nela o `app_runtime` tem `DELETE` (limpeza das linhas expiradas).
-- `RATE_LIMIT_ENABLED` (padrão `true`); os e2e rodam com `false`, e `test/shared/rate-limit.e2e-spec.ts` liga.
+- `@nestjs/throttler` com guard global (`AppThrottlerGuard` em `ThrottlingModule`, registrado **depois** do
+  `IdentityModule` para o guard de token rodar antes — fixado por e2e) e storage no Postgres
+  (`PostgresThrottlerStorage`, upsert atômico; várias instâncias dividem os contadores). Chave por IP (`req.ip`,
+  respeita `TRUST_PROXY`; IPv6 agrupado no /64), por e-mail normalizado no login e por usuário em `PUT /me/password`.
+- Limites (`src/shared/infra/http/rate-limits.ts`):
+  | Rota | Limite |
+  |---|---|
+  | qualquer rota sem limite próprio | 300/min por IP, **somando todas as rotas** |
+  | `POST /auth/prelogin` | 30/min por IP |
+  | `POST /auth/register` | 10/h por IP |
+  | `POST /auth/login` | 10/min por IP **e** 5/min por e-mail normalizado |
+  | `POST /auth/refresh` | 60/min por IP |
+  | `PUT /me/password` | 5 por 15 min por usuário |
+  Rota com `@Throttle` próprio tem contador próprio (por rota). Os contadores por e-mail não vão em cabeçalho.
+- Estourou: **429 `problem+json`** (`type` `.../too-many-requests`) com `Retry-After` em segundos.
+- Tabela `rate_limit_hits` (UNLOGGED) é **exceção documentada** às regras de timestamps/lápides/sem `DELETE`:
+  contador técnico, sem `created_at`/`updated_at`/`deleted_at`, fora do TypeORM (sem entidade), e só nela o
+  `app_runtime` tem `DELETE` (limpeza das linhas expiradas).
+- `RATE_LIMIT_ENABLED` é lido a cada requisição; os e2e rodam com `false` (`vitest.config.e2e`) e
+  `test/shared/rate-limit.e2e-spec.ts` liga com `createTestApp({ env: { RATE_LIMIT_ENABLED: 'true' } })`.
+- **Limites residuais:** janela fixa (até 2x o limite numa virada de janela); a ordem dos guards importa (token
+  antes do throttler; pinada por e2e); **falha fechada**: com o Postgres fora do ar o rate limit responde erro —
+  health checks futuros devem usar `@SkipThrottle()`; o limite de 5/min por e-mail permite a um atacante
+  bloquear o login de uma vítima por uma janela (trade-off aceito).
+
+## Argon2id em worker threads
+- O Argon2id roda num pool de `worker_threads` (`ARGON2_POOL_SIZE`), fora do event loop. O arquivo do worker só
+  pode usar TypeScript **apagável** (sem enums, namespaces ou parameter properties), pois é carregado sem o
+  passo de transformação do Nest. Cada hash ativo ocupa ~19 MiB: dimensione o pool pela memória do container.
+
+## Rotação de segredos
+- **Semente do JWT (`AUTH_JWT_SIGNING_SEED`)**: mover o `kid:seed` atual para `AUTH_JWT_PREVIOUS_KEYS`, definir a
+  nova semente e um novo `AUTH_JWT_KEY_ID`, reiniciar. Manter a chave antiga por **pelo menos o TTL do access
+  token** (`AUTH_ACCESS_TOKEN_TTL_SECONDS`) e então removê-la de `AUTH_JWT_PREVIOUS_KEYS`.
+- **`IDENTITY_DECOY_SALT_KEY`**: trocar muda o salt falso de **todos** os e-mails inexistentes, e um atacante que
+  observou o salt antigo percebe a diferença (limite aceito). Rotacionar raramente.
+- **Senha do login de runtime do banco**: atualizar `DB_APP_PASSWORD` e rodar de novo
+  `docker exec vaulter-back-db sh /docker-entrypoint-initdb.d/02-app-role.sh` (executa `ALTER ROLE ... PASSWORD`;
+  em produção, o equivalente no banco gerenciado), depois reiniciar a API.
 
 ## Observabilidade
 - **Sentry** para erros e tracing — o mesmo nos três softwares (backend Nest, app Ionic, hub Python), para

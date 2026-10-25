@@ -1,5 +1,6 @@
 #!/bin/sh
-# Cria o papel de grupo e o login de runtime da API (idempotente). As permissões em si ficam nas
+# Cria o papel de grupo e o login de runtime da API (idempotente). Se o login já existe, a senha é
+# atualizada para o DB_APP_PASSWORD atual (é assim que se rotaciona a senha). As permissões em si ficam nas
 # migrations (concedidas a app_runtime). Roda na criação do banco; para um banco já existente:
 #   docker exec vaulter-back-db sh /docker-entrypoint-initdb.d/02-app-role.sh
 set -eu
@@ -14,6 +15,8 @@ WHERE NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'app_runtime') \gexec
 
 SELECT format('CREATE ROLE %I LOGIN NOSUPERUSER NOBYPASSRLS PASSWORD %L', :'app_user', :'app_password')
 WHERE NOT EXISTS (SELECT FROM pg_roles WHERE rolname = :'app_user') \gexec
+
+SELECT format('ALTER ROLE %I LOGIN PASSWORD %L', :'app_user', :'app_password') \gexec
 
 SELECT format('GRANT app_runtime TO %I', :'app_user') \gexec
 SQL
