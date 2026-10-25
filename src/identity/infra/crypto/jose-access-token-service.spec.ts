@@ -1,5 +1,5 @@
 import type { ConfigService } from '@nestjs/config';
-import { decodeProtectedHeader, importJWK, SignJWT } from 'jose';
+import { decodeJwt, decodeProtectedHeader, importJWK, SignJWT } from 'jose';
 import { UnauthenticatedError } from '../../../shared/domain/errors.js';
 import { newId } from '../../../shared/domain/id.js';
 import { getSodium } from '../../../shared/infra/crypto/sodium.js';
@@ -7,15 +7,21 @@ import { JoseAccessTokenService } from './jose-access-token-service.js';
 
 const SEED_A = 'A'.repeat(42) + 'A';
 const SEED_B = 'B'.repeat(42) + 'A';
-const config = (seed: string) =>
+const config = (
+  seed: string,
+  extra: Record<string, unknown> = {},
+  keyId = 'key-1',
+) =>
   ({
     getOrThrow: (k: string) =>
       ({
         AUTH_JWT_ISSUER: 'test-issuer',
-        AUTH_JWT_KEY_ID: 'key-1',
+        AUTH_JWT_AUDIENCE: 'test-audience',
+        AUTH_JWT_KEY_ID: keyId,
         AUTH_JWT_SIGNING_SEED: seed,
         AUTH_ACCESS_TOKEN_TTL_SECONDS: 900,
       })[k],
+    get: (k: string) => extra[k],
   }) as unknown as ConfigService;
 const b64 = (o: unknown) =>
   Buffer.from(JSON.stringify(o)).toString('base64url');
@@ -25,6 +31,7 @@ async function signRaw(
   payload: Record<string, unknown>,
   issuer: string,
   subject?: string,
+  opts: { typ?: string | null; aud?: string; kid?: string } = {},
 ): Promise<string> {
   const sodium = await getSodium();
   const B64 = sodium.base64_variants.URLSAFE_NO_PADDING;
@@ -40,8 +47,14 @@ async function signRaw(
     },
     'EdDSA',
   );
+  const header: Record<string, unknown> = {
+    alg: 'EdDSA',
+    kid: opts.kid ?? 'key-1',
+  };
+  if (opts.typ !== null) header.typ = opts.typ ?? 'at+jwt';
   const jwt = new SignJWT(payload)
-    .setProtectedHeader({ alg: 'EdDSA', kid: 'key-1' })
+    .setProtectedHeader(header as { alg: string })
+    .setAudience(opts.aud ?? 'test-audience')
     .setIssuer(issuer)
     .setIssuedAt(1792843200)
     .setExpirationTime(1792844100);
@@ -162,6 +175,96 @@ describe('JoseAccessTokenService', () => {
     );
     await expect(svc.verify(token, now)).rejects.toMatchObject({
       code: 'invalid-access-token',
+    });
+  });
+
+  it('puts typ at+jwt in the header and the configured aud in the payload', async () => {
+    const { token } = await svc.issue(claims, now);
+    expect(decodeProtectedHeader(token)).toMatchObject({ typ: 'at+jwt' });
+    expect(decodeJwt(token).aud).toBe('test-audience');
+  });
+
+  it.each([null, 'JWT', 'jwt'])('rejects typ %s', async (typ) => {
+    const token = await signRaw(
+      SEED_A,
+      { sid: claims.sessionId },
+      'test-issuer',
+      claims.userId,
+      { typ },
+    );
+    await expect(svc.verify(token, now)).rejects.toMatchObject({
+      code: 'invalid-access-token',
+    });
+  });
+
+  it('rejects another audience', async () => {
+    const token = await signRaw(
+      SEED_A,
+      { sid: claims.sessionId },
+      'test-issuer',
+      claims.userId,
+      { aud: 'other-audience' },
+    );
+    await expect(svc.verify(token, now)).rejects.toMatchObject({
+      code: 'invalid-access-token',
+    });
+  });
+
+  it('accepts a correctly typed token built by hand', async () => {
+    const token = await signRaw(
+      SEED_A,
+      { sid: claims.sessionId },
+      'test-issuer',
+      claims.userId,
+    );
+    await expect(svc.verify(token, now)).resolves.toEqual(claims);
+  });
+
+  describe('key rotation', () => {
+    const oldSeed = SEED_B;
+    const rotating = (previous: string) =>
+      new JoseAccessTokenService(
+        config(SEED_A, { AUTH_JWT_PREVIOUS_KEYS: previous }, 'key-2'),
+      );
+
+    it('accepts a token signed by a previous key listed in AUTH_JWT_PREVIOUS_KEYS', async () => {
+      const old = new JoseAccessTokenService(config(oldSeed, {}, 'key-1'));
+      await old.onModuleInit();
+      const { token } = await old.issue(claims, now);
+      const next = rotating(`key-1:${oldSeed}`);
+      await next.onModuleInit();
+      await expect(next.verify(token, now)).resolves.toEqual(claims);
+    });
+
+    it('rejects the same token once the kid leaves the list', async () => {
+      const old = new JoseAccessTokenService(config(oldSeed, {}, 'key-1'));
+      await old.onModuleInit();
+      const { token } = await old.issue(claims, now);
+      const next = rotating('');
+      await next.onModuleInit();
+      await expect(next.verify(token, now)).rejects.toMatchObject({
+        code: 'invalid-access-token',
+      });
+    });
+
+    it('rejects an unknown kid even when the signature is valid for another key', async () => {
+      const token = await signRaw(
+        SEED_A,
+        { sid: claims.sessionId },
+        'test-issuer',
+        claims.userId,
+        { kid: 'ghost' },
+      );
+      await expect(svc.verify(token, now)).rejects.toMatchObject({
+        code: 'invalid-access-token',
+      });
+    });
+
+    it('signs with the current key id', async () => {
+      const next = rotating(`key-1:${oldSeed}`);
+      await next.onModuleInit();
+      const { token } = await next.issue(claims, now);
+      expect(decodeProtectedHeader(token).kid).toBe('key-2');
     });
   });
 

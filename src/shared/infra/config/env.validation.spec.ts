@@ -14,6 +14,7 @@ function validConfig(): Record<string, unknown> {
     PROBLEM_TYPE_BASE_URL: 'https://errors.example.invalid',
     API_DOCS_TITLE: 'API',
     AUTH_JWT_ISSUER: 'http://localhost:3000',
+    AUTH_JWT_AUDIENCE: 'http://localhost:3000',
     AUTH_JWT_KEY_ID: 'dev-1',
     AUTH_JWT_SIGNING_SEED: seed,
     IDENTITY_DECOY_SALT_KEY: seed,
@@ -57,5 +58,40 @@ describe('validateEnv', () => {
     expect(() => validateEnv({ ...validConfig(), DB_PORT: 'abc' })).toThrow(
       /DB_PORT/,
     );
+  });
+
+  it('rejects missing or empty AUTH_JWT_AUDIENCE', () => {
+    const config = validConfig();
+    delete config.AUTH_JWT_AUDIENCE;
+    expect(() => validateEnv(config)).toThrow(/AUTH_JWT_AUDIENCE/);
+    expect(() =>
+      validateEnv({ ...validConfig(), AUTH_JWT_AUDIENCE: '' }),
+    ).toThrow(/AUTH_JWT_AUDIENCE/);
+  });
+
+  it('accepts absent, empty or well-formed AUTH_JWT_PREVIOUS_KEYS', () => {
+    expect(() => validateEnv(validConfig())).not.toThrow();
+    expect(() =>
+      validateEnv({ ...validConfig(), AUTH_JWT_PREVIOUS_KEYS: '' }),
+    ).not.toThrow();
+    expect(() =>
+      validateEnv({
+        ...validConfig(),
+        AUTH_JWT_PREVIOUS_KEYS: `old-1:${seed},old-2:${'B'.repeat(42)}A`,
+      }),
+    ).not.toThrow();
+  });
+
+  it.each([
+    ['no colon', 'old-1'],
+    ['short seed', 'old-1:short'],
+    ['empty kid', `:${seed}`],
+    ['trailing comma', `old-1:${seed},`],
+    ['duplicate kid', `old-1:${seed},old-1:${seed}`],
+    ['kid equal to the current key id', `dev-1:${seed}`],
+  ])('rejects malformed AUTH_JWT_PREVIOUS_KEYS (%s)', (_name, value) => {
+    expect(() =>
+      validateEnv({ ...validConfig(), AUTH_JWT_PREVIOUS_KEYS: value }),
+    ).toThrow(/AUTH_JWT_PREVIOUS_KEYS/);
   });
 });

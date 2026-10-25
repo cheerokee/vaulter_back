@@ -12,11 +12,41 @@ import {
   Matches,
   Max,
   Min,
+  Validate,
   validateSync,
+  ValidatorConstraint,
+  type ValidationArguments,
+  type ValidatorConstraintInterface,
 } from 'class-validator';
 
 // 32 bytes em base64url sem padding = 43 caracteres, e o último só pode ter 4 bits úteis.
 const BASE64URL_32_BYTES = /^[A-Za-z0-9_-]{42}[AEIMQUYcgkosw048]$/;
+
+const PREVIOUS_KEY_ITEM = /^([^:,\s]+):([A-Za-z0-9_-]{42}[AEIMQUYcgkosw048])$/;
+
+/** `kid:seed[,kid:seed...]` — kids distinct from each other and from AUTH_JWT_KEY_ID. */
+@ValidatorConstraint({ name: 'previousJwtKeys', async: false })
+class PreviousJwtKeysConstraint implements ValidatorConstraintInterface {
+  validate(value: unknown, args: ValidationArguments): boolean {
+    if (value === undefined || value === '') return true;
+    if (typeof value !== 'string') return false;
+    const currentKid = (args.object as { AUTH_JWT_KEY_ID?: unknown })
+      .AUTH_JWT_KEY_ID;
+    const kids = new Set<string>();
+    for (const item of value.split(',')) {
+      const match = PREVIOUS_KEY_ITEM.exec(item);
+      if (!match) return false;
+      const kid = match[1]!;
+      if (kid === currentKid || kids.has(kid)) return false;
+      kids.add(kid);
+    }
+    return true;
+  }
+
+  defaultMessage(): string {
+    return 'AUTH_JWT_PREVIOUS_KEYS must be kid:seed[,kid:seed...], each seed 32 bytes base64url, kids distinct and different from AUTH_JWT_KEY_ID';
+  }
+}
 
 const toBoolean = ({ value }: { value: unknown }): unknown => {
   if (value === 'true' || value === true) return true;
@@ -96,7 +126,15 @@ export class EnvironmentVariables {
 
   @IsString()
   @IsNotEmpty()
+  AUTH_JWT_AUDIENCE!: string;
+
+  @IsString()
+  @IsNotEmpty()
   AUTH_JWT_KEY_ID!: string;
+
+  @IsOptional()
+  @Validate(PreviousJwtKeysConstraint)
+  AUTH_JWT_PREVIOUS_KEYS?: string;
 
   @Matches(BASE64URL_32_BYTES, {
     message:
