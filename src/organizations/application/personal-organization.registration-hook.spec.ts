@@ -1,6 +1,7 @@
 import {
   ConflictError,
   DomainValidationError,
+  NotFoundError,
 } from '../../shared/domain/errors.js';
 import type { RegistrationHooks } from '../../shared/application/registration-hooks.js';
 import {
@@ -138,6 +139,46 @@ describe('PersonalOrganizationRegistrationHook', () => {
     expect(out).toEqual({ invitation: { accepted: false } });
     expect(kit.mocks.memberships.add).not.toHaveBeenCalled();
     expect(kit.mocks.invitations.markAccepted).not.toHaveBeenCalled();
+  });
+
+  const realHook = () =>
+    new PersonalOrganizationRegistrationHook(
+      hooks as unknown as RegistrationHooks,
+      createOrganization as unknown as CreateOrganizationUseCase,
+      new AcceptInvitationUseCase(
+        kit.deps.codec,
+        kit.deps.invitations,
+        kit.deps.orgs,
+        kit.deps.memberships,
+        kit.deps.roles,
+        kit.deps.directory,
+        kit.deps.audit,
+        kit.deps.uow,
+        kit.deps.access,
+        kit.deps.invitationHooks,
+      ),
+    );
+
+  it('with the real accept use case and onAccepted throwing a domain error -> accepted:false (the savepoint undoes the accept)', async () => {
+    kit.mocks.invitations.findByTokenHash.mockResolvedValue(makeInvitation());
+    kit.mocks.invitationHooks.onAccepted.mockRejectedValue(
+      new NotFoundError('space-not-found', 'gone'),
+    );
+    const out = await realHook().onRegistered({ ...ctx, inviteToken: TOKEN });
+    expect(out).toEqual({ invitation: { accepted: false } });
+    expect(kit.mocks.invitationHooks.onAccepted).toHaveBeenCalled();
+    // acceptAs runs in its own uow.run (a SAVEPOINT inside the registration transaction).
+    expect(kit.mocks.uow.run).toHaveBeenCalled();
+  });
+
+  it('with the real accept use case and onAccepted throwing a generic error -> propagates', async () => {
+    kit.mocks.invitations.findByTokenHash.mockResolvedValue(makeInvitation());
+    kit.mocks.invitationHooks.onAccepted.mockRejectedValue(
+      new Error('db down'),
+    );
+    await expect(
+      realHook().onRegistered({ ...ctx, inviteToken: TOKEN }),
+    ).rejects.toThrow('db down');
   });
 
   it('unexpected errors propagate (the whole registration is undone)', async () => {

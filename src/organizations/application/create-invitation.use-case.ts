@@ -49,17 +49,18 @@ export class CreateInvitationUseCase {
   ): Promise<{ invitation: InvitationView; token: string }> {
     const spaces = input.spaces ?? [];
     return this.uow.run(async () => {
+      await this.access.requirePermission(
+        orgId,
+        actor.userId,
+        'org.members.manage',
+      );
+      // Depois da permissão: quem não pode convidar recebe 403, sem saber nada da validação do payload.
       if (new Set(spaces.map((s) => s.spaceId)).size !== spaces.length) {
         throw new DomainValidationError(
           'duplicate-space',
           'A space can appear only once in an invitation.',
         );
       }
-      await this.access.requirePermission(
-        orgId,
-        actor.userId,
-        'org.members.manage',
-      );
       const org = await loadOrganization(this.orgs, orgId);
       SeatPolicy.assertSeatAvailable(
         await this.memberships.countActive(orgId),

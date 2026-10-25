@@ -28,6 +28,13 @@ describe('OrganizationDirectory', () => {
     );
   });
 
+  it('isActiveMember: a malformed userId is false without querying (no 22P02)', async () => {
+    await expect(directory().isActiveMember(ORG_ID, 'nope')).resolves.toBe(
+      false,
+    );
+    expect(kit.mocks.memberships.find).not.toHaveBeenCalled();
+  });
+
   it('recoveryPublicKey: null without a key or for an unknown org, the key otherwise', async () => {
     await expect(directory().recoveryPublicKey(ORG_ID)).resolves.toBeNull();
     kit.setOrganization(makeOrganization({ recoveryPublicKey: 'pk-abc' }));

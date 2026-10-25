@@ -160,6 +160,19 @@ describe('CreateInvitationUseCase', () => {
       });
       expect(m.invitations.create).not.toHaveBeenCalled();
     });
+
+    it('duplicate spaceId from someone without permission -> 403 first (permission checked before the payload)', async () => {
+      await expect(
+        useCase().execute(actor(MEMBER), ORG_ID, {
+          roleKey: 'org_member',
+          spaces: [
+            { spaceId: SPACE_A, roleKey: 'space_reader' },
+            { spaceId: SPACE_A, roleKey: 'space_editor' },
+          ],
+        }),
+      ).rejects.toBeInstanceOf(PermissionDeniedError);
+      expect(m.invitations.create).not.toHaveBeenCalled();
+    });
   });
 
   it('checks the seat limit with the active member count', async () => {
