@@ -43,7 +43,7 @@ async function masterKey(
   const sodium = await getSodium();
   return sodium.crypto_pwhash(
     32,
-    password,
+    password.normalize('NFC'),
     salt,
     params.opsLimit,
     params.memLimitBytes,
@@ -51,19 +51,27 @@ async function masterKey(
   );
 }
 
-async function wrap(
-  privateKey: Uint8Array,
+/** Both subkeys from the master key. The encryption key never leaves the device. */
+export async function deriveKeys(
   password: string,
   salt: Uint8Array,
   params: KdfParams,
-) {
+): Promise<{ authProof: Uint8Array; encKey: Uint8Array }> {
   const sodium = await getSodium();
   const master = await masterKey(password, salt, params);
-  const authProof = sodium.crypto_kdf_derive_from_key(32, 1, CONTEXT, master);
-  const encKey = sodium.crypto_kdf_derive_from_key(32, 2, CONTEXT, master);
-  const nonce = sodium.randombytes_buf(
-    sodium.crypto_aead_xchacha20poly1305_ietf_NPUBBYTES,
-  );
+  return {
+    authProof: sodium.crypto_kdf_derive_from_key(32, 1, CONTEXT, master),
+    encKey: sodium.crypto_kdf_derive_from_key(32, 2, CONTEXT, master),
+  };
+}
+
+/** 0x01 || nonce(24) || AEAD(privateKey, ad = 0x01) -> 73 bytes. */
+export async function sealPrivateKey(
+  privateKey: Uint8Array,
+  encKey: Uint8Array,
+  nonce: Uint8Array,
+): Promise<Uint8Array> {
+  const sodium = await getSodium();
   const version = new Uint8Array([FORMAT_VERSION]);
   const cipher = sodium.crypto_aead_xchacha20poly1305_ietf_encrypt(
     privateKey,
@@ -76,6 +84,21 @@ async function wrap(
   blob.set(version, 0);
   blob.set(nonce, 1);
   blob.set(cipher, 1 + nonce.length);
+  return blob;
+}
+
+async function wrap(
+  privateKey: Uint8Array,
+  password: string,
+  salt: Uint8Array,
+  params: KdfParams,
+) {
+  const sodium = await getSodium();
+  const { authProof, encKey } = await deriveKeys(password, salt, params);
+  const nonce = sodium.randombytes_buf(
+    sodium.crypto_aead_xchacha20poly1305_ietf_NPUBBYTES,
+  );
+  const blob = await sealPrivateKey(privateKey, encKey, nonce);
   return {
     kdfSalt: await b64(salt),
     kdfParams: params,
@@ -104,9 +127,12 @@ export async function deriveAuthProof(
   kdfSalt: string,
   kdfParams: KdfParams,
 ): Promise<string> {
-  const sodium = await getSodium();
-  const master = await masterKey(password, await fromB64(kdfSalt), kdfParams);
-  return b64(sodium.crypto_kdf_derive_from_key(32, 1, CONTEXT, master));
+  const { authProof } = await deriveKeys(
+    password,
+    await fromB64(kdfSalt),
+    kdfParams,
+  );
+  return b64(authProof);
 }
 
 /** Throws when the password is wrong or the blob is malformed. */
@@ -122,8 +148,11 @@ export async function openPrivateKey(
     throw new Error('unsupported key format version');
   }
   const nonceLength = sodium.crypto_aead_xchacha20poly1305_ietf_NPUBBYTES;
-  const master = await masterKey(password, await fromB64(kdfSalt), kdfParams);
-  const encKey = sodium.crypto_kdf_derive_from_key(32, 2, CONTEXT, master);
+  const { encKey } = await deriveKeys(
+    password,
+    await fromB64(kdfSalt),
+    kdfParams,
+  );
   return sodium.crypto_aead_xchacha20poly1305_ietf_decrypt(
     null,
     blob.slice(1 + nonceLength),
@@ -137,6 +166,7 @@ export async function openPrivateKey(
 export async function rewrapPrivateKey(
   privateKey: Uint8Array,
   newPassword: string,
+  kdfParams: KdfParams = TEST_KDF_PARAMS,
 ): Promise<{
   kdfSalt: string;
   kdfParams: KdfParams;
@@ -145,5 +175,5 @@ export async function rewrapPrivateKey(
 }> {
   const sodium = await getSodium();
   const salt = sodium.randombytes_buf(sodium.crypto_pwhash_SALTBYTES);
-  return wrap(privateKey, newPassword, salt, TEST_KDF_PARAMS);
+  return wrap(privateKey, newPassword, salt, kdfParams);
 }
