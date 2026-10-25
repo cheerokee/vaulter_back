@@ -76,12 +76,53 @@ export function filterPublicDocument(doc: OpenAPIObject): OpenAPIObject {
     Object.entries(allSchemas).filter(([name]) => reached.has(name)),
   );
 
-  return {
-    ...doc,
-    paths,
-    components: { ...doc.components, schemas },
-  };
+  // Operações mantidas, para decidir tags e segurança.
+  const operations = Object.values(paths).flatMap((item) =>
+    Object.entries(item)
+      .filter(([key]) => (HTTP_METHODS as readonly string[]).includes(key))
+      .map(([, op]) => op as OperationInfo),
+  );
+
+  const usedTags = new Set(operations.flatMap((op) => op.tags ?? []));
+  const keptDocSecurity =
+    doc.security &&
+    operations.length > 0 &&
+    operations.every((op) => (op.security?.length ?? 0) > 0)
+      ? doc.security
+      : undefined;
+
+  const usedSchemes = new Set<string>();
+  for (const requirement of [
+    ...operations.flatMap((op) => op.security ?? []),
+    ...(keptDocSecurity ?? []),
+  ]) {
+    for (const name of Object.keys(requirement)) usedSchemes.add(name);
+  }
+  const securitySchemes = Object.fromEntries(
+    Object.entries(doc.components?.securitySchemes ?? {}).filter(([name]) =>
+      usedSchemes.has(name),
+    ),
+  );
+
+  // Allowlist: só schemas alcançáveis e securitySchemes usados; o resto é descartado.
+  const components: NonNullable<OpenAPIObject['components']> = {};
+  if (Object.keys(schemas).length > 0) components.schemas = schemas;
+  if (Object.keys(securitySchemes).length > 0) {
+    components.securitySchemes = securitySchemes;
+  }
+
+  const { tags: _tags, security: _security, ...rest } = doc;
+  const out: OpenAPIObject = { ...rest, paths, components };
+  const tags = (doc.tags ?? []).filter((t) => usedTags.has(t.name));
+  if (tags.length > 0) out.tags = tags;
+  if (keptDocSecurity) out.security = keptDocSecurity;
+  return out;
 }
+
+type OperationInfo = {
+  tags?: string[];
+  security?: Record<string, unknown>[];
+};
 
 export function setupSwagger(
   app: INestApplication,
@@ -92,21 +133,23 @@ export function setupSwagger(
     config.get<boolean | string>('API_DOCS_INTERNAL_ENABLED') ?? false,
   );
 
-  const document = SwaggerModule.createDocument(
-    app,
-    new DocumentBuilder()
-      .setTitle(title)
-      .setVersion('1')
-      .addBearerAuth()
-      .build(),
+  const baseConfig = () =>
+    new DocumentBuilder().setTitle(title).setVersion('1');
+  // O esquema bearer só existe no documento interno.
+  const publicDocument = filterPublicDocument(
+    SwaggerModule.createDocument(app, baseConfig().build()),
   );
 
   // O público vem primeiro para '/docs/public' não ser capturado por '/docs'.
-  SwaggerModule.setup('docs/public', app, filterPublicDocument(document), {
+  SwaggerModule.setup('docs/public', app, publicDocument, {
     jsonDocumentUrl: 'docs/public/json',
     yamlDocumentUrl: 'docs/public/yaml',
   });
   if (internalEnabled) {
+    const document = SwaggerModule.createDocument(
+      app,
+      baseConfig().addBearerAuth().build(),
+    );
     SwaggerModule.setup('docs', app, document, {
       jsonDocumentUrl: 'docs/json',
       yamlDocumentUrl: 'docs/yaml',

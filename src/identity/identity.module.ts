@@ -28,12 +28,14 @@ import { UserTypeormEntity } from './infra/db/user.entity.js';
 import { UserTypeormRepository } from './infra/db/user.typeorm-repository.js';
 import { AccessTokenGuard } from './infra/http/access-token.guard.js';
 import { AuthController } from './infra/http/auth.controller.js';
+import { MeController } from './infra/http/me.controller.js';
+import { SessionsController } from './infra/http/sessions.controller.js';
 
 @Module({
   imports: [
     TypeOrmModule.forFeature([UserTypeormEntity, UserSessionTypeormEntity]),
   ],
-  controllers: [AuthController],
+  controllers: [AuthController, SessionsController, MeController],
   providers: [
     { provide: APP_GUARD, useClass: AccessTokenGuard },
     { provide: UserRepository, useClass: UserTypeormRepository },

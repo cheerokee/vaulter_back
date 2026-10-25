@@ -39,6 +39,30 @@ describe('Swagger documents (e2e)', () => {
       expect(paths.filter((p) => p.startsWith(prefix))).toEqual([]);
     }
   });
+
+  it('lists the identity routes in the internal document only', async () => {
+    const internal = await request(app.getHttpServer())
+      .get('/docs/json')
+      .expect(200);
+    const internalPaths = Object.keys(
+      internal.body.paths as Record<string, unknown>,
+    );
+    for (const path of ['/auth/login', '/sessions', '/me']) {
+      expect(internalPaths).toContain(path);
+    }
+    expect(internal.body.components.securitySchemes).toBeDefined();
+
+    const pub = await request(app.getHttpServer())
+      .get('/docs/public/json')
+      .expect(200);
+    const publicPaths = Object.keys(pub.body.paths as Record<string, unknown>);
+    for (const path of ['/auth/login', '/sessions', '/me']) {
+      expect(publicPaths).not.toContain(path);
+    }
+    expect(pub.body.components?.securitySchemes).toBeUndefined();
+    expect(pub.body.security).toBeUndefined();
+    expect(JSON.stringify(pub.body)).not.toContain('bearer');
+  });
 });
 
 // O ConfigModule lê o ambiente uma vez, ao importar o AppModule; por isso aqui
