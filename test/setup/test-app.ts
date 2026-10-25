@@ -5,7 +5,6 @@ import { Test } from '@nestjs/testing';
 import { DataSource } from 'typeorm';
 import { AppModule } from '../../src/app.module.js';
 import { configureApp } from '../../src/shared/infra/http/configure-app.js';
-import { seedRbacCatalog } from '../../src/database/rbac-catalog-seed.js';
 import { typeOrmOptions } from '../../src/database/typeorm.options.js';
 
 let admin: DataSource | undefined;
@@ -51,6 +50,16 @@ export async function adminDataSource(): Promise<DataSource> {
   return admin;
 }
 
+// Catálogo RBAC é dado de migration: o reset o guarda antes de truncar e o repõe igual (mesmos ids) depois.
+// Ordem respeita as FKs; de roles só voltam os papéis de fábrica.
+const CATALOG_TABLES: [table: string, where: string][] = [
+  ['permissions', 'true'],
+  ['permission_dependency', 'true'],
+  ['roles', '"organization_id" IS NULL'],
+  ['role_permission', 'true'],
+];
+let catalogSnapshot: Record<string, unknown[]> | undefined;
+
 // Esvazia todas as tabelas, exceto o histórico de migrations, e repõe o catálogo RBAC.
 export async function resetDatabase(): Promise<void> {
   const ds = await adminDataSource();
@@ -58,8 +67,22 @@ export async function resetDatabase(): Promise<void> {
     `SELECT tablename FROM pg_tables WHERE schemaname = 'public' AND tablename <> 'migrations'`,
   );
   if (tables.length === 0) return;
-  const list = tables.map((t) => `"${t.tablename}"`).join(', ');
+  const names = new Set(tables.map((t) => t.tablename));
+  const catalog = CATALOG_TABLES.filter(([t]) => names.has(t));
+  if (!catalogSnapshot) {
+    catalogSnapshot = {};
+    for (const [t, where] of catalog) {
+      catalogSnapshot[t] = await ds.query(
+        `SELECT * FROM "${t}" WHERE ${where}`,
+      );
+    }
+  }
+  const list = [...names].map((t) => `"${t}"`).join(', ');
   await ds.query(`TRUNCATE ${list} RESTART IDENTITY CASCADE`);
-  // O catálogo RBAC é dado de migration: volta com os mesmos ids após o reset.
-  if (list.includes('"permissions"')) await seedRbacCatalog(ds);
+  for (const [t] of catalog) {
+    await ds.query(
+      `INSERT INTO "${t}" SELECT * FROM jsonb_populate_recordset(null::"${t}", $1::jsonb)`,
+      [JSON.stringify(catalogSnapshot[t])],
+    );
+  }
 }

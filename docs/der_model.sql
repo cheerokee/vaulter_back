@@ -387,6 +387,9 @@ CREATE TABLE roles (
   permissions_reviewed_at DATETIME NULL,
   sync_version BIGINT NOT NULL COMMENT 'versão de sincronização: sequência global do servidor, muda a cada insert/update/exclusão',
   PRIMARY KEY (id),
+  -- No Postgres são dois índices únicos parciais (o MySQL não expressa índice parcial):
+  --   uq_roles_factory_key (`key`) WHERE organization_id IS NULL            -- papel de fábrica, key única
+  --   uq_roles_organization_key (organization_id, `key`) WHERE organization_id IS NOT NULL
   UNIQUE INDEX uq_roles_organization_key (organization_id, `key`),
   INDEX fk_roles_copied_from_idx (copied_from_role_id),
   CONSTRAINT fk_roles_organizations FOREIGN KEY (organization_id) REFERENCES organizations (id),
