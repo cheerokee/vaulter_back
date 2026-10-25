@@ -28,6 +28,10 @@ describe('scrubSensitive', () => {
         'kdf_params',
         'password',
         'set-cookie',
+        'refreshTokenHash',
+        'refresh_token_hash',
+        'secret',
+        'token',
       ]),
     );
   });

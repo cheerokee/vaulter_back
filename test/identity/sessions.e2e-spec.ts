@@ -170,5 +170,9 @@ describe('Sessions endpoints (e2e)', () => {
       .set(c.bearer(reg.body.session.accessToken))
       .expect(422);
     expect(res.headers['content-type']).toContain('application/problem+json');
+    expect(res.body.type).toMatch(/\/validation-failed$/);
+    expect(res.body.errors).toEqual([
+      { field: 'id', messages: [expect.any(String)] },
+    ]);
   }, 60_000);
 });

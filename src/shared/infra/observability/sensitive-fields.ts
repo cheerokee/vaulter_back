@@ -22,6 +22,9 @@ const BASE_KEYS = [
   'setCookie',
   'set-cookie',
   'password',
+  'refreshTokenHash',
+  'secret',
+  'token',
 ] as const;
 
 const toSnake = (k: string) =>

@@ -15,7 +15,15 @@ import {
 import { CursorPaginationQuery } from '../../../shared/infra/http/cursor-pagination.query.js';
 import { ListSessionsUseCase } from '../../application/list-sessions.use-case.js';
 import { RevokeSessionUseCase } from '../../application/revoke-session.use-case.js';
+import { RequestValidationError } from '../../../shared/infra/http/request-validation.error.js';
 import { SessionPageResponse } from './dto/session-view-response.dto.js';
+
+const SESSION_ID_PIPE = new ParseUUIDPipe({
+  exceptionFactory: () =>
+    new RequestValidationError([
+      { field: 'id', messages: ['id must be a UUID'] },
+    ]),
+});
 
 @ApiTags('sessions')
 @ApiBearerAuth()
@@ -42,7 +50,7 @@ export class SessionsController {
   @HttpCode(204)
   async doRevoke(
     @CurrentAuth() auth: AuthContext,
-    @Param('id', new ParseUUIDPipe({ errorHttpStatusCode: 422 })) id: string,
+    @Param('id', SESSION_ID_PIPE) id: string,
   ): Promise<void> {
     await this.revoke.execute(auth, id);
   }

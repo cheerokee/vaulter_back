@@ -4,6 +4,11 @@ const seed = 'A'.repeat(43);
 
 function validConfig(): Record<string, unknown> {
   return {
+    DB_HOST: 'localhost',
+    DB_PORT: '5432',
+    DB_USERNAME: 'vaulter',
+    DB_PASSWORD: 'vaulter',
+    DB_DATABASE: 'vaulter',
     DB_APP_USERNAME: 'vaulter_app',
     DB_APP_PASSWORD: 'vaulter_app',
     PROBLEM_TYPE_BASE_URL: 'https://errors.example.invalid',
@@ -37,5 +42,20 @@ describe('validateEnv', () => {
     expect(() =>
       validateEnv({ ...validConfig(), AUTH_JWT_SIGNING_SEED: 'A'.repeat(44) }),
     ).toThrow(/AUTH_JWT_SIGNING_SEED/);
+  });
+
+  it.each(['DB_HOST', 'DB_PORT', 'DB_USERNAME', 'DB_PASSWORD', 'DB_DATABASE'])(
+    'rejects missing %s',
+    (key) => {
+      const config = validConfig();
+      delete config[key];
+      expect(() => validateEnv(config)).toThrow(new RegExp(key));
+    },
+  );
+
+  it('rejects a non-integer DB_PORT', () => {
+    expect(() => validateEnv({ ...validConfig(), DB_PORT: 'abc' })).toThrow(
+      /DB_PORT/,
+    );
   });
 });
