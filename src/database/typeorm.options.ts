@@ -1,4 +1,5 @@
 import type { DataSourceOptions } from 'typeorm';
+import { SnakeNamingStrategy } from '../shared/infra/db/snake-naming.strategy.js';
 
 export type DatabaseRole = 'app' | 'migration';
 
@@ -16,6 +17,7 @@ export function typeOrmOptions(role: DatabaseRole): DataSourceOptions {
     password: isApp ? process.env.DB_APP_PASSWORD : process.env.DB_PASSWORD,
     database: process.env.DB_DATABASE,
     // Schema só muda via migrations.
+    namingStrategy: new SnakeNamingStrategy(),
     synchronize: false,
   };
 }
