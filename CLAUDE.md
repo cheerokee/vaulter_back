@@ -8,7 +8,7 @@ qualquer dev. Referências da sua máquina (caminhos, portas, credenciais, repos
 Responda sempre em português (pt-BR). Código, nomes de variáveis, logs e mensagens de commit seguem em inglês.
 
 ## O que é
-API backend do Vaulter, em **NestJS 12** + **TypeScript 6** (modo `strict`), rodando em **Node >= 20**
+API backend do Vaulter, em **NestJS 12** + **TypeScript 6** (modo `strict`), rodando em **Node >= 20** para a API compilada; os **testes exigem Node 24** (o worker do Argon2 roda como `.ts` com remoção de tipos nativa, Node >= 22.6/23.6)
 (o time usa Node 24). Repositório: `cheerokee/vaulter_back`.
 
 ## Comandos
@@ -59,7 +59,7 @@ npm run start:dev                    # dentro do container: API em live reload
 - O pgAdmin roda em modo desktop (sem login) e já abre com o servidor `vaulter-back` cadastrado
   (`.docker/pgadmin/servers.json`); só pede a senha do banco (`DB_PASSWORD`) na primeira conexão.
 - **Papel de runtime:** a API conecta como `DB_APP_USERNAME` (padrão `vaulter_app`; `NOSUPERUSER NOBYPASSRLS`,
-  membro de `app_runtime`, com `SELECT/INSERT/UPDATE` e **sem `DELETE`**), para o RLS valer de verdade. Migrations,
+  membro de `app_runtime`, com `SELECT/INSERT/UPDATE` e **sem `DELETE`**, exceto em `rate_limit_hits`, contador técnico — veja Rate limit), para o RLS valer de verdade. Migrations,
   CLI, testes e pgAdmin usam `DB_USERNAME` (o dono). O login é criado por `.docker/postgres/init/02-app-role.sh`
   (idempotente) na criação do banco; num banco já existente, rode uma vez:
   `docker exec vaulter-back-db sh /docker-entrypoint-initdb.d/02-app-role.sh`. As permissões ficam nas migrations.
@@ -283,7 +283,8 @@ Validadas na subida por `src/shared/infra/config/env.validation.ts` (faltou ou i
 | `AUTH_ACCESS_TOKEN_TTL_SECONDS` | validade do access token | `900` |
 | `AUTH_REFRESH_TOKEN_IDLE_DAYS` | inatividade máxima do refresh | `30` |
 | `IDENTITY_DECOY_SALT_KEY` | chave do salt falso do pré-login (32 bytes em base64url) — **segredo** | obrigatória |
-| `TRUST_PROXY` | confiança em `X-Forwarded-For`: `false`, `true`, nº de saltos ou lista de IPs/CIDRs; só ligar atrás de proxy conhecido | `false` |
+| `TRUST_PROXY` | confiança em `X-Forwarded-For`: `false`, nº de saltos ou lista de IPs/CIDRs (`true` só em dev; veja abaixo) | `false` |
+| `ARGON2_MAX_QUEUE` | fila máxima do pool do Argon2id; cheia, responde 503 (inteiro >= 1) | `threads × 64` |
 | `RATE_LIMIT_ENABLED` | liga o rate limit (os e2e rodam com `false`) | `true` |
 | `ARGON2_POOL_SIZE` | threads do pool do Argon2id (inteiro >= 1) | `min(4, núcleos)` |
 
@@ -322,20 +323,43 @@ Os valores do `.env.example` para os segredos são **só de desenvolvimento**; p
   health checks futuros devem usar `@SkipThrottle()`; o limite de 5/min por e-mail permite a um atacante
   bloquear o login de uma vítima por uma janela (trade-off aceito).
 
+## TRUST_PROXY (obrigatório atrás de proxy)
+- **Atrás de load balancer/proxy reverso, `TRUST_PROXY` é obrigatório**: o nº de saltos (`1`, `2`...) ou os CIDRs
+  do proxy.
+- `false` atrás de um LB faz **todos os clientes compartilharem um IP** (o do proxy): os limites por IP viram
+  globais (login: 10/min para todo mundo) e o `lastIp` das sessões fica inútil.
+- `true` ou `0.0.0.0/0` confiam em um `X-Forwarded-For` que o cliente controla: burlam os limites por IP e
+  falsificam o `lastIp`. **Nunca em produção.**
+- No boot, a API loga um WARN quando `NODE_ENV=production` com rate limit ligado e `TRUST_PROXY=false`, e quando
+  `TRUST_PROXY` é `true` ou um CIDR que casa tudo (`trustProxyWarnings`).
+
 ## Argon2id em worker threads
 - O Argon2id roda num pool de `worker_threads` (`ARGON2_POOL_SIZE`), fora do event loop. O arquivo do worker só
   pode usar TypeScript **apagável** (sem enums, namespaces ou parameter properties), pois é carregado sem o
-  passo de transformação do Nest. Cada hash ativo ocupa ~19 MiB: dimensione o pool pela memória do container.
+  passo de transformação do Nest. A fila é limitada (`ARGON2_MAX_QUEUE`, padrão `threads × 64`, ~1,6 s de
+  atraso): cheia, a requisição recebe 503 (`service-unavailable`) em vez de a fila crescer sem limite. O pool é
+  destruído em `onApplicationShutdown`, depois de o HTTP parar de aceitar. Cada hash ativo ocupa ~19 MiB: dimensione o pool pela memória do container.
 
 ## Rotação de segredos
-- **Semente do JWT (`AUTH_JWT_SIGNING_SEED`)**: mover o `kid:seed` atual para `AUTH_JWT_PREVIOUS_KEYS`, definir a
-  nova semente e um novo `AUTH_JWT_KEY_ID`, reiniciar. Manter a chave antiga por **pelo menos o TTL do access
-  token** (`AUTH_ACCESS_TOKEN_TTL_SECONDS`) e então removê-la de `AUTH_JWT_PREVIOUS_KEYS`.
+- **Semente do JWT (`AUTH_JWT_SIGNING_SEED`)**: rotação em **3 fases**, necessária com mais de uma instância
+  (senão uma instância já assina com a chave nova que as outras ainda não conhecem):
+  1. adicionar o `kid:seed` **novo** a `AUTH_JWT_PREVIOUS_KEYS` em todas as instâncias (só verifica) e fazer o deploy;
+  2. trocar a assinatura para a semente/`AUTH_JWT_KEY_ID` novos e mover o `kid:seed` **antigo** para
+     `AUTH_JWT_PREVIOUS_KEYS` (tirando o novo de lá); deploy. O validador recusa um `kid` anterior igual ao
+     `AUTH_JWT_KEY_ID`, por isso cada fase é consistente;
+  3. depois de **pelo menos o TTL do access token** (`AUTH_ACCESS_TOKEN_TTL_SECONDS`), remover a chave antiga.
 - **`IDENTITY_DECOY_SALT_KEY`**: trocar muda o salt falso de **todos** os e-mails inexistentes, e um atacante que
   observou o salt antigo percebe a diferença (limite aceito). Rotacionar raramente.
-- **Senha do login de runtime do banco**: atualizar `DB_APP_PASSWORD` e rodar de novo
-  `docker exec vaulter-back-db sh /docker-entrypoint-initdb.d/02-app-role.sh` (executa `ALTER ROLE ... PASSWORD`;
-  em produção, o equivalente no banco gerenciado), depois reiniciar a API.
+- **Senha do login de runtime do banco**: o `02-app-role.sh` lê `DB_APP_PASSWORD` do ambiente do container `db`,
+  fixado na criação dele — editar só o `.env` reaplicaria a senha **antiga**, sem avisar. Procedimento:
+  1. atualizar `DB_APP_PASSWORD` no `.env`;
+  2. `docker compose up -d db` (recria o container com o ambiente novo; os dados persistem);
+  3. `docker exec vaulter-back-db sh /docker-entrypoint-initdb.d/02-app-role.sh` (executa `ALTER ROLE ... PASSWORD`);
+  4. reiniciar a API.
+  Alternativa sem recriar o container: `docker exec -e DB_APP_PASSWORD=... vaulter-back-db sh /docker-entrypoint-initdb.d/02-app-role.sh`
+  (e atualizar o `.env` do mesmo jeito). **Atenção:** entre o `ALTER ROLE` e o restart da API, conexões novas do
+  pool falham. Em produção (banco gerenciado), usar duas fases (dois logins/ papel alternado, ou janela curta
+  de indisponibilidade combinada).
 
 ## Observabilidade
 - **Sentry** para erros e tracing — o mesmo nos três softwares (backend Nest, app Ionic, hub Python), para
