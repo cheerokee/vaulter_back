@@ -49,6 +49,7 @@ export function spaceSummaryResponse(v: SpaceSummaryView) {
     id: v.id,
     name: v.name,
     memberCount: v.memberCount,
+    recoveryRewrapRequired: v.recoveryRewrapRequired,
     createdAt: iso(v.createdAt),
   };
 }

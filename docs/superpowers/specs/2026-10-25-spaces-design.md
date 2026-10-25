@@ -176,6 +176,12 @@ segundo plano)
 - **No backend:** troca as `recovery_wrapped_key` e limpa a pendência.
 - **Escopo do backend:** ele só aceita isso de um membro do espaço e só para o kit **atual** da organização. A
   confirmação humana é tela do app.
+- **Antes de trocar o kit (revisão final):** o app do admin confere `GET /organizations/:orgId/spaces?all=true`,
+  cujos itens trazem `memberCount` (0 = órfão) e `recoveryRewrapRequired` (calculados numa consulta só, contra a
+  impressão do kit atual). Um espaço **órfão** cujas versões estão no kit atual precisa ser **reaberto antes** da
+  troca (ninguém dentro dele retranca, e depois da troca só a parte secreta do kit antigo abre as cópias), ou o kit
+  antigo deve ser guardado até todo espaço ser retrancado. Depois da troca, os espaços ainda no kit antigo aparecem
+  com `recoveryRewrapRequired = true`, e o admin acompanha por essa lista.
 
 **Pessoa entra na organização com espaços indicados no convite**
 - **No convite:** o convite da organização ganha `spaces: [{ spaceId, roleKey }]` opcional. Só pode indicar um
@@ -214,8 +220,9 @@ O convite (`POST /organizations/:id/invitations`) ganha `spaces` opcional.
   que não está no espaço também recebe 404 nos detalhes (decisão do Claude: ele gerencia a organização, não o
   espaço).
 - **Lista do admin:** um admin que quer ver **quais** espaços existem na organização (sem ler) usa
-  `GET /organizations/:orgId/spaces?all=true`, que devolve só nome, número de membros e data, com `org.spaces.create`
-  (decisão do Claude, spec §3: "vê quanto cada espaço ocupa").
+  `GET /organizations/:orgId/spaces?all=true`, que devolve só nome, número de membros (0 = órfão),
+  `recoveryRewrapRequired` e data, com `org.spaces.create` (decisão do Claude, spec §3: "vê quanto cada espaço
+  ocupa"; a flag entrou na revisão final, para a troca de kit não perder espaços órfãos).
 
 ## 8. Restrições técnicas
 

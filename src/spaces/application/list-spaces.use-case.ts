@@ -13,7 +13,8 @@ export type ListSpacesInput = { all: boolean; page: CursorPageRequest };
 
 // Sem `all`: os espaços da organização em que eu estou (membro da org), com meu papel e as flags; a contagem de
 // pendências de trancar só aparece para Gestor. Com `all` (org.spaces.create): todos os espaços, só com id,
-// nome, número de membros e data — nada de chave nem de papel.
+// nome, número de membros (0 = órfão), "retrancar pendente" e data — nada de chave nem de papel. O app confere
+// essa lista antes de trocar o kit da organização (veja CLAUDE.md, módulo spaces).
 @Injectable()
 export class ListSpacesUseCase {
   constructor(
@@ -57,13 +58,15 @@ export class ListSpacesUseCase {
       actor.userId,
       'org.spaces.create',
     );
-    const result = await this.spaces.listAll(orgId, page);
+    const fingerprint = await this.kit.currentFingerprint(orgId);
+    const result = await this.spaces.listAll(orgId, fingerprint, page);
     return {
-      items: result.items.map(({ space, memberCount }) => ({
-        id: space.id,
-        name: space.name,
-        memberCount,
-        createdAt: space.createdAt ?? null,
+      items: result.items.map((item) => ({
+        id: item.space.id,
+        name: item.space.name,
+        memberCount: item.memberCount,
+        recoveryRewrapRequired: item.recoveryRewrapRequired,
+        createdAt: item.space.createdAt ?? null,
       })),
       nextCursor: result.nextCursor,
     };

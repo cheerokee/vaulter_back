@@ -334,6 +334,11 @@ exportam); nenhum dos dois importa `spaces`.
     (`RATE_LIMITS.spaceKeyRotation`) — senão um Leitor inflaria as versões além de `MAX_KEY_VERSIONS`;
   - **retrancar** (`rewrap`) regrava o kit da organização para todas as versões quando o kit muda, com a impressão
     do kit informada (`RecoveryKit`; 409 `recovery-key-changed` se divergir);
+  - **antes de trocar o kit da organização**, o app confere `GET /organizations/:orgId/spaces?all=true` (itens com
+    `memberCount` e `recoveryRewrapRequired`): espaço **órfão** (`memberCount = 0`) com versões no kit atual precisa
+    ser **reaberto antes** (ninguém dentro dele retranca; com o kit novo, a cópia do kit antigo não abre mais), ou o
+    kit antigo deve ser guardado até todo espaço ser retrancado. Depois da troca, quem ainda está no kit antigo
+    aparece com `recoveryRewrapRequired`;
   - **órfão** (nenhum membro com papel): só um admin com `org.members.manage` reabre, **pelo kit**, em dois passos
     com reautenticação: `POST /spaces/:id/recover/copies` devolve as cópias do kit de todas as versões
     (`recoveryWrappedKey` + impressão; auditado `space.recovery_copies_read`, sem as cópias), o app abre com a parte

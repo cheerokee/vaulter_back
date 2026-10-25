@@ -231,7 +231,9 @@ describe('spaces repositories (e2e, app role)', () => {
         await pending.listPending(orgB.id, space.id, { limit: 10 }),
       ).toEqual({ items: [], nextCursor: null });
       expect(await intents.forInvitation(orgB.id, inv.id)).toEqual([]);
-      expect((await spaces.listAll(orgB.id, { limit: 10 })).items).toEqual([]);
+      expect(
+        (await spaces.listAll(orgB.id, FP_OLD, { limit: 10 })).items,
+      ).toEqual([]);
       // Os da A continuam lá.
       expect((await spaces.findById(orgA.id, space.id))?.name).toBe('Manuais');
     });
@@ -655,7 +657,7 @@ describe('spaces repositories (e2e, app role)', () => {
       ).toEqual([]);
     });
 
-    it('listAll: every space of the organization with the active member count', async () => {
+    it('listAll: every space of the organization with the active member count and the rewrap flag', async () => {
       const ana = await makeUser('ana@x.com');
       const bob = await makeUser('bob@x.com');
       const org = await makeOrg('A', [ana], [bob]);
@@ -664,12 +666,32 @@ describe('spaces repositories (e2e, app role)', () => {
       ]);
       const { space: s2 } = await makeSpace(org.id, bob, [], 'Vendas');
       await spaceRoles.remove(org.id, s2.id, bob);
-      const page = await spaces.listAll(org.id, { limit: 10 });
-      expect(page.items.map((i) => [i.space.id, i.memberCount])).toEqual([
-        [s1.id, 2],
-        [s2.id, 0],
+      const row = (i: {
+        space: { id: string };
+        memberCount: number;
+        recoveryRewrapRequired: boolean;
+      }) => [i.space.id, i.memberCount, i.recoveryRewrapRequired];
+      const page = await spaces.listAll(org.id, FP_OLD, { limit: 10 });
+      expect(page.items.map(row)).toEqual([
+        [s1.id, 2, false],
+        [s2.id, 0, false],
       ]);
-      const p1 = await spaces.listAll(org.id, { limit: 1 });
+      // the kit changed: both still on the old one; s1 rewrapped -> only s2 (orphan) flagged
+      await keys.setRecoveryWrap(org.id, s1.id, 1, 'rw', FP_NEW);
+      expect(
+        (await spaces.listAll(org.id, FP_NEW, { limit: 10 })).items.map(row),
+      ).toEqual([
+        [s1.id, 2, false],
+        [s2.id, 0, true],
+      ]);
+      // no kit: nothing can be rewrapped
+      expect(
+        (await spaces.listAll(org.id, null, { limit: 10 })).items.map(row),
+      ).toEqual([
+        [s1.id, 2, false],
+        [s2.id, 0, false],
+      ]);
+      const p1 = await spaces.listAll(org.id, FP_OLD, { limit: 1 });
       expect(p1.nextCursor).not.toBeNull();
     });
 

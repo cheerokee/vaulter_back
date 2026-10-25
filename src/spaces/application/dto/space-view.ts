@@ -25,11 +25,14 @@ export type SpaceListItemView = Omit<SpaceView, 'updatedAt'> & {
   pendingGrants?: number;
 };
 
-/** An item of `?all=true` (org.spaces.create): no role, no flags, nothing about keys. */
+/** An item of `?all=true` (org.spaces.create): no role and no key material. */
 export type SpaceSummaryView = {
   id: string;
   name: string;
+  /** Active members; 0 = orphan (only an admin can reopen it with the kit). */
   memberCount: number;
+  /** Some version is still wrapped for a previous kit (false when the organization has no kit). */
+  recoveryRewrapRequired: boolean;
   createdAt: Date | null;
 };
 

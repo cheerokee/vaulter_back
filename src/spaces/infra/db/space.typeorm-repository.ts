@@ -125,29 +125,40 @@ export class SpaceTypeormRepository extends SpaceRepository {
     return toCursorPage(items, rows.length > page.limit, (i) => i.space.id);
   }
 
+  // Uma consulta: membros ativos (0 = órfão) e "retrancar pendente" com a mesma regra de listForMember. É o que
+  // o admin confere antes de trocar o kit: órfão no kit atual precisa ser reaberto antes (ninguém dentro retranca).
   async listAll(
     orgId: string,
+    currentKitFingerprint: string | null,
     page: CursorPageRequest,
   ): Promise<CursorPage<SpaceSummary>> {
     const cursor = page.cursor ? decodeCursor(page.cursor) : null;
-    const rows: (SpaceRow & { member_count: number })[] =
-      await runInOrganizationScope(this.dataSource, orgId, (m) =>
-        m.query(
-          `SELECT s.*,
-                  (SELECT count(*)::int FROM role_assignments ra
-                    WHERE ra.space_id = s.id AND ra.organization_id = s.organization_id
-                      AND ra.scope_type = 'space' AND ra.deleted_at IS NULL) AS member_count
-             FROM spaces s
-            WHERE s.organization_id = $1 AND s.deleted_at IS NULL
-              AND ($2::uuid IS NULL OR s.id > $2::uuid)
-            ORDER BY s.id ASC
-            LIMIT $3`,
-          [orgId, cursor, page.limit + 1],
-        ),
-      );
+    const rows: (SpaceRow & {
+      member_count: number;
+      recovery_rewrap_required: boolean;
+    })[] = await runInOrganizationScope(this.dataSource, orgId, (m) =>
+      m.query(
+        `SELECT s.*,
+                (SELECT count(*)::int FROM role_assignments ra
+                  WHERE ra.space_id = s.id AND ra.organization_id = s.organization_id
+                    AND ra.scope_type = 'space' AND ra.deleted_at IS NULL) AS member_count,
+                ($2::text IS NOT NULL AND EXISTS (
+                  SELECT 1 FROM space_keys k
+                   WHERE k.space_id = s.id AND k.organization_id = s.organization_id
+                     AND k.deleted_at IS NULL AND k.recovery_key_fingerprint <> $2::text
+                )) AS recovery_rewrap_required
+           FROM spaces s
+          WHERE s.organization_id = $1 AND s.deleted_at IS NULL
+            AND ($3::uuid IS NULL OR s.id > $3::uuid)
+          ORDER BY s.id ASC
+          LIMIT $4`,
+        [orgId, currentKitFingerprint, cursor, page.limit + 1],
+      ),
+    );
     const items = rows.slice(0, page.limit).map((row) => ({
       space: SpaceMapper.fromRow(row),
       memberCount: row.member_count,
+      recoveryRewrapRequired: row.recovery_rewrap_required,
     }));
     return toCursorPage(items, rows.length > page.limit, (i) => i.space.id);
   }

@@ -362,7 +362,13 @@ describe('Spaces endpoints (e2e)', () => {
       all.body.items as { id: string; memberCount: number }[]
     ).find((i) => i.id === a.spaceId)!;
     expect(Object.keys(itemA).sort()).toEqual(
-      ['createdAt', 'id', 'memberCount', 'name'].sort(),
+      [
+        'createdAt',
+        'id',
+        'memberCount',
+        'name',
+        'recoveryRewrapRequired',
+      ].sort(),
     );
     expect(itemA.memberCount).toBe(2);
 

@@ -213,9 +213,15 @@ describe('ListSpacesUseCase', () => {
     );
   });
 
-  it('all: needs org.spaces.create and returns only id, name, memberCount and createdAt', async () => {
+  it('all: needs org.spaces.create; id, name, memberCount, recoveryRewrapRequired (current kit) and createdAt', async () => {
     m.spaces.listAll.mockResolvedValue({
-      items: [{ space: kit.spacesById.get(SPACE_ID)!, memberCount: 3 }],
+      items: [
+        {
+          space: kit.spacesById.get(SPACE_ID)!,
+          memberCount: 3,
+          recoveryRewrapRequired: true,
+        },
+      ],
       nextCursor: null,
     });
     const page = await useCase().execute(actor(ADMIN), ORG_ID, {
@@ -227,9 +233,13 @@ describe('ListSpacesUseCase', () => {
         id: SPACE_ID,
         name: 'Manuais',
         memberCount: 3,
+        recoveryRewrapRequired: true,
         createdAt: new Date('2026-10-01T00:00:00Z'),
       },
     ]);
+    expect(m.spaces.listAll).toHaveBeenCalledWith(ORG_ID, fp(KIT_PK), {
+      limit: 10,
+    });
     await expect(
       useCase().execute(actor(MANAGER), ORG_ID, {
         all: true,

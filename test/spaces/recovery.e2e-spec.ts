@@ -188,6 +188,74 @@ describe('Space recovery kit, orphan spaces and managers (e2e)', () => {
     );
   });
 
+  it('?all=true shows admins the rewrap state after a kit swap: a space not yet rewrapped and an orphan (memberCount 0)', async () => {
+    const { orgId, kit, spaceId, keys } = await setup('Kit Swap');
+    await expectStatus(
+      s.addMember(owner.token, spaceId, recipientOf(ana), keys),
+      201,
+    );
+    const orphan = await s.create(owner, orgId, kit.publicKey, 'Lost');
+    expect(orphan.res.status).toBe(201);
+    await c
+      .http()
+      .post(`/spaces/${orphan.spaceId}/leave`)
+      .set(h(owner))
+      .expect(204);
+    const listAll = async () => {
+      const res = await c
+        .http()
+        .get(`/organizations/${orgId}/spaces?all=true`)
+        .set(h(admin2))
+        .expect(200);
+      return res.body.items as Record<string, unknown>[];
+    };
+    const before = await listAll();
+    expect(before).toEqual([
+      {
+        id: spaceId,
+        name: 'Kit Swap',
+        memberCount: 2,
+        recoveryRewrapRequired: false,
+        createdAt: expect.any(String),
+      },
+      {
+        id: orphan.spaceId,
+        name: 'Lost',
+        memberCount: 0,
+        recoveryRewrapRequired: false,
+        createdAt: expect.any(String),
+      },
+    ]);
+
+    const kit2 = await recoveryKitKeypair();
+    await s.setRecoveryKit(owner, orgId, kit2.publicKey).expect(204);
+    const swapped = await listAll();
+    expect(
+      swapped.map((i) => [i.id, i.memberCount, i.recoveryRewrapRequired]),
+    ).toEqual([
+      [spaceId, 2, true],
+      [orphan.spaceId, 0, true],
+    ]);
+
+    // a member rewraps their space; the orphan stays flagged (nobody inside can rewrap it)
+    await expectStatus(
+      s.rewrapRecovery(ana.token, spaceId, kit2.publicKey, keys),
+      200,
+    );
+    expect(
+      (await listAll()).map((i) => [i.id, i.recoveryRewrapRequired]),
+    ).toEqual([
+      [spaceId, false],
+      [orphan.spaceId, true],
+    ]);
+    // a plain org member cannot list all (403)
+    await c
+      .http()
+      .get(`/organizations/${orgId}/spaces?all=true`)
+      .set(h(bia))
+      .expect(403);
+  });
+
   it('recover: a space with members is not orphan (409); an orphan reopens with the kit, reauthenticated and audited', async () => {
     const { orgId, kit, spaceId, keys } = await setup('Orphan');
     await expectStatus(

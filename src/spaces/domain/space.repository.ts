@@ -21,7 +21,10 @@ export type SpaceListItem = {
 
 export type SpaceSummary = {
   space: Space;
+  /** Active members (0 = orphan). */
   memberCount: number;
+  /** Same rule as in SpaceListItem: some version still on a previous kit (false without a kit). */
+  recoveryRewrapRequired: boolean;
 };
 
 /** Every method takes `orgId` first: it sets the RLS context and scopes the query. */
@@ -41,9 +44,13 @@ export abstract class SpaceRepository {
     currentKitFingerprint: string | null,
     page: CursorPageRequest,
   ): Promise<CursorPage<SpaceListItem>>;
-  /** Every space of the organization, with the active member count (needs `org.spaces.create`). */
+  /**
+   * Every space of the organization, with the active member count and the rewrap flag against the current kit
+   * (needs `org.spaces.create`). One query.
+   */
   abstract listAll(
     orgId: string,
+    currentKitFingerprint: string | null,
     page: CursorPageRequest,
   ): Promise<CursorPage<SpaceSummary>>;
 }
