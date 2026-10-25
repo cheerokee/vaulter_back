@@ -32,3 +32,28 @@ export async function dropSyncVersionTrigger(
   await qr.query(`DROP INDEX IF EXISTS "ix_${table}_sync_version"`);
   await qr.query(`ALTER TABLE "${table}" DROP COLUMN IF EXISTS "sync_version"`);
 }
+
+const ORG_SETTING = `NULLIF(current_setting('app.organization_id', true), '')::uuid`;
+
+// Isolamento por organização: sem `app.organization_id` na transação, nenhuma linha é visível nem gravável.
+// FORCE vale também para o dono da tabela (exceto superusuário, que sempre ignora RLS).
+export async function enableOrganizationRls(
+  qr: QueryRunner,
+  table: string,
+): Promise<void> {
+  await qr.query(`ALTER TABLE "${table}" ENABLE ROW LEVEL SECURITY`);
+  await qr.query(`ALTER TABLE "${table}" FORCE ROW LEVEL SECURITY`);
+  await qr.query(
+    `CREATE POLICY "org_isolation" ON "${table}" ` +
+      `USING (organization_id = ${ORG_SETTING}) WITH CHECK (organization_id = ${ORG_SETTING})`,
+  );
+}
+
+export async function disableOrganizationRls(
+  qr: QueryRunner,
+  table: string,
+): Promise<void> {
+  await qr.query(`DROP POLICY IF EXISTS "org_isolation" ON "${table}"`);
+  await qr.query(`ALTER TABLE "${table}" NO FORCE ROW LEVEL SECURITY`);
+  await qr.query(`ALTER TABLE "${table}" DISABLE ROW LEVEL SECURITY`);
+}
