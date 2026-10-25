@@ -231,7 +231,7 @@ src/organizations/
   application/   um use-case por arquivo; organization-access.ts (padrão para os outros módulos);
                  membership-guard.ts (lock + contexto de membro); audit-log.ts; invitation-errors.ts;
                  personal-organization.registration-hook.ts; ports/ (gerador/hash do token de convite)
-  infra/         db/ (entidades, mappers, repositórios), crypto/, http/ (3 controllers, dto/, uuid-pipes.ts)
+  infra/         db/ (entidades, mappers, repositórios), crypto/, http/ (3 controllers, dto/)
 ```
 - **Dependência em uma direção só: `organizations` -> `identity`**, e apenas por contratos exportados da
   `application/` do identity: `UserDirectory` (nome/e-mail/chave pública de usuários) e
@@ -315,6 +315,14 @@ exportam); nenhum dos dois importa `spaces`.
   `recovery-key-required`, kit diferente 409 `recovery-key-changed`; a impressão gravada vem da chave da organização.
 - **Ganchos:** `spaces.member-removed` (trava os espaços da pessoa, lápide em cópias e papéis, troca pendente,
   cancela pendências, audita) e `spaces.invitation` (só Gestor indica o espaço; no aceite vira pendência de trancar).
+- **HTTP** (`infra/http/`: `spaces`, `space-members` e `space-keys` controllers; rotas da spec §7, todas internas,
+  tag `spaces`): ids de caminho passam pelo `uuidPipe` (`src/shared/infra/http/uuid-pipe.ts`, 422
+  `validation-failed`); listas usam `pageResponse` (`cursor-pagination.query.ts`). Cópia trancada no DTO:
+  `^[A-Za-z0-9_-]{108}$`; chave do kit: 43 caracteres. A recusa de pendência é por id
+  (`DELETE /spaces/:id/pending-grants/:pendingGrantId`); `POST /spaces/:id/recover` usa `@ThrottleReauth()`.
+- **e2e com a cripto real do cliente:** os helpers de espaço ficam em `test/support/identity-client.ts`
+  (`c.spaces`: criar com kit, pôr membro selando todas as versões, trocar a chave, retrancar, abrir as cópias) e
+  as invariantes de banco em `test/support/spaces-db.ts`. Não duplicar nos specs.
 
 ## Banco de dados (TypeORM + migrations)
 - **TypeORM 1.x** + `@nestjs/typeorm`, driver `pg`. Config de conexão em `src/database/typeorm.options.ts`,

@@ -21,7 +21,7 @@ import { ListMembersUseCase } from '../../application/list-members.use-case.js';
 import { RemoveMemberUseCase } from '../../application/remove-member.use-case.js';
 import { ChangeMemberRoleDto } from './dto/member.dto.js';
 import { memberResponse, pageResponse } from './dto/responses.js';
-import { uuidPipe } from './uuid-pipes.js';
+import { uuidPipe } from '../../../shared/infra/http/uuid-pipe.js';
 
 @ApiTags('organizations')
 @ApiBearerAuth()

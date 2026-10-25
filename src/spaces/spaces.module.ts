@@ -41,6 +41,9 @@ import { SpacePendingGrantTypeormEntity } from './infra/db/space-pending-grant.e
 import { SpaceRoleTypeormRepository } from './infra/db/space-role.typeorm-repository.js';
 import { SpaceTypeormEntity } from './infra/db/space.entity.js';
 import { SpaceTypeormRepository } from './infra/db/space.typeorm-repository.js';
+import { SpaceKeysController } from './infra/http/space-keys.controller.js';
+import { SpaceMembersController } from './infra/http/space-members.controller.js';
+import { SpacesController } from './infra/http/spaces.controller.js';
 
 @Module({
   imports: [
@@ -55,6 +58,7 @@ import { SpaceTypeormRepository } from './infra/db/space.typeorm-repository.js';
       InvitationSpaceIntentTypeormEntity,
     ]),
   ],
+  controllers: [SpacesController, SpaceMembersController, SpaceKeysController],
   providers: [
     { provide: SpaceRepository, useClass: SpaceTypeormRepository },
     { provide: SpaceKeyRepository, useClass: SpaceKeyTypeormRepository },

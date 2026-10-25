@@ -1,5 +1,5 @@
 import { ParseUUIDPipe } from '@nestjs/common';
-import { RequestValidationError } from '../../../shared/infra/http/request-validation.error.js';
+import { RequestValidationError } from './request-validation.error.js';
 
 export const uuidPipe = (field: string) =>
   new ParseUUIDPipe({

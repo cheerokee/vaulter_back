@@ -135,7 +135,7 @@ describe('rate limiting (e2e)', () => {
     expect(Number(res.headers['retry-after'])).toBeGreaterThan(60);
   }, 60_000);
 
-  it('shares one per-user reauthentication budget (5 per 15 min) between recovery-key and password', async () => {
+  it('shares one per-user reauthentication budget (5 per 15 min) between recovery-key, password and space recovery', async () => {
     const user = await c.signUp(account, 'reauth@example.com');
     const org = (await c.createOrg(user.token).expect(201)).body.id as string;
     const wrong = await createClientAccount('not the right password');
@@ -171,9 +171,17 @@ describe('rate limiting (e2e)', () => {
       `SELECT hits FROM rate_limit_hits WHERE key LIKE 'reauth:%'`,
     );
     expect(rows).toEqual([{ hits: 5 }]);
+    const recoverSpace = (ip: string) =>
+      c
+        .http()
+        .post('/spaces/0190f3c0-0000-7000-8000-000000000000/recover')
+        .set(c.bearer(user.token))
+        .set('X-Forwarded-For', ip)
+        .send({});
     for (const res of [
       await recoveryKey('198.51.100.80'),
       await password('198.51.100.81'),
+      await recoverSpace('198.51.100.82'),
     ]) {
       expect(res.status).toBe(429);
       expect(res.body.type).toMatch(/\/too-many-requests$/);

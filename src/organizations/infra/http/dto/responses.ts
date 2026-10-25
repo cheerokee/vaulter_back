@@ -1,4 +1,3 @@
-import type { CursorPage } from '../../../../shared/domain/pagination.js';
 import type { InvitationView } from '../../../application/dto/invitation-view.js';
 import type { MemberView } from '../../../application/dto/member-view.js';
 import type { OrganizationView } from '../../../application/dto/organization-view.js';
@@ -41,9 +40,4 @@ export function invitationResponse(v: InvitationView) {
   };
 }
 
-export function pageResponse<T, R>(
-  page: CursorPage<T>,
-  map: (item: T) => R,
-): { items: R[]; nextCursor: string | null } {
-  return { items: page.items.map(map), nextCursor: page.nextCursor };
-}
+export { pageResponse } from '../../../../shared/infra/http/cursor-pagination.query.js';

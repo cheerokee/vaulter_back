@@ -28,7 +28,7 @@ import {
   UpdateOrganizationDto,
 } from './dto/organization.dto.js';
 import { organizationResponse, pageResponse } from './dto/responses.js';
-import { uuidPipe } from './uuid-pipes.js';
+import { uuidPipe } from '../../../shared/infra/http/uuid-pipe.js';
 
 @ApiTags('organizations')
 @ApiBearerAuth()

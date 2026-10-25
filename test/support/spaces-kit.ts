@@ -395,7 +395,7 @@ export function makeSpaceKit() {
     pending.markGranted.mockImplementation(async () =>
       tag('pending.markGranted'),
     );
-    pending.decline.mockResolvedValue(true);
+    pending.decline.mockResolvedValue(OUTSIDER);
     pending.countPending.mockResolvedValue(0);
     pending.cancelForUser.mockResolvedValue(0);
     pending.listPending.mockResolvedValue({ items: [], nextCursor: null });

@@ -27,7 +27,7 @@ import {
   InvitationTokenDto,
 } from './dto/invitation.dto.js';
 import { invitationResponse, pageResponse } from './dto/responses.js';
-import { uuidPipe } from './uuid-pipes.js';
+import { uuidPipe } from '../../../shared/infra/http/uuid-pipe.js';
 
 @ApiTags('organizations')
 @Controller()
