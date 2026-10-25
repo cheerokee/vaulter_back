@@ -4,6 +4,7 @@ import {
   ValidationPipe,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { setupSwagger } from './swagger.js';
 import { ProblemDetailsFilter } from './problem-details.filter.js';
 import {
   type InvalidField,
@@ -24,8 +25,8 @@ function flatten(errors: ValidationError[], prefix = ''): InvalidField[] {
 
 // Único lugar que liga pipe e filtro globais; usado por main.ts e pelos e2e.
 export function configureApp(app: INestApplication): void {
-  const baseUrl = app
-    .get(ConfigService)
+  const config = app.get(ConfigService);
+  const baseUrl = config
     .getOrThrow<string>('PROBLEM_TYPE_BASE_URL')
     .replace(/\/$/, '');
   app.useGlobalPipes(
@@ -37,4 +38,5 @@ export function configureApp(app: INestApplication): void {
     }),
   );
   app.useGlobalFilters(new ProblemDetailsFilter(baseUrl));
+  setupSwagger(app, config);
 }
