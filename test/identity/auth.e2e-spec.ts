@@ -1,7 +1,11 @@
 import type { INestApplication } from '@nestjs/common';
 import request from 'supertest';
 import { AccessTokenService } from '../../src/identity/application/ports/access-token-service.js';
-import { createTestApp, resetDatabase } from '../setup/test-app.js';
+import {
+  adminDataSource,
+  createTestApp,
+  resetDatabase,
+} from '../setup/test-app.js';
 import {
   type ClientAccount,
   createClientAccount,
@@ -135,29 +139,34 @@ describe('Auth endpoints (e2e)', () => {
 
   describe('malformed key material', () => {
     const b64 = (bytes: Buffer) => bytes.toString('base64url');
-    const cases: [string, Record<string, unknown>][] = [
+    const cases: [string, Record<string, unknown>, string][] = [
       [
         'encryptedPrivateKey with padding',
-        { encryptedPrivateKey: account_blob() + '=' },
+        { encryptedPrivateKey: b64(Buffer.alloc(73, 1)) + '=' },
+        // '=' is outside the base64url alphabet, so the DTO rejects it before the domain does.
+        'validation-failed',
       ],
       [
         'encryptedPrivateKey with version 0x02',
         { encryptedPrivateKey: b64(Buffer.alloc(73, 2)) },
+        'encrypted-private-key-invalid',
       ],
       [
         'kdfParams with an extra key',
         { kdfParams: { ...TEST_KDF_PARAMS, extra: 1 } },
+        'kdf-params-invalid',
       ],
-      ['publicKey of 31 bytes', { publicKey: b64(Buffer.alloc(31, 1)) }],
+      [
+        'publicKey of 31 bytes',
+        { publicKey: b64(Buffer.alloc(31, 1)) },
+        'public-key-invalid',
+      ],
     ];
-    // Placeholder replaced in beforeAll-independent form below.
-    function account_blob(): string {
-      return b64(Buffer.alloc(73, 1));
-    }
 
-    it.each(cases)('%s → 422, never 500', async (_label, over) => {
+    it.each(cases)('%s → 422 with its stable type', async (_l, over, type) => {
       const res = await register('bad@example.com', over);
       expect(res.status).toBe(422);
+      expect(res.body.type).toMatch(new RegExp(`/${type}$`));
       expect(res.headers['content-type']).toContain('application/problem+json');
     });
 
@@ -177,6 +186,60 @@ describe('Auth endpoints (e2e)', () => {
         'name',
       );
     });
+  });
+
+  describe('device is required', () => {
+    const loginBody = (device?: unknown) => ({
+      email: 'flow@example.com',
+      authProof: account.authProof,
+      ...(device === undefined ? {} : { device }),
+    });
+
+    it.each([
+      ['missing', undefined],
+      ['an array', []],
+      ['an array with an object', [DEVICE]],
+    ])(
+      'register with device %s → 422 listing device, no user created',
+      async (_l, device) => {
+        const body: Record<string, unknown> = registerBody(
+          'nodevice@example.com',
+        );
+        if (device === undefined) delete body.device;
+        else body.device = device;
+        const res = await http().post('/auth/register').send(body).expect(422);
+        expect(
+          res.body.errors.map((e: { field: string }) => e.field),
+        ).toContain('device');
+        const ds = await adminDataSource();
+        const rows = await ds.query('SELECT 1 FROM users WHERE email = $1', [
+          'nodevice@example.com',
+        ]);
+        expect(rows).toHaveLength(0);
+      },
+    );
+
+    it.each([
+      ['missing', undefined],
+      ['an array', []],
+    ])('login with device %s → 422 listing device', async (_l, device) => {
+      const res = await http()
+        .post('/auth/login')
+        .send(loginBody(device))
+        .expect(422);
+      expect(res.body.errors.map((e: { field: string }) => e.field)).toContain(
+        'device',
+      );
+    });
+  });
+
+  it('malformed JSON → 400 problem+json, never 500', async () => {
+    const res = await http()
+      .post('/auth/prelogin')
+      .set('Content-Type', 'application/json')
+      .send('{"email": ')
+      .expect(400);
+    expect(res.headers['content-type']).toContain('application/problem+json');
   });
 
   it('rejects unknown body fields with 422', async () => {
@@ -271,6 +334,11 @@ describe('Auth endpoints (e2e)', () => {
         .set('Authorization', `Basic ${reg.body.session.accessToken}`)
         .expect(401);
       expect(res.body.type).toMatch(/invalid-access-token$/);
+      // The scheme name is case-insensitive.
+      await http()
+        .post('/auth/logout')
+        .set('Authorization', `bearer ${reg.body.session.accessToken}`)
+        .expect(204);
     }, 60_000);
 
     it('keeps public routes and documents open without a token', async () => {

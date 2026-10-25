@@ -69,4 +69,38 @@ describe('Session', () => {
     expect(s.revokedReason).toBe('logout');
     expect(s.revokedAt).toEqual(now);
   });
+
+  it.each([
+    ['empty name', { name: '  ', platform: 'android' }],
+    ['name over 100', { name: 'x'.repeat(101), platform: 'android' }],
+    ['unknown platform', { name: 'Pixel', platform: 'beos' }],
+    ['missing platform', { name: 'Pixel' }],
+  ])('start rejects %s with device-invalid', (_l, device) => {
+    expect(() =>
+      Session.start({
+        userId: 'u1',
+        deviceName: device.name,
+        devicePlatform: device.platform as never,
+        refreshTokenHash: 'h1',
+        idleDays: 30,
+        now,
+        ip: null,
+        userAgent: null,
+      }),
+    ).toThrow(expect.objectContaining({ code: 'device-invalid' }));
+  });
+
+  it('start trims the device name', () => {
+    const s = Session.start({
+      userId: 'u1',
+      deviceName: '  Pixel ',
+      devicePlatform: 'android',
+      refreshTokenHash: 'h1',
+      idleDays: 30,
+      now,
+      ip: null,
+      userAgent: null,
+    });
+    expect(s.deviceName).toBe('Pixel');
+  });
 });

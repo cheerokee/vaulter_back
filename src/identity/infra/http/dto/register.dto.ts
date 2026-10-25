@@ -1,5 +1,6 @@
 import { Type } from 'class-transformer';
 import {
+  IsDefined,
   IsEmail,
   IsObject,
   IsString,
@@ -47,6 +48,8 @@ export class RegisterDto {
   @MaxLength(256)
   encryptedPrivateKey!: string;
 
+  @IsDefined()
+  @IsObject()
   @ValidateNested()
   @Type(() => DeviceDto)
   device!: DeviceDto;

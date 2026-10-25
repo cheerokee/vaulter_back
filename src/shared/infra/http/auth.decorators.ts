@@ -15,6 +15,11 @@ export const Public = (): MethodDecorator & ClassDecorator =>
 
 /** Injects the AuthContext the guard stored in `request.auth`. */
 export const CurrentAuth = createParamDecorator(
-  (_data: unknown, ctx: ExecutionContext): AuthContext =>
-    ctx.switchToHttp().getRequest<{ auth: AuthContext }>().auth,
+  (_data: unknown, ctx: ExecutionContext): AuthContext => {
+    const auth = ctx.switchToHttp().getRequest<{ auth?: AuthContext }>().auth;
+    // Reaching a handler without auth means the route is @Public or the guard is off: a bug.
+    if (!auth)
+      throw new Error('CurrentAuth used on a route without authentication');
+    return auth;
+  },
 );

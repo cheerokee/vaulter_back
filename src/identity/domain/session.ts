@@ -1,3 +1,4 @@
+import { DomainValidationError } from '../../shared/domain/errors.js';
 import { Entity } from '../../shared/domain/entity.js';
 
 export type DevicePlatform = 'android' | 'ios' | 'hub' | 'web' | 'other';
@@ -18,6 +19,32 @@ export type SessionProps = {
   createdAt?: Date;
 };
 
+const PLATFORMS: readonly string[] = ['android', 'ios', 'hub', 'web', 'other'];
+
+/** Validates the device that opens a session; returns the trimmed name. */
+export function assertDevice(device: unknown): {
+  name: string;
+  platform: DevicePlatform;
+} {
+  const d = device as { name?: unknown; platform?: unknown } | null;
+  const name = typeof d?.name === 'string' ? d.name.trim() : '';
+  if (
+    typeof device !== 'object' ||
+    device === null ||
+    Array.isArray(device) ||
+    name.length < 1 ||
+    name.length > 100 ||
+    typeof d?.platform !== 'string' ||
+    !PLATFORMS.includes(d.platform)
+  ) {
+    throw new DomainValidationError(
+      'device-invalid',
+      'The device name or platform is invalid.',
+    );
+  }
+  return { name, platform: d.platform as DevicePlatform };
+}
+
 const DAY_MS = 86_400_000;
 
 function addDays(now: Date, days: number): Date {
@@ -36,11 +63,15 @@ export class Session extends Entity<SessionProps> {
     ip: string | null;
     userAgent: string | null;
   }): Session {
+    const device = assertDevice({
+      name: input.deviceName,
+      platform: input.devicePlatform,
+    });
     return new Session(
       {
         userId: input.userId,
-        deviceName: input.deviceName,
-        devicePlatform: input.devicePlatform,
+        deviceName: device.name,
+        devicePlatform: device.platform,
         refreshTokenHash: input.refreshTokenHash,
         refreshExpiresAt: addDays(input.now, input.idleDays),
         lastUsedAt: input.now,

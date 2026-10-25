@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { assertAuthProof } from '../domain/crypto-material.js';
 import { UserRepository } from '../domain/user.repository.js';
+import { assertDevice } from '../domain/session.js';
 import { User } from '../domain/user.js';
 import { toLoginResult, type LoginResult } from './dto/login-result.js';
 import { AuthProofHasher } from './ports/auth-proof-hasher.js';
@@ -33,6 +34,7 @@ export class RegisterUserUseCase {
   async execute(input: RegisterUserInput): Promise<LoginResult> {
     // Validate everything before the (expensive) hash and before touching the repository.
     assertAuthProof(input.authProof);
+    assertDevice(input.device);
     User.validateRegistration(input);
 
     const now = new Date();

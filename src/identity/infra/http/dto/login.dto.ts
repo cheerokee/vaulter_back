@@ -1,6 +1,8 @@
 import { Type } from 'class-transformer';
 import {
+  IsDefined,
   IsEmail,
+  IsObject,
   IsString,
   Matches,
   MaxLength,
@@ -21,6 +23,8 @@ export class LoginDto {
   @MaxLength(256)
   authProof!: string;
 
+  @IsDefined()
+  @IsObject()
   @ValidateNested()
   @Type(() => DeviceDto)
   device!: DeviceDto;

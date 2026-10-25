@@ -167,12 +167,14 @@ export class ProblemDetailsFilter implements ExceptionFilter {
 
 function httpErrorStatus(exception: unknown): number | undefined {
   if (typeof exception !== 'object' || exception === null) return undefined;
-  const { status, statusCode, expose } = exception as {
+  const { status, statusCode, expose, type } = exception as {
     status?: unknown;
     statusCode?: unknown;
     expose?: unknown;
+    type?: unknown;
   };
   const value = typeof status === 'number' ? status : statusCode;
-  if (expose !== true || typeof value !== 'number') return undefined;
+  if (expose !== true || typeof type !== 'string' || typeof value !== 'number')
+    return undefined;
   return value >= 400 && value < 500 ? value : undefined;
 }

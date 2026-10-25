@@ -49,6 +49,13 @@ function run(exception: unknown, reqId: string | undefined = 'req-1') {
 }
 
 describe('ProblemDetailsFilter', () => {
+  it('does not trust an exposed error without a string type', () => {
+    const res = run(
+      Object.assign(new Error('x'), { status: 418, expose: true }),
+    );
+    expect(res.statusCode).toBe(500);
+  });
+
   it('maps exposed http-errors from body-parser (413) to problem+json, not 500', () => {
     const err = Object.assign(new Error('request entity too large'), {
       status: 413,

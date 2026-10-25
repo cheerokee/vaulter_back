@@ -11,7 +11,7 @@ import {
 } from '../../../shared/infra/http/auth.decorators.js';
 import { AuthenticateAccessTokenUseCase } from '../../application/authenticate-access-token.use-case.js';
 
-const BEARER = /^Bearer ([^\s]+)$/;
+const BEARER = /^Bearer ([^\s]+)$/i;
 
 @Injectable()
 export class AccessTokenGuard implements CanActivate {
