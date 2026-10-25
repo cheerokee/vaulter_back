@@ -8,6 +8,7 @@ import { DatabaseModule } from './database/database.module.js';
 import { SharedApplicationModule } from './shared/application/shared-application.module.js';
 import { IdentityModule } from './identity/identity.module.js';
 import { OrganizationsModule } from './organizations/organizations.module.js';
+import { SpacesModule } from './spaces/spaces.module.js';
 import { pinoHttpOptions } from './shared/infra/observability/logger.config.js';
 import { ThrottlingModule } from './shared/infra/http/throttling.module.js';
 import { validateEnv } from './shared/infra/config/env.validation.js';
@@ -26,6 +27,7 @@ import { validateEnv } from './shared/infra/config/env.validation.js';
     SharedApplicationModule,
     IdentityModule,
     OrganizationsModule,
+    SpacesModule,
     // Depois do IdentityModule: o guard de token precisa rodar antes do throttler.
     ThrottlingModule,
   ],

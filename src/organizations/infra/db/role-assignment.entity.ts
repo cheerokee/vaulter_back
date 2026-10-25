@@ -8,9 +8,10 @@ export type ApprovalStatus =
   'not_required' | 'pending' | 'approved' | 'rejected';
 
 // Completa como no DER. Quem: exatamente um de user_id / room_hub_id / app_installation_id. As colunas de
-// espaço, Hub e instalação já existem (nulas); as FKs para spaces, hubs e app_installations entram nas
-// migrations desses módulos. RLS por organization_id (hoje toda atribuição tem escopo de organização; quando
-// vierem as de espaço/Hub, a policy é revista) + leitura das próprias atribuições (`user_id = app.user_id`).
+// Hub e instalação já existem (nulas); as FKs para hubs e app_installations entram nas migrations desses
+// módulos (a de spaces entrou na CreateSpaces). RLS por organization_id, que vale também para as linhas de
+// espaço (elas levam organization_id: ck_role_assignments_space_scope) + leitura das próprias atribuições
+// (`user_id = app.user_id`). Uma atribuição de espaço ativa por pessoa em cada espaço.
 @Entity('role_assignments')
 @Check(
   'ck_role_assignments_scope_type',
@@ -28,6 +29,10 @@ export type ApprovalStatus =
   'ck_role_assignments_organization_scope',
   `"scope_type" <> 'organization' OR "organization_id" IS NOT NULL`,
 )
+@Check(
+  'ck_role_assignments_space_scope',
+  `"scope_type" <> 'space' OR ("space_id" IS NOT NULL AND "organization_id" IS NOT NULL)`,
+)
 @Index('ix_role_assignments_sync_version', ['syncVersion'])
 @Index('fk_role_assignments_roles_idx', ['roleId'])
 @Index('ix_role_assignments_user_scope', ['userId', 'scopeType'])
@@ -42,6 +47,10 @@ export type ApprovalStatus =
 @Index('uq_role_assignments_org_user', ['organizationId', 'userId'], {
   unique: true,
   where: `"scope_type" = 'organization' AND "deleted_at" IS NULL`,
+})
+@Index('uq_role_assignments_space_user', ['spaceId', 'userId'], {
+  unique: true,
+  where: `"scope_type" = 'space' AND "deleted_at" IS NULL`,
 })
 export class RoleAssignmentTypeormEntity extends SyncableTypeormEntity {
   @Column({ type: 'uuid' })
@@ -85,9 +94,16 @@ export class RoleAssignmentTypeormEntity extends SyncableTypeormEntity {
   })
   organization?: OrganizationTypeormEntity;
 
-  // FK para spaces: módulo de espaços.
   @Column({ type: 'uuid', nullable: true })
   spaceId!: string | null;
+
+  // Alvo por nome: um módulo não importa a infra/ do outro (o spaces depende do organizations, não o contrário).
+  @ManyToOne('SpaceTypeormEntity')
+  @JoinColumn({
+    name: 'space_id',
+    foreignKeyConstraintName: 'fk_role_assignments_spaces',
+  })
+  space?: { id: string };
 
   // FK para hubs: módulo de hubs.
   @Column({ type: 'uuid', nullable: true })

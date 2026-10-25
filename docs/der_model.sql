@@ -479,9 +479,12 @@ CREATE TABLE space_pending_grants (
   user_id CHAR(36) NOT NULL,
   role_id CHAR(36) NOT NULL,
   invitation_id CHAR(36) NULL,
-  requested_by_user_id CHAR(36) NOT NULL,
+  requested_by_user_id CHAR(36) NULL,
   status ENUM('pending', 'granted', 'declined', 'cancelled') NOT NULL DEFAULT 'pending',
   PRIMARY KEY (id),
+  -- No Postgres: uq_space_pending_grants_open (space_id, user_id) WHERE status = 'pending' AND deleted_at IS NULL
+  -- (uma pendência aberta por pessoa em cada espaço; as resolvidas ficam de histórico).
+  INDEX uq_space_pending_grants_open (space_id, user_id),
   INDEX fk_space_pending_grants_organizations_idx (organization_id),
   INDEX fk_space_pending_grants_spaces_idx (space_id),
   INDEX fk_space_pending_grants_users_idx (user_id),
@@ -507,6 +510,7 @@ CREATE TABLE invitation_space_intents (
   space_id CHAR(36) NOT NULL,
   role_id CHAR(36) NOT NULL,
   PRIMARY KEY (id),
+  UNIQUE INDEX uq_invitation_space_intents_invitation_space (invitation_id, space_id),
   INDEX fk_invitation_space_intents_organizations_idx (organization_id),
   INDEX fk_invitation_space_intents_invitations_idx (invitation_id),
   INDEX fk_invitation_space_intents_spaces_idx (space_id),
