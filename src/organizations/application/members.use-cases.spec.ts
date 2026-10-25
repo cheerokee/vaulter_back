@@ -31,10 +31,24 @@ beforeEach(() => {
 });
 afterEach(() => vi.useRealTimers());
 
-/** lockOrgAdmins must come first inside the unit of work, before the membership rules read anything. */
+/**
+ * Only the non-locking membership pre-check may precede lockOrgAdmins; the permission check and every other read
+ * happen after the lock (the authoritative, re-evaluated check).
+ */
 function expectLockFirst(): void {
-  expect(kit.trace[0]).toBe('roles.lockOrgAdmins');
+  expect(kit.trace.slice(0, 2)).toEqual([
+    'memberships.find',
+    'roles.lockOrgAdmins',
+  ]);
+  // the authoritative re-check runs under the lock: a second membership read after it
+  expect(kit.trace.indexOf('memberships.find', 2)).toBeGreaterThan(1);
+  expect(kit.trace.lastIndexOf('roles.permissionsOf')).not.toBe(0);
   expect(kit.trace.every((t) => !t.endsWith('@out'))).toBe(true);
+}
+
+/** A non-member is rejected by the pre-check, before any row lock. */
+function expectNoLockTaken(): void {
+  expect(m.roles.lockOrgAdmins).not.toHaveBeenCalled();
 }
 
 describe('ListMembersUseCase', () => {
@@ -194,6 +208,13 @@ describe('ChangeMemberRoleUseCase', () => {
     ).rejects.toBeInstanceOf(NotFoundError);
     expect(m.roles.assignOrgRole).not.toHaveBeenCalled();
   });
+
+  it('a non-member never takes the admin row locks', async () => {
+    await expect(
+      useCase().execute(actor(STRANGER), ORG_ID, ADMIN, 'org_member'),
+    ).rejects.toBeInstanceOf(NotFoundError);
+    expectNoLockTaken();
+  });
 });
 
 describe('RemoveMemberUseCase', () => {
@@ -250,6 +271,13 @@ describe('RemoveMemberUseCase', () => {
     ).rejects.toMatchObject({ code: 'member-not-found' });
     expect(m.memberships.remove).not.toHaveBeenCalled();
   });
+
+  it('a non-member never takes the admin row locks', async () => {
+    await expect(
+      useCase().execute(actor(STRANGER), ORG_ID, MEMBER),
+    ).rejects.toMatchObject({ code: 'organization-not-found' });
+    expectNoLockTaken();
+  });
 });
 
 describe('LeaveOrganizationUseCase', () => {
@@ -294,5 +322,12 @@ describe('LeaveOrganizationUseCase', () => {
       useCase().execute(actor(STRANGER), ORG_ID),
     ).rejects.toBeInstanceOf(NotFoundError);
     expect(m.memberships.remove).not.toHaveBeenCalled();
+  });
+
+  it('a non-member never takes the admin row locks', async () => {
+    await expect(
+      useCase().execute(actor(STRANGER), ORG_ID),
+    ).rejects.toBeInstanceOf(NotFoundError);
+    expectNoLockTaken();
   });
 });

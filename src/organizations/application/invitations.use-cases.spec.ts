@@ -317,6 +317,7 @@ describe('AcceptInvitationUseCase', () => {
     ['malformed token', 'bad', null],
     ['unknown token', TOKEN, null],
     ['revoked', TOKEN, makeInvitation({ status: 'revoked' })],
+    ['already accepted', TOKEN, makeInvitation({ status: 'accepted' })],
     ['expired', TOKEN, makeInvitation({ expiresAt: NOW })],
   ])('%s -> invitation-invalid', async (_label, token, invitation) => {
     m.invitations.findByTokenHash.mockResolvedValue(invitation);

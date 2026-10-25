@@ -7,10 +7,12 @@ import {
   NOW,
   STRANGER,
   TOKEN,
+  makeInvitation,
   makeKit,
 } from '../../../test/support/organizations-kit.js';
-import type { AcceptInvitationUseCase } from './accept-invitation.use-case.js';
+import { AcceptInvitationUseCase } from './accept-invitation.use-case.js';
 import type { CreateOrganizationUseCase } from './create-organization.use-case.js';
+import { SeatPolicy } from '../domain/seat-policy.js';
 import { PersonalOrganizationRegistrationHook } from './personal-organization.registration-hook.js';
 
 const kit = makeKit();
@@ -24,7 +26,6 @@ function makeHook() {
     hooks as unknown as RegistrationHooks,
     createOrganization as unknown as CreateOrganizationUseCase,
     acceptInvitation as unknown as AcceptInvitationUseCase,
-    kit.deps.uow,
   );
 }
 
@@ -62,26 +63,7 @@ describe('PersonalOrganizationRegistrationHook', () => {
     expect(out).toBeUndefined();
   });
 
-  it('accepts the invite with the new account e-mail inside a nested unit of work (savepoint)', async () => {
-    let depth = 0;
-    kit.mocks.uow.run.mockImplementation(
-      async (work: () => Promise<unknown>) => {
-        depth++;
-        try {
-          return await work();
-        } finally {
-          depth--;
-        }
-      },
-    );
-    acceptInvitation.acceptAs.mockImplementation(async () => {
-      expect(depth).toBeGreaterThanOrEqual(1);
-      return {
-        organizationId: 'o2',
-        roleKey: 'org_member',
-        alreadyMember: false,
-      };
-    });
+  it('accepts the invite with the new account e-mail', async () => {
     const out = await makeHook().onRegistered({ ...ctx, inviteToken: TOKEN });
     expect(acceptInvitation.acceptAs).toHaveBeenCalledWith(
       { userId: STRANGER, email: 'ana@x.com' },
@@ -105,26 +87,28 @@ describe('PersonalOrganizationRegistrationHook', () => {
     expect(createOrganization.createPersonal).toHaveBeenCalled();
   });
 
-  it('the failed attempt runs in its own nested unit of work, so it is rolled back alone', async () => {
-    const runs: string[] = [];
-    kit.mocks.uow.run.mockImplementation(
-      async (work: () => Promise<unknown>) => {
-        runs.push('open');
-        try {
-          const r = await work();
-          runs.push('release');
-          return r;
-        } catch (e) {
-          runs.push('rollback');
-          throw e;
-        }
-      },
+  it('with the real accept use case and a seat limit reached -> accepted:false, nothing joined', async () => {
+    vi.spyOn(SeatPolicy, 'seatLimit').mockReturnValue(2);
+    kit.mocks.invitations.findByTokenHash.mockResolvedValue(makeInvitation());
+    const real = new AcceptInvitationUseCase(
+      kit.deps.codec,
+      kit.deps.invitations,
+      kit.deps.orgs,
+      kit.deps.memberships,
+      kit.deps.roles,
+      kit.deps.directory,
+      kit.deps.audit,
+      kit.deps.uow,
     );
-    acceptInvitation.acceptAs.mockRejectedValue(
-      new DomainValidationError('invitation-invalid', 'x'),
+    const hook = new PersonalOrganizationRegistrationHook(
+      hooks as unknown as RegistrationHooks,
+      createOrganization as unknown as CreateOrganizationUseCase,
+      real,
     );
-    await makeHook().onRegistered({ ...ctx, inviteToken: TOKEN });
-    expect(runs).toContain('rollback');
+    const out = await hook.onRegistered({ ...ctx, inviteToken: TOKEN });
+    expect(out).toEqual({ invitation: { accepted: false } });
+    expect(kit.mocks.memberships.add).not.toHaveBeenCalled();
+    expect(kit.mocks.invitations.markAccepted).not.toHaveBeenCalled();
   });
 
   it('unexpected errors propagate (the whole registration is undone)', async () => {

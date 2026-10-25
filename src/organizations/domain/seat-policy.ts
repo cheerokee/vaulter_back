@@ -1,5 +1,7 @@
 import { ConflictError } from '../../shared/domain/errors.js';
 
+// TODO(limits): when plans get real seat limits, lock the organization row (SELECT ... FOR UPDATE) during
+// accept and create-invitation before counting, or concurrent requests can over-subscribe the seats.
 export const SeatPolicy = {
   /** Seats allowed by the plan; null = unlimited (every plan, for now). */
   seatLimit(plan: string): number | null {

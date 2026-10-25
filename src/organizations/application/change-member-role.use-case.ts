@@ -39,15 +39,15 @@ export class ChangeMemberRoleUseCase {
     }
     return this.uow.run(async () => {
       const { target, ctx } = await lockMembershipContext(
-        { orgs: this.orgs, memberships: this.memberships, roles: this.roles },
+        {
+          access: this.access,
+          orgs: this.orgs,
+          memberships: this.memberships,
+          roles: this.roles,
+        },
         orgId,
         userId,
-        () =>
-          this.access.requirePermission(
-            orgId,
-            actor.userId,
-            'org.members.manage',
-          ),
+        { userId: actor.userId, permission: 'org.members.manage' },
       );
       MembershipRules.assertCanChangeRole(target, roleKey, ctx);
       if (target.roleKey === roleKey) return { userId, roleKey };

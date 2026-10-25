@@ -23,10 +23,15 @@ export class LeaveOrganizationUseCase {
   execute(actor: Actor, orgId: string): Promise<void> {
     return this.uow.run(async () => {
       const { ctx } = await lockMembershipContext(
-        { orgs: this.orgs, memberships: this.memberships, roles: this.roles },
+        {
+          access: this.access,
+          orgs: this.orgs,
+          memberships: this.memberships,
+          roles: this.roles,
+        },
         orgId,
         actor.userId,
-        () => this.access.requireMember(orgId, actor.userId),
+        { userId: actor.userId },
       );
       MembershipRules.assertCanLeave(ctx);
       await this.memberships.remove(orgId, actor.userId);
