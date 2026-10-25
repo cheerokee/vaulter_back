@@ -406,26 +406,35 @@ describe('Auth endpoints (e2e)', () => {
       await register('hook-fail@example.com').expect(201);
     }, 60_000);
 
-    it('surfaces the hook result as invitation, only when present', async () => {
+    it('surfaces the hook result as invitation, only when present (real organizations hook)', async () => {
       const hooks = app.get(RegistrationHooks);
       let seen: string | undefined;
+      // Hook that only observes (returns nothing): the organizations hook owns `invitation`.
       hooks.register({
-        name: 'test-invite',
+        name: 'test-invite-spy',
         onRegistered: async (ctx) => {
           seen = ctx.inviteToken;
-          return ctx.inviteToken ? { invitation: { accepted: true } } : {};
         },
       });
       try {
+        // Well-formed for the DTO but unknown: registration goes on with accepted:false.
         const withToken = await register('hook-inv@example.com', {
           inviteToken: 'abc_DEF-123',
         }).expect(201);
         expect(seen).toBe('abc_DEF-123');
-        expect(withToken.body.invitation).toEqual({ accepted: true });
+        expect(withToken.body.invitation).toEqual({ accepted: false });
         const without = await register('hook-noinv@example.com').expect(201);
         expect('invitation' in without.body).toBe(false);
+        // Every registration gets its personal organization.
+        const ds = await adminDataSource();
+        const rows: { n: string }[] = await ds.query(
+          `SELECT count(*)::text AS n FROM organizations o
+             JOIN users u ON u.id = o.personal_owner_user_id
+            WHERE u.email IN ('hook-inv@example.com', 'hook-noinv@example.com') AND o.is_personal`,
+        );
+        expect(Number(rows[0]!.n)).toBe(2);
       } finally {
-        hooks.unregister('test-invite');
+        hooks.unregister('test-invite-spy');
       }
     }, 60_000);
 

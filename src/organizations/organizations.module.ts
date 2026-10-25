@@ -1,5 +1,25 @@
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
+import { IdentityModule } from '../identity/identity.module.js';
+import { AcceptInvitationUseCase } from './application/accept-invitation.use-case.js';
+import { AuditLog } from './application/audit-log.js';
+import { ChangeMemberRoleUseCase } from './application/change-member-role.use-case.js';
+import { CreateInvitationUseCase } from './application/create-invitation.use-case.js';
+import { CreateOrganizationUseCase } from './application/create-organization.use-case.js';
+import { GetOrganizationUseCase } from './application/get-organization.use-case.js';
+import { LeaveOrganizationUseCase } from './application/leave-organization.use-case.js';
+import { ListInvitationsUseCase } from './application/list-invitations.use-case.js';
+import { ListMembersUseCase } from './application/list-members.use-case.js';
+import { ListMyOrganizationsUseCase } from './application/list-my-organizations.use-case.js';
+import { OrganizationAccess } from './application/organization-access.js';
+import { PersonalOrganizationRegistrationHook } from './application/personal-organization.registration-hook.js';
+import { InvitationTokenCodec } from './application/ports/invitation-token-codec.js';
+import { PreviewInvitationUseCase } from './application/preview-invitation.use-case.js';
+import { RemoveMemberUseCase } from './application/remove-member.use-case.js';
+import { RevokeInvitationUseCase } from './application/revoke-invitation.use-case.js';
+import { SetRecoveryKeyUseCase } from './application/set-recovery-key.use-case.js';
+import { UpdateOrganizationUseCase } from './application/update-organization.use-case.js';
+import { SodiumInvitationTokenCodec } from './infra/crypto/sodium-invitation-token-codec.js';
 import { AuditLogRepository } from './domain/audit-log.repository.js';
 import { InvitationRepository } from './domain/invitation.repository.js';
 import { MembershipRepository } from './domain/membership.repository.js';
@@ -22,6 +42,8 @@ import { UserOrganizationTypeormEntity } from './infra/db/user-organization.enti
 
 @Module({
   imports: [
+    // Uma direção só: organizations usa o que o identity exporta (UserDirectory, CurrentAuthProofVerifier).
+    IdentityModule,
     TypeOrmModule.forFeature([
       PermissionTypeormEntity,
       PermissionDependencyTypeormEntity,
@@ -46,6 +68,25 @@ import { UserOrganizationTypeormEntity } from './infra/db/user-organization.enti
     },
     { provide: InvitationRepository, useClass: InvitationTypeormRepository },
     { provide: AuditLogRepository, useClass: AuditLogTypeormRepository },
+    { provide: InvitationTokenCodec, useClass: SodiumInvitationTokenCodec },
+    OrganizationAccess,
+    AuditLog,
+    CreateOrganizationUseCase,
+    ListMyOrganizationsUseCase,
+    GetOrganizationUseCase,
+    UpdateOrganizationUseCase,
+    SetRecoveryKeyUseCase,
+    ListMembersUseCase,
+    ChangeMemberRoleUseCase,
+    RemoveMemberUseCase,
+    LeaveOrganizationUseCase,
+    CreateInvitationUseCase,
+    ListInvitationsUseCase,
+    RevokeInvitationUseCase,
+    PreviewInvitationUseCase,
+    AcceptInvitationUseCase,
+    PersonalOrganizationRegistrationHook,
   ],
+  exports: [OrganizationAccess, AuditLog, AcceptInvitationUseCase],
 })
 export class OrganizationsModule {}
