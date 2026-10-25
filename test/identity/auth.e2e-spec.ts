@@ -138,6 +138,10 @@ describe('Auth endpoints (e2e)', () => {
   });
 
   describe('malformed key material', () => {
+    // 135 chars and valid for @IsEmail (its limits are in bytes), but 'İ' lowercases to 2 UTF-16
+    // units, so the normalized e-mail has 260 > 255 characters.
+    const DOTTED_LABEL = '\u0130'.repeat(31) + 'a';
+    const LONG_DOTTED_EMAIL = `${'\u0130'.repeat(32)}@${Array(3).fill(DOTTED_LABEL).join('.')}.com`;
     const b64 = (bytes: Buffer) => bytes.toString('base64url');
     const cases: [string, Record<string, unknown>, string][] = [
       [
@@ -161,6 +165,11 @@ describe('Auth endpoints (e2e)', () => {
         { publicKey: b64(Buffer.alloc(31, 1)) },
         'public-key-invalid',
       ],
+      [
+        'email that grows past 255 chars when lowercased',
+        { email: LONG_DOTTED_EMAIL },
+        'email-invalid',
+      ],
     ];
 
     it.each(cases)('%s → 422 with its stable type', async (_l, over, type) => {
@@ -168,6 +177,19 @@ describe('Auth endpoints (e2e)', () => {
       expect(res.status).toBe(422);
       expect(res.body.type).toMatch(new RegExp(`/${type}$`));
       expect(res.headers['content-type']).toContain('application/problem+json');
+    });
+
+    it('over-long normalized e-mail creates no user and never 500s on login or pre-login', async () => {
+      const res = await register(LONG_DOTTED_EMAIL).expect(422);
+      expect(res.body.type).toMatch(/\/email-invalid$/);
+      const ds = await adminDataSource();
+      const rows = await ds.query("SELECT 1 FROM users WHERE email LIKE 'a@%'");
+      expect(rows).toHaveLength(0);
+      await login(LONG_DOTTED_EMAIL).expect(401);
+      const pre = await http()
+        .post('/auth/prelogin')
+        .send({ email: LONG_DOTTED_EMAIL });
+      expect(pre.status).toBeLessThan(500);
     });
 
     it('name of 1 MB → 413 or 422, never 500', async () => {

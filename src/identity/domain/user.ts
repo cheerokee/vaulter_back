@@ -5,7 +5,7 @@ import {
   assertKdfSalt,
   assertPublicKey,
 } from './crypto-material.js';
-import { normalizeEmail } from './email.js';
+import { assertEmailLength, normalizeEmail } from './email.js';
 import { parseKdfParams, type KdfParams } from './kdf-params.js';
 
 export type UserProps = {
@@ -52,7 +52,7 @@ export class User extends Entity<UserProps> {
     }
     return {
       name,
-      email: normalizeEmail(input.email),
+      email: assertEmailLength(normalizeEmail(input.email)),
       kdfSalt: assertKdfSalt(input.kdfSalt),
       kdfParams: parseKdfParams(input.kdfParams),
       publicKey: assertPublicKey(input.publicKey),
