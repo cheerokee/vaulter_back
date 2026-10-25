@@ -1,4 +1,4 @@
-import { Session } from '../domain/session.js';
+import { Session } from '../../src/identity/domain/session.js';
 
 export const NOW = new Date('2026-10-24T12:00:00Z');
 export const hexHash = (fill: number) => Buffer.alloc(32, fill).toString('hex');

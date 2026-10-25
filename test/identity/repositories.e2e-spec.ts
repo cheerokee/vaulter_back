@@ -211,4 +211,39 @@ describe('identity repositories', () => {
     expect(d.revokedAt).toEqual(later);
     expect((await sessions.findById(already.id))!.revokedReason).toBe('logout');
   });
+
+  it('revoke is atomic and first-reason-wins', async () => {
+    const user = makeUser();
+    await users.create(user);
+    const session = makeSession(user.id);
+    await sessions.create(session);
+    const first = new Date(now.getTime() + 1000);
+    const second = new Date(now.getTime() + 2000);
+    expect(await sessions.revoke(session.id, 'logout', first)).toBe(true);
+    expect(await sessions.revoke(session.id, 'revoked', second)).toBe(false);
+    const loaded = (await sessions.findById(session.id))!;
+    expect(loaded.revokedReason).toBe('logout');
+    expect(loaded.revokedAt).toEqual(first);
+    expect(
+      await sessions.revoke(
+        '00000000-0000-7000-8000-000000000000',
+        'logout',
+        first,
+      ),
+    ).toBe(false);
+  });
+
+  it('revoke after a concurrent rotation keeps the rotated hash', async () => {
+    const user = makeUser();
+    await users.create(user);
+    const session = makeSession(user.id, 'h1');
+    await sessions.create(session);
+    const stale = (await sessions.findById(session.id))!;
+    session.rotate('h2', 30, now, null, null);
+    expect(await sessions.rotateRefreshToken(session, 'h1')).toBe(true);
+    expect(await sessions.revoke(stale.id, 'refresh_reuse', now)).toBe(true);
+    const loaded = (await sessions.findById(session.id))!;
+    expect(loaded.refreshTokenHash).toBe('h2');
+    expect(loaded.revokedReason).toBe('refresh_reuse');
+  });
 });

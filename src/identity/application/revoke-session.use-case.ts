@@ -13,8 +13,7 @@ export class RevokeSessionUseCase {
     if (!session || session.userId !== auth.userId) {
       throw new NotFoundError('session-not-found', 'Session not found.');
     }
-    if (session.revokedAt !== null) return;
-    session.revoke('revoked', new Date());
-    await this.sessions.save(session);
+    // Idempotent: an already revoked session keeps its first reason.
+    await this.sessions.revoke(session.id, 'revoked', new Date());
   }
 }

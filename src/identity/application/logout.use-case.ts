@@ -7,9 +7,7 @@ export class LogoutUseCase {
   constructor(private readonly sessions: SessionRepository) {}
 
   async execute(auth: Actor): Promise<void> {
-    const session = await this.sessions.findById(auth.sessionId);
-    if (!session || session.revokedAt !== null) return;
-    session.revoke('logout', new Date());
-    await this.sessions.save(session);
+    // Idempotent: an already revoked session keeps its first reason.
+    await this.sessions.revoke(auth.sessionId, 'logout', new Date());
   }
 }

@@ -2,7 +2,7 @@ import { UnauthenticatedError } from '../../shared/domain/errors.js';
 import type { SessionRepository } from '../domain/session.repository.js';
 import { AuthenticateAccessTokenUseCase } from './authenticate-access-token.use-case.js';
 import type { AccessTokenService } from './ports/access-token-service.js';
-import { NOW, makeSession } from './test-sessions.js';
+import { NOW, makeSession } from '../../../test/support/test-sessions.js';
 
 describe('AuthenticateAccessTokenUseCase', () => {
   const tokens = { verify: vi.fn() };

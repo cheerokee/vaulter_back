@@ -79,9 +79,20 @@ export class UserSessionTypeormRepository extends SessionRepository {
     return result.affected === 1;
   }
 
-  async save(session: Session): Promise<void> {
-    const { id, ...rest } = UserSessionMapper.toPersistence(session);
-    await this.repo.update({ id }, rest);
+  async revoke(
+    sessionId: string,
+    reason: SessionRevokedReason,
+    now: Date,
+  ): Promise<boolean> {
+    const result = await this.repo
+      .createQueryBuilder()
+      .update(UserSessionTypeormEntity)
+      .set({ revokedAt: now, revokedReason: reason })
+      .where('id = :sessionId', { sessionId })
+      .andWhere('revoked_at IS NULL')
+      .andWhere('deleted_at IS NULL')
+      .execute();
+    return result.affected === 1;
   }
 
   async revokeAllForUser(

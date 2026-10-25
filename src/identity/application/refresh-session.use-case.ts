@@ -65,12 +65,9 @@ export class RefreshSessionUseCase {
     };
   }
 
-  // Reloads the row so that the in-memory (unsaved) rotated hash is never persisted.
+  // Touches only the revocation columns, so the rotated (unsaved) hash is never persisted.
   private async revokeForReuse(sessionId: string, now: Date): Promise<void> {
-    const fresh = await this.sessions.findById(sessionId);
-    if (!fresh) return;
-    fresh.revoke('refresh_reuse', now);
-    await this.sessions.save(fresh);
+    await this.sessions.revoke(sessionId, 'refresh_reuse', now);
   }
 }
 

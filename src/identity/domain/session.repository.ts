@@ -21,7 +21,16 @@ export abstract class SessionRepository {
     session: Session,
     expectedHash: string,
   ): Promise<boolean>;
-  abstract save(session: Session): Promise<void>;
+  /**
+   * Atomic, first-reason-wins revocation: one conditional UPDATE that touches only the revocation
+   * columns of a session that is still active. Returns false when nothing changed (already revoked,
+   * deleted or missing), keeping the original reason and timestamp.
+   */
+  abstract revoke(
+    sessionId: string,
+    reason: SessionRevokedReason,
+    now: Date,
+  ): Promise<boolean>;
   abstract revokeAllForUser(
     userId: string,
     reason: SessionRevokedReason,

@@ -3,11 +3,11 @@ import type { SessionRepository } from '../domain/session.repository.js';
 import { ListSessionsUseCase } from './list-sessions.use-case.js';
 import { LogoutUseCase } from './logout.use-case.js';
 import { RevokeSessionUseCase } from './revoke-session.use-case.js';
-import { NOW, makeSession } from './test-sessions.js';
+import { NOW, makeSession } from '../../../test/support/test-sessions.js';
 
 const sessions = {
   findById: vi.fn(),
-  save: vi.fn(),
+  revoke: vi.fn(),
   listActiveByUser: vi.fn(),
 };
 const repo = sessions as unknown as SessionRepository;
@@ -17,23 +17,21 @@ beforeEach(() => {
   vi.resetAllMocks();
   vi.useFakeTimers();
   vi.setSystemTime(NOW);
-  sessions.save.mockResolvedValue(undefined);
+  sessions.revoke.mockResolvedValue(true);
 });
 afterEach(() => vi.useRealTimers());
 
 describe('LogoutUseCase', () => {
   it('revokes the current session with logout', async () => {
-    sessions.findById.mockResolvedValue(makeSession());
     await new LogoutUseCase(repo).execute(auth);
-    const saved = sessions.save.mock.calls[0][0];
-    expect(saved.revokedReason).toBe('logout');
-    expect(saved.revokedAt).toEqual(NOW);
+    expect(sessions.revoke).toHaveBeenCalledWith('s1', 'logout', NOW);
   });
 
-  it('is a no-op when already revoked', async () => {
-    sessions.findById.mockResolvedValue(makeSession({ revoked: true }));
-    await new LogoutUseCase(repo).execute(auth);
-    expect(sessions.save).not.toHaveBeenCalled();
+  it('resolves when the session was already revoked (first reason wins)', async () => {
+    sessions.revoke.mockResolvedValue(false);
+    await expect(
+      new LogoutUseCase(repo).execute(auth),
+    ).resolves.toBeUndefined();
   });
 });
 
@@ -69,7 +67,7 @@ describe('RevokeSessionUseCase', () => {
   it('revokes one of the own sessions', async () => {
     sessions.findById.mockResolvedValue(makeSession({ id: 's2' }));
     await useCase().execute(auth, 's2');
-    expect(sessions.save.mock.calls[0][0].revokedReason).toBe('revoked');
+    expect(sessions.revoke).toHaveBeenCalledWith('s2', 'revoked', NOW);
   });
 
   it('hides sessions of other users as not found', async () => {
@@ -78,7 +76,7 @@ describe('RevokeSessionUseCase', () => {
       constructor: NotFoundError,
       code: 'session-not-found',
     });
-    expect(sessions.save).not.toHaveBeenCalled();
+    expect(sessions.revoke).not.toHaveBeenCalled();
   });
 
   it('reports a missing session as not found', async () => {
@@ -88,9 +86,9 @@ describe('RevokeSessionUseCase', () => {
     });
   });
 
-  it('is a no-op when already revoked', async () => {
+  it('resolves when the session was already revoked (first reason wins)', async () => {
     sessions.findById.mockResolvedValue(makeSession({ revoked: true }));
-    await useCase().execute(auth, 's1');
-    expect(sessions.save).not.toHaveBeenCalled();
+    sessions.revoke.mockResolvedValue(false);
+    await expect(useCase().execute(auth, 's1')).resolves.toBeUndefined();
   });
 });

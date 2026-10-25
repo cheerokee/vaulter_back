@@ -4,13 +4,17 @@ import type { SessionRepository } from '../domain/session.repository.js';
 import type { AccessTokenService } from './ports/access-token-service.js';
 import type { RefreshTokenCodec } from './ports/refresh-token-codec.js';
 import { RefreshSessionUseCase } from './refresh-session.use-case.js';
-import { NOW, hexHash, makeSession } from './test-sessions.js';
+import {
+  NOW,
+  hexHash,
+  makeSession,
+} from '../../../test/support/test-sessions.js';
 
 describe('RefreshSessionUseCase', () => {
   const sessions = {
     findById: vi.fn(),
     rotateRefreshToken: vi.fn(),
-    save: vi.fn(),
+    revoke: vi.fn(),
   };
   const codec = { parse: vi.fn(), generate: vi.fn() };
   const access = { issue: vi.fn() };
@@ -36,7 +40,7 @@ describe('RefreshSessionUseCase', () => {
     codec.generate.mockResolvedValue({ token: 's1.new', hash: hexHash(2) });
     sessions.findById.mockImplementation(() => Promise.resolve(makeSession()));
     sessions.rotateRefreshToken.mockResolvedValue(true);
-    sessions.save.mockResolvedValue(undefined);
+    sessions.revoke.mockResolvedValue(true);
     access.issue.mockResolvedValue({
       token: 'at',
       expiresAt: new Date('2026-10-24T12:15:00Z'),
@@ -57,7 +61,7 @@ describe('RefreshSessionUseCase', () => {
     expect(rotated.refreshTokenHash).toBe(hexHash(2));
     expect(rotated.lastIp).toBe('9.9.9.9');
     expect(expected).toBe(hexHash(1));
-    expect(sessions.save).not.toHaveBeenCalled();
+    expect(sessions.revoke).not.toHaveBeenCalled();
   });
 
   it('rejects a malformed token', async () => {
@@ -82,7 +86,7 @@ describe('RefreshSessionUseCase', () => {
     await expect(
       useCase.execute({ refreshToken: 'x', client }),
     ).rejects.toMatchObject(invalid);
-    expect(sessions.save).not.toHaveBeenCalled();
+    expect(sessions.revoke).not.toHaveBeenCalled();
     expect(sessions.rotateRefreshToken).not.toHaveBeenCalled();
   });
 
@@ -91,7 +95,7 @@ describe('RefreshSessionUseCase', () => {
     await expect(
       useCase.execute({ refreshToken: 'x', client }),
     ).rejects.toMatchObject(invalid);
-    expect(sessions.save).not.toHaveBeenCalled();
+    expect(sessions.revoke).not.toHaveBeenCalled();
   });
 
   it('revokes the session with refresh_reuse when an old refresh token is presented', async () => {
@@ -99,9 +103,7 @@ describe('RefreshSessionUseCase', () => {
     await expect(
       useCase.execute({ refreshToken: 'x', client }),
     ).rejects.toMatchObject(invalid);
-    const saved = sessions.save.mock.calls[0][0];
-    expect(saved.revokedReason).toBe('refresh_reuse');
-    expect(saved.revokedAt).toEqual(NOW);
+    expect(sessions.revoke).toHaveBeenCalledWith('s1', 'refresh_reuse', NOW);
     expect(sessions.rotateRefreshToken).not.toHaveBeenCalled();
   });
 
@@ -110,7 +112,7 @@ describe('RefreshSessionUseCase', () => {
     await expect(
       useCase.execute({ refreshToken: 'x', client }),
     ).rejects.toMatchObject(invalid);
-    expect(sessions.save.mock.calls[0][0].revokedReason).toBe('refresh_reuse');
+    expect(sessions.revoke).toHaveBeenCalledWith('s1', 'refresh_reuse', NOW);
   });
 
   it('treats a lost rotation race as reuse', async () => {
@@ -119,9 +121,7 @@ describe('RefreshSessionUseCase', () => {
       useCase.execute({ refreshToken: 'x', client }),
     ).rejects.toMatchObject(invalid);
     expect(access.issue).not.toHaveBeenCalled();
-    const saved = sessions.save.mock.calls[0][0];
-    expect(saved.revokedReason).toBe('refresh_reuse');
-    // The reloaded row is revoked, not the in-memory session carrying the unsaved rotated hash.
-    expect(saved.refreshTokenHash).toBe(hexHash(1));
+    // Only the revocation columns are written; the rotated hash is never persisted.
+    expect(sessions.revoke).toHaveBeenCalledWith('s1', 'refresh_reuse', NOW);
   });
 });
