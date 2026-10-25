@@ -22,9 +22,10 @@ npm run test:e2e     # testes e2e (Vitest + supertest) — sobem o AppModule, pr
 npm run migration:show                 # status das migrations (veja Banco de dados)
 npm run schema:check                   # drift: falha se as entidades divergirem do banco migrado
 npm run lint         # oxlint com checagem de tipos
+npm run typecheck    # tsc --noEmit no projeto todo (src e test); roda no CI
 npm run format       # Prettier em src/ e test/
 ```
-Antes de dizer que algo está pronto: `npm run build && npm test && npm run lint` precisam passar
+Antes de dizer que algo está pronto: `npm run build && npm test && npm run lint && npm run typecheck` precisam passar
 (e `docker exec vaulter-back-app npm run test:e2e`, dentro do container, quando mexer em módulos/banco).
 
 ## Docker
@@ -313,8 +314,28 @@ exportam); nenhum dos dois importa `spaces`.
   `lockWithOrgPermission` dentro do `uow.run`: checagem sem lock, `FOR UPDATE` no espaço, checagem de novo.
 - **Kit de recuperação (`RecoveryKit`):** quem grava `recovery_wrapped_key` manda `recoveryPublicKey`; sem kit 422
   `recovery-key-required`, kit diferente 409 `recovery-key-changed`; a impressão gravada vem da chave da organização.
-- **Ganchos:** `spaces.member-removed` (trava os espaços da pessoa, lápide em cópias e papéis, troca pendente,
-  cancela pendências, audita) e `spaces.invitation` (só Gestor indica o espaço; no aceite vira pendência de trancar).
+- **Ganchos** (contratos em `src/shared/application/`, veja "Ganchos de saída e de convite"): `spaces.member-removed`
+  roda no unit of work da saída da organização e, se falhar, **desfaz a saída inteira** (trava os espaços da pessoa
+  em ordem de id, lápide em cópias e papéis, marca `keyRotationRequired`, cancela pendências, audita; pode deixar
+  espaço sem Gestor ou órfão, o que é permitido). `spaces.invitation` valida na criação do convite (só Gestor do
+  espaço o indica; erro de validação desfaz a criação) e grava a intenção em `invitation_space_intents`
+  (com `requestedByUserId`, o Gestor que indicou); no aceite vira `space_pending_grants`. Sem o módulo `spaces`
+  registrado, convite com `spaces` dá 422 `spaces-not-supported`. Outros módulos que reagirem a saída/convite assinam
+  do mesmo jeito, sem o `organizations` importá-los.
+- **Fluxo de chaves** (cifra no app; o backend só guarda blobs e valida formato — libsodium, formato em
+  `docs/crypto/user-keys.md`, seção da cópia trancada: `0x01 ‖ crypto_box_seal`, 81 bytes, base64url, 108 chars):
+  - cada **versão** da chave do espaço é uma linha de `space_keys` (`spaces.current_key_version`); **todo membro tem
+    cópia de todas as versões** (`space_key_grants`), senão perde o histórico;
+  - quem **sai** (da organização ou do espaço) ou é removido deixa `keyRotationRequired = true`; um membro faz a
+    **troca** (`rotate`): versão nova, uma cópia por membro ativo (até `SPACE_MAX_MEMBERS`) e a cópia do kit, o
+    que limpa a flag. A versão da troca não tem teto;
+  - **retrancar** (`rewrap`) regrava o kit da organização para todas as versões quando o kit muda, com a impressão
+    do kit informada (`RecoveryKit`; 409 `recovery-key-changed` se divergir);
+  - **órfão** (nenhum membro com papel): só um admin com `org.members.manage` reabre, **pelo kit**
+    (`POST /spaces/:id/recover`, exige reautenticação) mandando as cópias de todas as versões seladas para ele;
+    é a única forma de um admin se pôr num espaço. **Promover Gestor** também é operação de admin (404 se fora da org);
+  - pôr membro novo exige as cópias de **todas** as versões no mesmo pedido; o convite aceito deixa uma **pendência
+    de trancar** (`space_pending_grants`) que o Gestor resolve (põe a cópia) ou recusa **por id**.
 - **HTTP** (`infra/http/`: `spaces`, `space-members` e `space-keys` controllers; rotas da spec §7, todas internas,
   tag `spaces`): ids de caminho passam pelo `uuidPipe` (`src/shared/infra/http/uuid-pipe.ts`, 422
   `validation-failed`); listas usam `pageResponse` (`cursor-pagination.query.ts`). Cópia trancada no DTO:
@@ -324,6 +345,19 @@ exportam); nenhum dos dois importa `spaces`.
   de chave usa a mesma constante). Pôr membro, retrancar e reabrir mandam **todas as versões num pedido só**
   (`MAX_KEY_VERSIONS = 500`, ~71 kB < 100 kB do corpo JSON); a versão da troca não tem teto. Perto do limite:
   aumentar o limite do corpo JSON nessas rotas ou aceitar versões em lotes por faixa.
+- **Tabelas:** `spaces`, `space_keys`, `space_key_grants`, `space_pending_grants`, `invitation_space_intents`, além
+  de `role_assignments` com `scope_type = 'space'` (papel do espaço; `space_id` só nessas linhas, por CHECK). Todas
+  com RLS por organização. As FKs de filho de espaço são **compostas** `(filho_id, organization_id) ->
+  (pai.id, pai.organization_id)`, com `UNIQUE (id, organization_id)` em `spaces`, `space_keys` e
+  `organization_invitations`: **a checagem de FK ignora o RLS**, então sem a coluna da organização na FK um filho
+  de uma organização poderia apontar para um espaço de outra.
+- **Ordem de locks** (sempre nesta ordem, para não dar deadlock): linha de vínculo do alvo (`user_organization`, `FOR SHARE`)
+  -> linha do espaço (`FOR UPDATE`) -> atribuições de Gestor (`lockSpaceManagers`, em ordem de id). O gancho de saída
+  trava vários espaços em ordem de id. Mutações do módulo passam por `SpaceAccess.lockAsMember` /
+  `lockWithOrgPermission`.
+- **Pendências (não feito ainda):** Hubs (concessões do espaço para Hub e a "sala"); storage/backup no S3 (hoje só a
+  chave e o kit); nuvem ativa (`cloud_mode = active_cloud`, só o campo existe); excluir espaço; papéis próprios de
+  espaço (só os de fábrica); notificações (pendência e troca de chave hoje só aparecem por consulta).
 - **e2e com a cripto real do cliente:** os helpers de espaço ficam em `test/support/identity-client.ts`
   (`c.spaces`: criar com kit, pôr membro selando todas as versões, trocar a chave, retrancar, abrir as cópias) e
   as invariantes de banco em `test/support/spaces-db.ts`. Não duplicar nos specs.

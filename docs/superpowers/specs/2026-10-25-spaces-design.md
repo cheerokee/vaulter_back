@@ -1,6 +1,6 @@
 # Módulo `spaces` — design
 
-Data: 25/10/2026 · Status: **aguardando aprovação do Jonas** · Repositório: `vaulter_back`
+Data: 25/10/2026 · Status: **aprovada em 25/10/2026 (implementada)** · Repositório: `vaulter_back`
 
 Nasce de uma conversa do Jonas com o Claude. Parte da spec de produto
 `../valter-valt-ai/docs/superpowers/specs/2026-10-24-organizacoes-espacos-e-nuvem-design.md` (§3, §4.1, §5, §6, §7),
