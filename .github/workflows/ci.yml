@@ -36,6 +36,17 @@ jobs:
       DB_DATABASE: vaulter
       DB_USERNAME: vaulter
       DB_PASSWORD: vaulter
+      DB_APP_USERNAME: vaulter_app
+      DB_APP_PASSWORD: vaulter_app
+      # Valores só de teste (nada disso é segredo real).
+      PROBLEM_TYPE_BASE_URL: https://errors.example.invalid
+      API_DOCS_TITLE: API
+      API_DOCS_INTERNAL_ENABLED: "true"
+      LOG_LEVEL: silent
+      AUTH_JWT_ISSUER: http://localhost:3000
+      AUTH_JWT_KEY_ID: ci-1
+      AUTH_JWT_SIGNING_SEED: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+      IDENTITY_DECOY_SALT_KEY: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
 
     steps:
       - uses: actions/checkout@v4
@@ -49,4 +60,20 @@ jobs:
       - run: npm run build
       - run: npm run lint
       - run: npm test
+      # Mesmo SQL do .docker/postgres/init/02-app-role.sh: login de runtime da API.
+      - name: Create runtime database role
+        run: |
+          psql "postgresql://vaulter:vaulter@localhost:5432/vaulter" -v ON_ERROR_STOP=1 <<'SQL'
+          DO $$
+          BEGIN
+            IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'app_runtime') THEN
+              CREATE ROLE app_runtime NOLOGIN NOBYPASSRLS;
+            END IF;
+            IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'vaulter_app') THEN
+              CREATE ROLE vaulter_app LOGIN NOSUPERUSER NOBYPASSRLS PASSWORD 'vaulter_app';
+            END IF;
+          END
+          $$;
+          GRANT app_runtime TO vaulter_app;
+          SQL
       - run: npm run test:e2e

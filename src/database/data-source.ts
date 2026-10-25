@@ -10,7 +10,7 @@ if (existsSync('.env')) {
 }
 
 export default new DataSource({
-  ...typeOrmOptions(),
+  ...typeOrmOptions('migration'),
   entities: [join(import.meta.dirname, '..', '**', '*.entity.js')],
   migrations: [join(import.meta.dirname, 'migrations', '*.js')],
 });

@@ -57,6 +57,13 @@ npm run start:dev                    # dentro do container: API em live reload
 - Credenciais e portas vêm do `.env` (`DB_*`, `PGADMIN_PORT`); os valores padrão estão no `.env.example`.
 - O pgAdmin roda em modo desktop (sem login) e já abre com o servidor `vaulter-back` cadastrado
   (`.docker/pgadmin/servers.json`); só pede a senha do banco (`DB_PASSWORD`) na primeira conexão.
+- **Papel de runtime:** a API conecta como `DB_APP_USERNAME` (padrão `vaulter_app`; `NOSUPERUSER NOBYPASSRLS`,
+  membro de `app_runtime`, com `SELECT/INSERT/UPDATE` e **sem `DELETE`**), para o RLS valer de verdade. Migrations,
+  CLI, testes e pgAdmin usam `DB_USERNAME` (o dono). O login é criado por `.docker/postgres/init/02-app-role.sh`
+  (idempotente) na criação do banco; num banco já existente, rode uma vez:
+  `docker exec vaulter-back-db sh /docker-entrypoint-initdb.d/02-app-role.sh`. As permissões ficam nas migrations.
+- **Testes e2e** rodam no banco `DB_TEST_DATABASE` (padrão `${DB_DATABASE}_test`), criado e migrado pelo
+  `globalSetup`; o banco de desenvolvimento nunca é truncado.
 - Os dados do Postgres ficam em `.docker/pgdata/` (fora do git e do contexto de build). Para zerar o banco
   (e rodar de novo os scripts de init): `docker compose down && sudo rm -rf .docker/pgdata && docker compose up -d`.
 - **S3 local:** LocalStack fixado na `4.14.0`, a última versão que roda sem `LOCALSTACK_AUTH_TOKEN` — não

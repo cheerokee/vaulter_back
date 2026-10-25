@@ -6,7 +6,7 @@ import { typeOrmOptions } from './typeorm.options.js';
   imports: [
     TypeOrmModule.forRootAsync({
       useFactory: () => ({
-        ...typeOrmOptions(),
+        ...typeOrmOptions('app'),
         // Entidades entram via TypeOrmModule.forFeature() de cada módulo.
         autoLoadEntities: true,
       }),
