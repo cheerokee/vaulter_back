@@ -32,6 +32,17 @@ export class OrganizationAccess {
     return membership;
   }
 
+  /** True only for an ACTIVE member that holds `permission` (never throws for a non-member). */
+  async hasPermission(
+    orgId: string,
+    userId: string,
+    permission: PermissionKey,
+  ): Promise<boolean> {
+    if (!validate(orgId)) return false;
+    if (!(await this.memberships.find(orgId, userId))) return false;
+    return (await this.roles.permissionsOf(orgId, userId)).includes(permission);
+  }
+
   async requirePermission(
     orgId: string,
     userId: string,

@@ -4,6 +4,7 @@ import {
 } from '../../shared/domain/errors.js';
 import type { RegistrationHooks } from '../../shared/application/registration-hooks.js';
 import {
+  ADMIN,
   NOW,
   STRANGER,
   TOKEN,
@@ -99,6 +100,32 @@ describe('PersonalOrganizationRegistrationHook', () => {
       kit.deps.directory,
       kit.deps.audit,
       kit.deps.uow,
+      kit.deps.access,
+    );
+    const hook = new PersonalOrganizationRegistrationHook(
+      hooks as unknown as RegistrationHooks,
+      createOrganization as unknown as CreateOrganizationUseCase,
+      real,
+    );
+    const out = await hook.onRegistered({ ...ctx, inviteToken: TOKEN });
+    expect(out).toEqual({ invitation: { accepted: false } });
+    expect(kit.mocks.memberships.add).not.toHaveBeenCalled();
+    expect(kit.mocks.invitations.markAccepted).not.toHaveBeenCalled();
+  });
+
+  it('with the real accept use case and the inviter removed since -> accepted:false, nothing joined', async () => {
+    kit.mocks.invitations.findByTokenHash.mockResolvedValue(makeInvitation());
+    kit.members.delete(ADMIN);
+    const real = new AcceptInvitationUseCase(
+      kit.deps.codec,
+      kit.deps.invitations,
+      kit.deps.orgs,
+      kit.deps.memberships,
+      kit.deps.roles,
+      kit.deps.directory,
+      kit.deps.audit,
+      kit.deps.uow,
+      kit.deps.access,
     );
     const hook = new PersonalOrganizationRegistrationHook(
       hooks as unknown as RegistrationHooks,

@@ -1,11 +1,13 @@
 import { Injectable } from '@nestjs/common';
 import type { Actor } from '../../identity/application/dto/actor.js';
 import { UnitOfWork } from '../../shared/infra/db/unit-of-work.js';
+import { InvitationRepository } from '../domain/invitation.repository.js';
 import { MembershipRules } from '../domain/membership.js';
 import { MembershipRepository } from '../domain/membership.repository.js';
 import { OrganizationRepository } from '../domain/organization.repository.js';
 import { RoleAssignmentRepository } from '../domain/role-assignment.repository.js';
 import { AuditLog } from './audit-log.js';
+import { revokeInvitationsOfCreator } from './creator-invitations.js';
 import { lockMembershipContext } from './membership-guard.js';
 import { OrganizationAccess } from './organization-access.js';
 
@@ -18,6 +20,7 @@ export class LeaveOrganizationUseCase {
     private readonly roles: RoleAssignmentRepository,
     private readonly audit: AuditLog,
     private readonly uow: UnitOfWork,
+    private readonly invitations: InvitationRepository,
   ) {}
 
   execute(actor: Actor, orgId: string): Promise<void> {
@@ -40,6 +43,13 @@ export class LeaveOrganizationUseCase {
         userId: actor.userId,
         action: 'member.left',
       });
+      await revokeInvitationsOfCreator(
+        { invitations: this.invitations, audit: this.audit },
+        orgId,
+        actor.userId,
+        actor.userId,
+        new Date(),
+      );
     });
   }
 }

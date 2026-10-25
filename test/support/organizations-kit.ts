@@ -113,6 +113,7 @@ export function makeKit() {
     findByTokenHash: vi.fn(),
     listPending: vi.fn(),
     revoke: vi.fn(),
+    revokePendingCreatedBy: vi.fn(),
     markAccepted: vi.fn(),
   };
   const auditRepo = { append: vi.fn() };
@@ -181,6 +182,10 @@ export function makeKit() {
       return true;
     });
     invitations.revoke.mockResolvedValue(true);
+    invitations.revokePendingCreatedBy.mockImplementation(async () => {
+      tag('invitations.revokePendingCreatedBy');
+      return [];
+    });
     auditRepo.append.mockImplementation(async () => tag('audit.append'));
     directory.findPublicByIds.mockImplementation(async (ids: string[]) =>
       ids.map((id) => ({

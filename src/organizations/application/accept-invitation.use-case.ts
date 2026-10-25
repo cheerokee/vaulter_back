@@ -9,7 +9,9 @@ import { OrganizationRepository } from '../domain/organization.repository.js';
 import { RoleAssignmentRepository } from '../domain/role-assignment.repository.js';
 import { SeatPolicy } from '../domain/seat-policy.js';
 import { AuditLog } from './audit-log.js';
+import { invitationCreatorCanInvite } from './creator-invitations.js';
 import { invitationInvalid } from './invitation-errors.js';
+import { OrganizationAccess } from './organization-access.js';
 import { InvitationTokenCodec } from './ports/invitation-token-codec.js';
 
 export type AcceptInvitationResult = {
@@ -22,6 +24,7 @@ export type AcceptInvitationResult = {
 
 // Aceite de convite (rota logada e gancho de cadastro). Regras, todas na mesma transação:
 // - convite pendente, dentro da validade e, se tiver e-mail, igual ao da conta (normalizado);
+// - quem criou o convite continua membro ativo com `org.members.manage` (senão o convite morreu com a permissão);
 // - assento conferido antes de consumir (membro ativo; convite pendente não conta);
 // - `markAccepted` atômico: num aceite concorrente só um vence, o outro recebe `invitation-invalid`;
 // - entra como membro (limpa a lápide se já foi membro) com o papel do convite; audita `member.joined`.
@@ -39,6 +42,7 @@ export class AcceptInvitationUseCase {
     private readonly directory: UserDirectory,
     private readonly audit: AuditLog,
     private readonly uow: UnitOfWork,
+    private readonly access: OrganizationAccess,
   ) {}
 
   async execute(actor: Actor, token: string): Promise<AcceptInvitationResult> {
@@ -71,6 +75,10 @@ export class AcceptInvitationUseCase {
     return this.uow.run(async () => {
       const invitation = await this.invitations.findByTokenHash(tokenHash);
       if (!invitation?.canBeAcceptedBy(user.email, now)) {
+        throw invitationInvalid();
+      }
+      // Quem convidou ainda precisa poder convidar (admin removido/rebaixado não volta pelo próprio link).
+      if (!(await invitationCreatorCanInvite(this.access, invitation))) {
         throw invitationInvalid();
       }
       const orgId = invitation.organizationId;

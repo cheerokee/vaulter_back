@@ -16,6 +16,15 @@ export abstract class InvitationRepository {
   ): Promise<CursorPage<Invitation>>;
   abstract revoke(orgId: string, id: string): Promise<boolean>;
   /**
+   * Revokes every pending, unexpired (`expires_at > now`) invitation of the organization created by `userId`
+   * (who just lost `org.members.manage`). Returns the revoked ids, for the audit.
+   */
+  abstract revokePendingCreatedBy(
+    orgId: string,
+    userId: string,
+    now: Date,
+  ): Promise<string[]>;
+  /**
    * Atomic: only succeeds while pending and unexpired (`expires_at > now`). `orgId` comes from
    * `findByTokenHash` and sets the RLS context, like every other organization-scoped method.
    */

@@ -22,6 +22,14 @@ const kit = makeKit();
 const d = kit.deps;
 const m = kit.mocks;
 const ADMIN2 = '019a1b2c-0000-7000-8000-0000000000a2';
+const INV1 = '019a1b2c-0000-7000-8000-0000000000e1';
+const INV2 = '019a1b2c-0000-7000-8000-0000000000e2';
+const revokedAudit = (by: string, invitationId: string) => ({
+  organizationId: ORG_ID,
+  userId: by,
+  action: 'invitation.revoked',
+  metadata: { invitationId, reason: 'creator_lost_permission' },
+});
 
 beforeEach(() => {
   vi.resetAllMocks();
@@ -117,6 +125,7 @@ describe('ChangeMemberRoleUseCase', () => {
       d.roles,
       d.audit,
       d.uow,
+      d.invitations,
     );
 
   it('promotes a member to admin, locking the admins first, and audits', async () => {
@@ -162,6 +171,31 @@ describe('ChangeMemberRoleUseCase', () => {
       'org_member',
       ADMIN,
     );
+  });
+
+  it('demoting an admin revokes their pending invitations in the same unit of work, audited one by one', async () => {
+    kit.members.set(ADMIN2, 'org_admin');
+    m.invitations.revokePendingCreatedBy.mockImplementation(async () => {
+      kit.trace.push('invitations.revokePendingCreatedBy');
+      return [INV1, INV2];
+    });
+    await useCase().execute(actor(ADMIN), ORG_ID, ADMIN2, 'org_member');
+    expect(m.invitations.revokePendingCreatedBy).toHaveBeenCalledWith(
+      ORG_ID,
+      ADMIN2,
+      NOW,
+    );
+    expect(kit.audited().slice(1)).toEqual([
+      revokedAudit(ADMIN, INV1),
+      revokedAudit(ADMIN, INV2),
+    ]);
+    expect(m.uow.run).toHaveBeenCalledTimes(1);
+    expect(kit.trace.every((t) => !t.endsWith('@out'))).toBe(true);
+  });
+
+  it('promoting never revokes invitations', async () => {
+    await useCase().execute(actor(ADMIN), ORG_ID, MEMBER, 'org_admin');
+    expect(m.invitations.revokePendingCreatedBy).not.toHaveBeenCalled();
   });
 
   it('refuses to demote the owner of a personal organization', async () => {
@@ -226,6 +260,7 @@ describe('RemoveMemberUseCase', () => {
       d.roles,
       d.audit,
       d.uow,
+      d.invitations,
     );
 
   it('removes a member (tombstone) and audits member.removed', async () => {
@@ -239,6 +274,26 @@ describe('RemoveMemberUseCase', () => {
         action: 'member.removed',
         metadata: { targetUserId: MEMBER },
       },
+    ]);
+  });
+
+  it('removing revokes the pending invitations the member created, audited one by one', async () => {
+    kit.members.set(ADMIN2, 'org_admin');
+    m.invitations.revokePendingCreatedBy.mockResolvedValue([INV1]);
+    await useCase().execute(actor(ADMIN), ORG_ID, ADMIN2);
+    expect(m.invitations.revokePendingCreatedBy).toHaveBeenCalledWith(
+      ORG_ID,
+      ADMIN2,
+      NOW,
+    );
+    expect(kit.audited()).toEqual([
+      {
+        organizationId: ORG_ID,
+        userId: ADMIN,
+        action: 'member.removed',
+        metadata: { targetUserId: ADMIN2 },
+      },
+      revokedAudit(ADMIN, INV1),
     ]);
   });
 
@@ -289,6 +344,7 @@ describe('LeaveOrganizationUseCase', () => {
       d.roles,
       d.audit,
       d.uow,
+      d.invitations,
     );
 
   it('a member leaves and member.left is audited', async () => {
@@ -297,6 +353,21 @@ describe('LeaveOrganizationUseCase', () => {
     expect(m.memberships.remove).toHaveBeenCalledWith(ORG_ID, MEMBER);
     expect(kit.audited()).toEqual([
       { organizationId: ORG_ID, userId: MEMBER, action: 'member.left' },
+    ]);
+  });
+
+  it('leaving revokes the pending invitations the member created', async () => {
+    kit.members.set(ADMIN2, 'org_admin');
+    m.invitations.revokePendingCreatedBy.mockResolvedValue([INV1]);
+    await useCase().execute(actor(ADMIN2), ORG_ID);
+    expect(m.invitations.revokePendingCreatedBy).toHaveBeenCalledWith(
+      ORG_ID,
+      ADMIN2,
+      NOW,
+    );
+    expect(kit.audited()).toEqual([
+      { organizationId: ORG_ID, userId: ADMIN2, action: 'member.left' },
+      revokedAudit(ADMIN2, INV1),
     ]);
   });
 

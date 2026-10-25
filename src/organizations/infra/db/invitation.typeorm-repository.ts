@@ -90,6 +90,29 @@ export class InvitationTypeormRepository extends InvitationRepository {
     return (result.affected ?? 0) > 0;
   }
 
+  async revokePendingCreatedBy(
+    orgId: string,
+    userId: string,
+    now: Date,
+  ): Promise<string[]> {
+    const result = await runInOrganizationScope(this.dataSource, orgId, (m) =>
+      m
+        .createQueryBuilder()
+        .update(OrganizationInvitationTypeormEntity)
+        .set({ status: 'revoked' })
+        .where(
+          `organization_id = :orgId AND created_by_user_id = :userId AND status = 'pending'`,
+          { orgId, userId },
+        )
+        .andWhere('expires_at > :now', { now })
+        .andWhere('deleted_at IS NULL')
+        .returning(['id'])
+        .execute(),
+    );
+    const rows = (result.raw ?? []) as { id: string }[];
+    return rows.map((r) => r.id).sort();
+  }
+
   // UPDATE condicional e atômico: num aceite concorrente, o segundo espera o lock da linha, reavalia o WHERE
   // depois do COMMIT do primeiro e não altera nada.
   async markAccepted(

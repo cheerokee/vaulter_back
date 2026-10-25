@@ -77,6 +77,10 @@ A pessoa sozinha não pode ganhar telas ou passos a mais.
 - **Segredo e hash:** o link carrega um segredo aleatório de 32 bytes, e o banco guarda **só o hash**, como no
   refresh token do `identity`.
 - **Uso:** uso único, validade de **7 dias** (decisão do Claude) e revogável por quem pode convidar.
+- **Morre com a permissão de quem convidou:** ao ser removido, sair ou ser rebaixado de `org_admin`, os convites
+  pendentes que a pessoa criou são revogados na mesma transação (auditado `invitation.revoked` com
+  `reason: creator_lost_permission`); a prévia e o aceite também reconferem que o criador ainda é membro ativo
+  com `org.members.manage`. Sem isso, um admin removido voltaria pelo próprio link.
 - **E-mail opcional:** se o convite tiver e-mail, só aceita uma conta com esse e-mail, normalizado. Enquanto não
   houver confirmação de e-mail, isso protege pouco, porque qualquer um cadastra o e-mail de outra pessoa. Por
   isso o limite real de dano é a regra abaixo.

@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 import type { Actor } from '../../identity/application/dto/actor.js';
 import { DomainValidationError } from '../../shared/domain/errors.js';
 import { UnitOfWork } from '../../shared/infra/db/unit-of-work.js';
+import { InvitationRepository } from '../domain/invitation.repository.js';
 import {
   MembershipRules,
   isOrgRoleKey,
@@ -11,6 +12,7 @@ import { MembershipRepository } from '../domain/membership.repository.js';
 import { OrganizationRepository } from '../domain/organization.repository.js';
 import { RoleAssignmentRepository } from '../domain/role-assignment.repository.js';
 import { AuditLog } from './audit-log.js';
+import { revokeInvitationsOfCreator } from './creator-invitations.js';
 import { lockMembershipContext } from './membership-guard.js';
 import { OrganizationAccess } from './organization-access.js';
 
@@ -23,6 +25,7 @@ export class ChangeMemberRoleUseCase {
     private readonly roles: RoleAssignmentRepository,
     private readonly audit: AuditLog,
     private readonly uow: UnitOfWork,
+    private readonly invitations: InvitationRepository,
   ) {}
 
   async execute(
@@ -58,6 +61,16 @@ export class ChangeMemberRoleUseCase {
         action: 'member.role_changed',
         metadata: { targetUserId: userId, from: target.roleKey, to: roleKey },
       });
+      // Rebaixado de org_admin: os convites que criou morrem junto com a permissão.
+      if (target.roleKey === 'org_admin') {
+        await revokeInvitationsOfCreator(
+          { invitations: this.invitations, audit: this.audit },
+          orgId,
+          userId,
+          actor.userId,
+          new Date(),
+        );
+      }
       return { userId, roleKey };
     });
   }

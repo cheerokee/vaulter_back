@@ -196,7 +196,14 @@ describe('RevokeInvitationUseCase', () => {
 
 describe('PreviewInvitationUseCase', () => {
   const useCase = () =>
-    new PreviewInvitationUseCase(d.codec, d.invitations, d.orgs, d.directory);
+    new PreviewInvitationUseCase(
+      d.codec,
+      d.invitations,
+      d.orgs,
+      d.directory,
+      d.access,
+      d.uow,
+    );
 
   it('shows only the organization name, the inviter name and the deadline (no e-mail)', async () => {
     m.invitations.findByTokenHash.mockResolvedValue(
@@ -227,6 +234,22 @@ describe('PreviewInvitationUseCase', () => {
     expect(err.code).toBe('invitation-invalid');
   });
 
+  it.each([
+    ['removed', () => kit.members.delete(ADMIN)],
+    ['demoted', () => kit.members.set(ADMIN, 'org_member')],
+  ])(
+    'creator %s since issuing -> invitation-invalid (checked in the unit of work)',
+    async (_label, lose) => {
+      m.invitations.findByTokenHash.mockResolvedValue(makeInvitation());
+      lose();
+      await expect(useCase().execute(TOKEN)).rejects.toMatchObject({
+        code: 'invitation-invalid',
+      });
+      expect(m.memberships.find).toHaveBeenCalledWith(ORG_ID, ADMIN);
+      expect(kit.trace.every((t) => !t.endsWith('@out'))).toBe(true);
+    },
+  );
+
   it('a malformed token never reaches the repository', async () => {
     await useCase()
       .execute('bad')
@@ -246,6 +269,7 @@ describe('AcceptInvitationUseCase', () => {
       d.directory,
       d.audit,
       d.uow,
+      d.access,
     );
   const invited = (overrides = {}) =>
     m.invitations.findByTokenHash.mockResolvedValue(makeInvitation(overrides));
@@ -358,6 +382,52 @@ describe('AcceptInvitationUseCase', () => {
       roleKey: 'org_admin',
       alreadyMember: true,
     });
+  });
+
+  it.each([
+    ['removed', () => kit.members.delete(ADMIN)],
+    ['demoted', () => kit.members.set(ADMIN, 'org_member')],
+  ])(
+    'creator %s since issuing -> invitation-invalid, nothing written',
+    async (_label, lose) => {
+      invited({ roleKey: 'org_admin' });
+      lose();
+      await expect(
+        useCase().execute(actor(STRANGER), TOKEN),
+      ).rejects.toMatchObject({ code: 'invitation-invalid' });
+      expect(m.memberships.find).toHaveBeenCalledWith(ORG_ID, ADMIN);
+      expect(m.invitations.markAccepted).not.toHaveBeenCalled();
+      expect(m.memberships.add).not.toHaveBeenCalled();
+      expect(m.roles.assignOrgRole).not.toHaveBeenCalled();
+      expect(m.auditRepo.append).not.toHaveBeenCalled();
+    },
+  );
+
+  it('the removed creator cannot come back through their own invitation', async () => {
+    invited({ roleKey: 'org_admin' });
+    kit.members.delete(ADMIN);
+    await expect(useCase().execute(actor(ADMIN), TOKEN)).rejects.toMatchObject({
+      code: 'invitation-invalid',
+    });
+    expect(m.memberships.add).not.toHaveBeenCalled();
+  });
+
+  it('an existing member cannot consume an invitation whose creator lost the permission', async () => {
+    invited();
+    kit.members.set(ADMIN, 'org_member');
+    await expect(useCase().execute(actor(MEMBER), TOKEN)).rejects.toMatchObject(
+      { code: 'invitation-invalid' },
+    );
+    expect(m.invitations.markAccepted).not.toHaveBeenCalled();
+  });
+
+  it('acceptAs (registration path) also refuses when the creator lost the permission', async () => {
+    invited({ email: 'new@x.com' });
+    kit.members.delete(ADMIN);
+    await expect(
+      useCase().acceptAs({ userId: STRANGER, email: 'new@x.com' }, TOKEN, NOW),
+    ).rejects.toMatchObject({ code: 'invitation-invalid' });
+    expect(m.memberships.add).not.toHaveBeenCalled();
   });
 
   it('acceptAs uses the given e-mail without the directory (registration path)', async () => {

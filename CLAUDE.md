@@ -265,7 +265,10 @@ src/organizations/
   histórico, Referer). Vale 7 dias, uso único (aceite concorrente: um ganha, o outro 422). Convite com e-mail só serve
   para esse e-mail. Prévia pública devolve só nome da organização, de quem convidou e validade (sem e-mail). Qualquer
   falha (inexistente, expirado, revogado, usado, outro e-mail) é o **mesmo erro** `invitation-invalid` (422), para
-  não virar oráculo. O cadastro aceita `inviteToken`.
+  não virar oráculo. O cadastro aceita `inviteToken`. **O convite morre com a permissão de quem o criou:**
+  remover, sair ou rebaixar de `org_admin` revoga os convites pendentes dessa pessoa na mesma transação
+  (`revokeInvitationsOfCreator`, auditado `invitation.revoked` com `reason: creator_lost_permission`), e prévia/aceite
+  reconferem o criador (`invitationCreatorCanInvite`) — admin removido não volta pelo próprio link.
 - **Chave de recuperação da organização:** `PUT /organizations/:id/recovery-key` só **substitui** (nunca apaga),
   exige `org.members.manage` **e** reautenticação (`currentAuthProof`, verificada por `CurrentAuthProofVerifier`) e é
   auditada (`registered`/`replaced`, sem a prova nem a chave privada).

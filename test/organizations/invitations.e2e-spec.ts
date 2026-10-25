@@ -191,6 +191,128 @@ describe('Invitation endpoints (e2e)', () => {
     expect(members.body.items).toHaveLength(2);
   });
 
+  /** Owner + a second admin who joined through an org_admin invitation. */
+  async function orgWithSecondAdmin(prefix: string) {
+    const owner = await c.signUp(account, `${prefix}-owner@example.com`);
+    const admin = await c.signUp(account, `${prefix}-admin@example.com`);
+    const org = (await c.createOrg(owner.token).expect(201)).body.id as string;
+    const join = (await c.invite(owner.token, org, 'org_admin').expect(201))
+      .body.token as string;
+    await c.acceptInvite(admin.token, join).expect(200);
+    return { owner, admin, org };
+  }
+
+  const invitationRow = async (id: string) =>
+    (
+      await (
+        await adminDataSource()
+      ).query(`SELECT status FROM organization_invitations WHERE id = $1`, [id])
+    )[0] as { status: string };
+
+  it('admin removido não volta pelo próprio link (the invitation is revoked and audited)', async () => {
+    const { owner, admin, org } = await orgWithSecondAdmin('rm-adm');
+    const second = await c.signUp(account, 'rm-adm-second@example.com');
+    const created = (await c.invite(admin.token, org, 'org_admin').expect(201))
+      .body;
+    await c
+      .http()
+      .delete(`/organizations/${org}/members/${admin.userId}`)
+      .set(c.bearer(owner.token))
+      .expect(204);
+
+    for (const r of [
+      await preview(created.token),
+      await c.acceptInvite(second.token, created.token),
+      await c.acceptInvite(admin.token, created.token),
+    ]) {
+      expect(r.status).toBe(422);
+      expect(r.body.type).toMatch(/invitation-invalid$/);
+    }
+    expect((await invitationRow(created.invitation.id)).status).toBe('revoked');
+    for (const u of [admin, second]) {
+      await c
+        .http()
+        .get(`/organizations/${org}`)
+        .set(c.bearer(u.token))
+        .expect(404);
+    }
+    const audit = await (
+      await adminDataSource()
+    ).query(
+      `SELECT user_id, metadata FROM audit_logs WHERE organization_id = $1 AND action = 'invitation.revoked'`,
+      [org],
+    );
+    expect(audit).toEqual([
+      {
+        user_id: owner.userId,
+        metadata: {
+          invitationId: created.invitation.id,
+          reason: 'creator_lost_permission',
+        },
+      },
+    ]);
+    expect(JSON.stringify(audit)).not.toContain(created.token);
+  });
+
+  it('demoting or leaving revokes the pending invitations of that admin', async () => {
+    const { owner, admin, org } = await orgWithSecondAdmin('dm-adm');
+    const byAdmin = (await c.invite(admin.token, org).expect(201)).body;
+    const byOwner = (await c.invite(owner.token, org).expect(201)).body;
+    await c
+      .http()
+      .patch(`/organizations/${org}/members/${admin.userId}`)
+      .set(c.bearer(owner.token))
+      .send({ roleKey: 'org_member' })
+      .expect(200);
+    expect((await invitationRow(byAdmin.invitation.id)).status).toBe('revoked');
+    expect((await invitationRow(byOwner.invitation.id)).status).toBe('pending');
+
+    const left = await orgWithSecondAdmin('lv-adm');
+    const beforeLeaving = (
+      await c.invite(left.admin.token, left.org).expect(201)
+    ).body;
+    await c
+      .http()
+      .post(`/organizations/${left.org}/leave`)
+      .set(c.bearer(left.admin.token))
+      .expect(204);
+    expect((await invitationRow(beforeLeaving.invitation.id)).status).toBe(
+      'revoked',
+    );
+  });
+
+  it('an invitation whose creator lost the permission is invalid even if it escaped the revocation', async () => {
+    const { owner, admin, org } = await orgWithSecondAdmin('esc-adm');
+    const guest = await c.signUp(account, 'esc-adm-guest@example.com');
+    const created = (await c.invite(admin.token, org, 'org_admin').expect(201))
+      .body;
+    await c
+      .http()
+      .patch(`/organizations/${org}/members/${admin.userId}`)
+      .set(c.bearer(owner.token))
+      .send({ roleKey: 'org_member' })
+      .expect(200);
+    // Simula um convite que escapou da revogação: a prévia/aceite reconferem o criador.
+    await (
+      await adminDataSource()
+    ).query(
+      `UPDATE organization_invitations SET status = 'pending' WHERE id = $1`,
+      [created.invitation.id],
+    );
+    for (const r of [
+      await preview(created.token),
+      await c.acceptInvite(guest.token, created.token),
+    ]) {
+      expect(r.status).toBe(422);
+      expect(r.body.type).toMatch(/invitation-invalid$/);
+    }
+    await c
+      .http()
+      .get(`/organizations/${org}`)
+      .set(c.bearer(guest.token))
+      .expect(404);
+  });
+
   it('validates invitation creation input', async () => {
     const owner = await c.signUp(account, 'val-owner@example.com');
     const org = (await c.createOrg(owner.token).expect(201)).body.id as string;
