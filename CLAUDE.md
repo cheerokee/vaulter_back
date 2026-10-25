@@ -110,6 +110,26 @@ src/
 - **Testes:** unitários no domínio e nos casos de uso (`*.spec.ts`, com o contrato do repositório simulado
   pelo `vi`); integração contra o Postgres do compose. Não criar repositório em memória para cada entidade.
 - **Sem cerimônia onde não há regra:** módulos de cadastro simples mantêm a mesma estrutura, com domínio fino.
+- **Validação de entrada (class-validator + class-transformer)** só nos DTOs da borda (`application/dto/` ou
+  `infra/http/`), nunca no domínio. `ValidationPipe` global com `whitelist: true`, `forbidNonWhitelisted: true`
+  e `transform: true`. Os decorators também alimentam o Swagger (plugin do `@nestjs/swagger`). O class-validator
+  checa **formato** (obrigatório, UUID, tamanho); **regras de negócio** ficam no domínio, que lança os próprios
+  erros.
+- **Erros:** o domínio lança erros próprios (base em `shared/domain`), sem saber de HTTP. Um **Exception Filter
+  global** em `shared/infra/http` é o único lugar que traduz para HTTP:
+
+  | Erro | HTTP |
+  |---|---|
+  | `DomainValidationError` e erros do `ValidationPipe` | 422 |
+  | `NotFoundError` | 404 |
+  | `PermissionDeniedError` | 403 |
+  | `ConflictError` e violação de unicidade do Postgres (`23505`) | 409 |
+  | `HubOfflineError` | 503 |
+  | qualquer outro | 500 genérico |
+
+  Resposta sempre em **RFC 9457 (`application/problem+json`)**: `type`, `title`, `status`, `detail`,
+  `requestId` (e, em validação, a lista de campos inválidos). Stack trace, SQL e mensagem crua do banco vão só
+  para o log, nunca para a resposta.
 - O modelo de dados e as regras de negócio vêm da spec
   `valter-valt-ai/docs/superpowers/specs/2026-10-24-organizacoes-espacos-e-nuvem-design.md` e do DER em
   `docs/der_model.sql`.
