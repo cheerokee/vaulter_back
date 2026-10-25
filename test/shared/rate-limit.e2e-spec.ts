@@ -180,4 +180,68 @@ describe('rate limiting (e2e)', () => {
     expect(res.status).toBe(429);
     expect(res.body.type).toMatch(/\/too-many-requests$/);
   }, 60_000);
+
+  it('limits register to 10 per hour per IP (the 11th is 429, even for requests that fail validation)', async () => {
+    const send = () =>
+      c
+        .http()
+        .post('/auth/register')
+        .set('X-Forwarded-For', '198.51.100.31')
+        .send({});
+    for (let i = 0; i < 10; i++) expect((await send()).status).toBe(422);
+    const res = await send();
+    expect(res.status).toBe(429);
+    expect(res.body.type).toMatch(/\/too-many-requests$/);
+    expect(Number(res.headers['retry-after'])).toBeGreaterThan(60);
+  }, 60_000);
+
+  it('limits prelogin to 30 per minute per IP (the 31st is 429)', async () => {
+    const send = () =>
+      c
+        .http()
+        .post('/auth/prelogin')
+        .set('X-Forwarded-For', '198.51.100.32')
+        .send({ email: 'pre@example.com' });
+    for (let i = 0; i < 30; i++) expect((await send()).status).toBe(200);
+    const res = await send();
+    expect(res.status).toBe(429);
+    expect(Number(res.headers['retry-after'])).toBeLessThanOrEqual(60);
+  }, 60_000);
+
+  it('keeps overridden routes on their own keys, apart from the global per-IP budget', async () => {
+    const reg = await c.register(account, 'keys@example.com').expect(201);
+    const token = reg.body.session.accessToken as string;
+    const admin = await adminDataSource();
+    await admin.query('TRUNCATE rate_limit_hits');
+    const ip = '198.51.100.33';
+    await loginAs('keys@example.com', ip);
+    await c
+      .http()
+      .post('/auth/prelogin')
+      .set('X-Forwarded-For', ip)
+      .send({ email: 'keys@example.com' });
+    await c
+      .http()
+      .post('/auth/refresh')
+      .set('X-Forwarded-For', ip)
+      .send({ refreshToken: 'x'.repeat(50) });
+    // login (default + email counters), prelogin and refresh each have their own key: 4 rows
+    const keys = async () =>
+      (await admin.query(
+        `SELECT key, hits FROM rate_limit_hits ORDER BY key`,
+      )) as { key: string; hits: number }[];
+    expect(await keys()).toHaveLength(4);
+    for (let i = 0; i < 2; i++) {
+      await c
+        .http()
+        .get('/me')
+        .set(c.bearer(token))
+        .set('X-Forwarded-For', ip)
+        .expect(200);
+    }
+    // only the global per-IP key is shared by non-overridden routes: one new row, hit twice
+    const after = await keys();
+    expect(after).toHaveLength(5);
+    expect(after.filter((r) => r.hits === 2)).toHaveLength(1);
+  }, 60_000);
 });
