@@ -2,6 +2,7 @@ import type { INestApplication } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import { DataSource } from 'typeorm';
 import { AppModule } from '../../src/app.module.js';
+import { configureApp } from '../../src/shared/infra/http/configure-app.js';
 import { typeOrmOptions } from '../../src/database/typeorm.options.js';
 
 let admin: DataSource | undefined;
@@ -11,6 +12,7 @@ export async function createTestApp(): Promise<INestApplication> {
     imports: [AppModule],
   }).compile();
   const app = moduleRef.createNestApplication();
+  configureApp(app);
   await app.init();
   return app;
 }
