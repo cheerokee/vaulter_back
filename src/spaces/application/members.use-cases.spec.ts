@@ -128,6 +128,18 @@ describe('AddSpaceMemberUseCase', () => {
       OUTSIDER,
     );
     expectLockedBeforeWrites('keys.versions', 'grants.upsert', 'roles.assign');
+    // The target's membership row is locked (FOR SHARE) after the non-locking pre-check and BEFORE the space:
+    // the same order as the removal path (membership row, then spaces).
+    const membershipLock = kit.trace.indexOf('directory.lockActiveMember');
+    expect(membershipLock).toBeGreaterThan(0);
+    expect(membershipLock).toBeLessThan(
+      kit.trace.indexOf('spaces.lockForUpdate'),
+    );
+    expect(m.directory.lockActiveMember).toHaveBeenCalledWith(ORG_ID, OUTSIDER);
+    expect(m.directory.isActiveMember).not.toHaveBeenCalledWith(
+      ORG_ID,
+      OUTSIDER,
+    );
     expect(kit.audited()).toEqual([
       {
         organizationId: ORG_ID,
@@ -200,6 +212,15 @@ describe('AddSpaceMemberUseCase', () => {
       code: 'space-member-exists',
     });
     expect(m.grants.upsert).not.toHaveBeenCalled();
+    // a target who is not an org member never gets the space locked
+    m.spaces.lockForUpdate.mockClear();
+    await expect(
+      useCase().execute(actor(MANAGER), SPACE_ID, {
+        ...input,
+        userId: STRANGER,
+      }),
+    ).rejects.toMatchObject({ code: 'member-not-found' });
+    expect(m.spaces.lockForUpdate).not.toHaveBeenCalled();
   });
 
   it('invalid role or wrapped key: 422 before the unit of work, the key never in the message', async () => {
@@ -513,39 +534,52 @@ describe('ListPendingGrantsUseCase', () => {
 describe('DeclinePendingGrantUseCase', () => {
   const useCase = () =>
     new DeclinePendingGrantUseCase(d.access, d.pending, d.audit, d.uow);
+  const PENDING_ID = '019a1b2c-0000-7000-8000-0000000007a1';
 
-  it('the manager declines; audited', async () => {
-    await useCase().execute(actor(MANAGER), SPACE_ID, OUTSIDER);
-    expect(m.pending.decline).toHaveBeenCalledWith(ORG_ID, SPACE_ID, OUTSIDER);
+  it('the manager declines a pending grant by its id (scoped to the space); audited', async () => {
+    m.pending.decline.mockResolvedValue(OUTSIDER);
+    await useCase().execute(actor(MANAGER), SPACE_ID, PENDING_ID);
+    expect(m.pending.decline).toHaveBeenCalledWith(
+      ORG_ID,
+      SPACE_ID,
+      PENDING_ID,
+    );
     expect(kit.audited()).toEqual([
       {
         organizationId: ORG_ID,
         userId: MANAGER,
         action: 'space.pending_grant_declined',
-        metadata: { spaceId: SPACE_ID, targetUserId: OUTSIDER },
+        metadata: {
+          spaceId: SPACE_ID,
+          pendingGrantId: PENDING_ID,
+          targetUserId: OUTSIDER,
+        },
       },
     ]);
   });
 
-  it('nothing pending: 404 pending-grant-not-found, no audit; malformed id the same', async () => {
-    m.pending.decline.mockResolvedValue(false);
-    for (const target of [OUTSIDER, 'nope']) {
-      await expect(
-        useCase().execute(actor(MANAGER), SPACE_ID, target),
-      ).rejects.toMatchObject({
-        constructor: NotFoundError,
-        code: 'pending-grant-not-found',
-      });
-    }
+  it('nothing pending with that id (or another space): 404 pending-grant-not-found, no audit; malformed id without a query', async () => {
+    m.pending.decline.mockResolvedValue(null);
+    await expect(
+      useCase().execute(actor(MANAGER), SPACE_ID, PENDING_ID),
+    ).rejects.toMatchObject({
+      constructor: NotFoundError,
+      code: 'pending-grant-not-found',
+    });
+    m.pending.decline.mockClear();
+    await expect(
+      useCase().execute(actor(MANAGER), SPACE_ID, 'nope'),
+    ).rejects.toMatchObject({ code: 'pending-grant-not-found' });
+    expect(m.pending.decline).not.toHaveBeenCalled();
     expect(m.audit.record).not.toHaveBeenCalled();
   });
 
   it('editor 403, admin outside 404', async () => {
     await expect(
-      useCase().execute(actor(EDITOR), SPACE_ID, OUTSIDER),
+      useCase().execute(actor(EDITOR), SPACE_ID, PENDING_ID),
     ).rejects.toBeInstanceOf(PermissionDeniedError);
     await expect(
-      useCase().execute(actor(ADMIN), SPACE_ID, OUTSIDER),
+      useCase().execute(actor(ADMIN), SPACE_ID, PENDING_ID),
     ).rejects.toMatchObject(NOT_FOUND);
   });
 });

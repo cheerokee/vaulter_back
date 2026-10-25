@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { DataSource } from 'typeorm';
+import { validate } from 'uuid';
 import {
   decodeCursor,
   type CursorPage,
@@ -112,12 +113,38 @@ export class PendingGrantTypeormRepository extends PendingGrantRepository {
     return toCursorPage(items, rows.length > page.limit, (i) => i.id);
   }
 
+  async countPending(orgId: string, spaceId: string): Promise<number> {
+    const rows: { n: number }[] = await runInOrganizationScope(
+      this.dataSource,
+      orgId,
+      (m) =>
+        m.query(
+          `SELECT count(*)::int AS n FROM space_pending_grants pg WHERE ${OPEN}`,
+          [orgId, spaceId],
+        ),
+    );
+    return rows[0]?.n ?? 0;
+  }
+
+  // UPDATE condicional por id, preso ao espaço e à organização: numa corrida, só um recusa.
   async decline(
     orgId: string,
     spaceId: string,
-    userId: string,
-  ): Promise<boolean> {
-    return (await this.resolve(orgId, spaceId, userId, 'declined')) > 0;
+    pendingGrantId: string,
+  ): Promise<string | null> {
+    if (!validate(pendingGrantId)) return null;
+    const raw: unknown = await runInOrganizationScope(
+      this.dataSource,
+      orgId,
+      (m) =>
+        m.query(
+          `UPDATE space_pending_grants pg SET status = 'declined', updated_at = now()
+            WHERE ${OPEN} AND pg.id = $3
+           RETURNING pg.user_id`,
+          [orgId, spaceId, pendingGrantId],
+        ),
+    );
+    return updatedRows<{ user_id: string }>(raw)[0]?.user_id ?? null;
   }
 
   async markGranted(
@@ -148,7 +175,7 @@ export class PendingGrantTypeormRepository extends PendingGrantRepository {
     orgId: string,
     spaceId: string,
     userId: string,
-    status: Exclude<PendingGrantStatus, 'pending'>,
+    status: Extract<PendingGrantStatus, 'granted'>,
   ): Promise<number> {
     const raw: unknown = await runInOrganizationScope(
       this.dataSource,

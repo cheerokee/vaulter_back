@@ -359,7 +359,7 @@ describe('RecoverOrphanSpaceUseCase', () => {
     expect(kit.auditDump()).not.toContain(PROOF);
   });
 
-  it('a space with members: 409 space-not-orphan, nothing written', async () => {
+  it('a space with members: 409 space-not-orphan before the reauth (non-locking pre-check), nothing written', async () => {
     await expect(
       useCase().execute(actor(ADMIN), SPACE_ID, {
         ...input,
@@ -369,6 +369,20 @@ describe('RecoverOrphanSpaceUseCase', () => {
       constructor: ConflictError,
       code: 'space-not-orphan',
     });
+    expect(m.grants.upsert).not.toHaveBeenCalled();
+    expect(m.verifier.verify).not.toHaveBeenCalled();
+    expect(m.uow.run).not.toHaveBeenCalled();
+  });
+
+  it('a member appearing between the pre-check and the lock: 409 under the lock (authoritative)', async () => {
+    orphan();
+    m.roles.activeMemberIds
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([READER]);
+    await expect(
+      useCase().execute(actor(ADMIN), SPACE_ID, input),
+    ).rejects.toMatchObject({ code: 'space-not-orphan' });
+    expect(m.verifier.verify).toHaveBeenCalled();
     expect(m.grants.upsert).not.toHaveBeenCalled();
   });
 

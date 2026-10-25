@@ -22,6 +22,16 @@ export class OrganizationDirectory {
   }
 
   /**
+   * Locks the ACTIVE membership row (`FOR SHARE`) until the end of the transaction and tells whether it exists.
+   * MUST run inside `UnitOfWork.run`. A concurrent removal from the organization waits for this transaction (and
+   * then sees what it wrote); one that committed first makes this false. Malformed ids: false, no query.
+   */
+  async lockActiveMember(orgId: string, userId: string): Promise<boolean> {
+    if (!validate(orgId) || !validate(userId)) return false;
+    return this.memberships.lockActive(orgId, userId);
+  }
+
+  /**
    * Ids of every organization where the user is an ACTIVE member (reads only the user's own links, RLS
    * self_read). Used by `spaces` to resolve a space id for an org admin who is not in the space.
    */

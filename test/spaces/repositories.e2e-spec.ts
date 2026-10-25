@@ -186,9 +186,12 @@ describe('spaces repositories (e2e, app role)', () => {
       const { space, keyId } = await makeSpace(orgA.id, ana);
       const inv = issue(orgA.id, ana);
       await invitations.create(inv);
-      await intents.record(orgA.id, inv.id, [
-        { spaceId: space.id, roleKey: 'space_reader' },
-      ]);
+      await intents.record(
+        orgA.id,
+        inv.id,
+        [{ spaceId: space.id, roleKey: 'space_reader' }],
+        ana,
+      );
       await pending.create(orgA.id, {
         id: newId(),
         spaceId: space.id,
@@ -284,9 +287,12 @@ describe('spaces repositories (e2e, app role)', () => {
         }),
       ).rejects.toMatchObject(NOT_FOUND);
       await expect(
-        intents.record(orgB.id, newId(), [
-          { spaceId: space.id, roleKey: 'space_reader' },
-        ]),
+        intents.record(
+          orgB.id,
+          newId(),
+          [{ spaceId: space.id, roleKey: 'space_reader' }],
+          bob,
+        ),
       ).rejects.toMatchObject(NOT_FOUND);
       expect(await spaceRoles.activeMemberIds(orgA.id, space.id)).toEqual([
         ana,
@@ -766,6 +772,67 @@ describe('spaces repositories (e2e, app role)', () => {
     });
   });
 
+  describe('MembershipRepository.lockActive (add to a space vs. leaving the organization)', () => {
+    it('requires a unit of work, answers for active members only and holds off a concurrent removal', async () => {
+      const ana = await makeUser('ana@x.com');
+      const bob = await makeUser('bob@x.com');
+      const cid = await makeUser('cid@x.com');
+      const org = await makeOrg('A', [ana], [bob]);
+      await expect(members.lockActive(org.id, bob)).rejects.toThrow(
+        /unit of work/,
+      );
+      expect(await uow.run(() => members.lockActive(org.id, cid))).toBe(false);
+
+      // 1. o lock (FOR SHARE) vem primeiro: a remoção espera o fim da transação que travou.
+      const hold = gate();
+      const locked = gate();
+      const first = uow.run(async () => {
+        const ok = await members.lockActive(org.id, bob);
+        locked.release();
+        await hold.promise;
+        return ok;
+      });
+      await locked.promise;
+      let removed = false;
+      const removal = uow
+        .run(() => members.remove(org.id, bob))
+        .then(() => {
+          removed = true;
+        });
+      await new Promise((r) => setTimeout(r, 300));
+      expect(removed).toBe(false);
+      hold.release();
+      expect(await first).toBe(true);
+      await removal;
+
+      // 2. a remoção vem primeiro: o lock espera e, confirmada a lápide, responde false.
+      await uow.run(async () => {
+        await members.add(org.id, bob, now);
+        await orgRoles.assignOrgRole(org.id, bob, 'org_member', null);
+      });
+      const holdRemoval = gate();
+      const removing = gate();
+      const removal2 = uow.run(async () => {
+        await members.remove(org.id, bob);
+        removing.release();
+        await holdRemoval.promise;
+      });
+      await removing.promise;
+      let lockDone = false;
+      const second = uow
+        .run(() => members.lockActive(org.id, bob))
+        .then((ok) => {
+          lockDone = true;
+          return ok;
+        });
+      await new Promise((r) => setTimeout(r, 300));
+      expect(lockDone).toBe(false);
+      holdRemoval.release();
+      await removal2;
+      expect(await second).toBe(false);
+    });
+  });
+
   describe('SpaceRoleRepository: locating a space', () => {
     it('findOrganizationOfMember resolves only for an active member, without an organization context', async () => {
       const ana = await makeUser('ana@x.com');
@@ -967,8 +1034,14 @@ describe('spaces repositories (e2e, app role)', () => {
       expect(p2.items.map((p) => p.id)).toEqual([id2]);
       expect(p2.nextCursor).toBeNull();
 
-      expect(await pending.decline(org.id, space.id, cid)).toBe(true);
-      expect(await pending.decline(org.id, space.id, cid)).toBe(false);
+      expect(await pending.countPending(org.id, space.id)).toBe(2);
+      expect(await pending.countPending(org.id, other.id)).toBe(0);
+      // Por id, só dentro do espaço dado: no outro espaço (ou id inexistente) não acha.
+      expect(await pending.decline(org.id, other.id, id2)).toBeNull();
+      expect(await pending.decline(org.id, space.id, newId())).toBeNull();
+      expect(await pending.decline(org.id, space.id, id2)).toBe(cid);
+      expect(await pending.decline(org.id, space.id, id2)).toBeNull();
+      expect(await pending.countPending(org.id, space.id)).toBe(1);
       expect(await pending.findPending(org.id, space.id, cid)).toBeNull();
       await pending.markGranted(org.id, space.id, bob);
       expect(await pending.findPending(org.id, space.id, bob)).toBeNull();
@@ -1015,16 +1088,21 @@ describe('spaces repositories (e2e, app role)', () => {
       const { space: s2 } = await makeSpace(org.id, ana, [], 'Vendas');
       const inv = issue(org.id, ana);
       await invitations.create(inv);
-      await intents.record(org.id, inv.id, [
-        { spaceId: s1.id, roleKey: 'space_reader' },
-        { spaceId: s2.id, roleKey: 'space_manager' },
-      ]);
+      await intents.record(
+        org.id,
+        inv.id,
+        [
+          { spaceId: s1.id, roleKey: 'space_reader' },
+          { spaceId: s2.id, roleKey: 'space_manager' },
+        ],
+        ana,
+      );
       expect(await intents.forInvitation(org.id, inv.id)).toEqual([
-        { spaceId: s1.id, roleKey: 'space_reader' },
-        { spaceId: s2.id, roleKey: 'space_manager' },
+        { spaceId: s1.id, roleKey: 'space_reader', requestedByUserId: ana },
+        { spaceId: s2.id, roleKey: 'space_manager', requestedByUserId: ana },
       ]);
       expect(await intents.forInvitation(org.id, newId())).toEqual([]);
-      await intents.record(org.id, inv.id, []);
+      await intents.record(org.id, inv.id, [], ana);
     });
   });
 });

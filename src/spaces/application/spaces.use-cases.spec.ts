@@ -240,7 +240,8 @@ describe('ListSpacesUseCase', () => {
 });
 
 describe('GetSpaceUseCase', () => {
-  const useCase = () => new GetSpaceUseCase(d.access, d.recoveryKit, d.keys);
+  const useCase = () =>
+    new GetSpaceUseCase(d.access, d.recoveryKit, d.keys, d.pending);
 
   it('returns the details with my role and the computed flags', async () => {
     kit.addSpace(SPACE_ID, ORG_ID, [[READER, 'space_reader']], {
@@ -259,6 +260,23 @@ describe('GetSpaceUseCase', () => {
       createdAt: new Date('2026-10-01T00:00:00Z'),
       updatedAt: null,
     });
+  });
+
+  it('a manager also gets the pending grants count; other roles never do', async () => {
+    m.pending.countPending.mockResolvedValue(4);
+    await expect(
+      useCase().execute(actor(MANAGER), SPACE_ID),
+    ).resolves.toMatchObject({
+      roleKey: 'space_manager',
+      pendingGrants: 4,
+      keyRotationRequired: false,
+      recoveryRewrapRequired: false,
+    });
+    expect(m.pending.countPending).toHaveBeenCalledWith(ORG_ID, SPACE_ID);
+    m.pending.countPending.mockClear();
+    const view = await useCase().execute(actor(EDITOR), SPACE_ID);
+    expect(view).not.toHaveProperty('pendingGrants');
+    expect(m.pending.countPending).not.toHaveBeenCalled();
   });
 
   it('the org admin outside the space gets 404', async () => {

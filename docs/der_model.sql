@@ -513,16 +513,20 @@ CREATE TABLE invitation_space_intents (
   invitation_id CHAR(36) NOT NULL,
   space_id CHAR(36) NOT NULL,
   role_id CHAR(36) NOT NULL,
+  -- Quem indicou o espaço (Gestor dele); vira space_pending_grants.requested_by_user_id no aceite.
+  requested_by_user_id CHAR(36) NULL,
   PRIMARY KEY (id),
   UNIQUE INDEX uq_invitation_space_intents_invitation_space (invitation_id, space_id),
   INDEX fk_invitation_space_intents_organizations_idx (organization_id),
   INDEX fk_invitation_space_intents_invitations_idx (invitation_id),
   INDEX fk_invitation_space_intents_spaces_idx (space_id),
   INDEX fk_invitation_space_intents_roles_idx (role_id),
+  INDEX fk_invitation_space_intents_requested_by_idx (requested_by_user_id),
   CONSTRAINT fk_invitation_space_intents_organizations FOREIGN KEY (organization_id) REFERENCES organizations (id),
   CONSTRAINT fk_invitation_space_intents_invitations FOREIGN KEY (invitation_id) REFERENCES organization_invitations (id),
   CONSTRAINT fk_invitation_space_intents_spaces FOREIGN KEY (space_id) REFERENCES spaces (id),
-  CONSTRAINT fk_invitation_space_intents_roles FOREIGN KEY (role_id) REFERENCES roles (id)
+  CONSTRAINT fk_invitation_space_intents_roles FOREIGN KEY (role_id) REFERENCES roles (id),
+  CONSTRAINT fk_invitation_space_intents_requested_by FOREIGN KEY (requested_by_user_id) REFERENCES users (id)
 );
 
 -- Permissões que o app pode pedir. À instalação só se concede a interseção (app declarou x papel concedido).

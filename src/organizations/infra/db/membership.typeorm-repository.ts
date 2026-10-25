@@ -7,6 +7,7 @@ import {
   type CursorPageRequest,
 } from '../../../shared/domain/pagination.js';
 import { runInOrganizationScope } from '../../../shared/infra/db/organization-scope.js';
+import { currentManager } from '../../../shared/infra/db/unit-of-work.js';
 import type { Membership, OrgRoleKey } from '../../domain/membership.js';
 import { MembershipRepository } from '../../domain/membership.repository.js';
 
@@ -67,6 +68,29 @@ export class MembershipTypeormRepository extends MembershipRepository {
     );
     const row = rows[0];
     return row ? toMembership(orgId, row) : null;
+  }
+
+  // FOR SHARE só faz sentido numa transação que dure o caso de uso inteiro (o lock passa do savepoint do
+  // contexto para a transação de fora). Usado pelo `spaces` ao pôr alguém num espaço: mesma ordem da saída da
+  // organização (linha do vínculo, depois o espaço).
+  async lockActive(orgId: string, userId: string): Promise<boolean> {
+    if (!currentManager(this.dataSource).queryRunner?.isTransactionActive) {
+      throw new Error(
+        'MembershipRepository.lockActive requires an active unit of work (call it inside UnitOfWork.run).',
+      );
+    }
+    const rows: unknown[] = await runInOrganizationScope(
+      this.dataSource,
+      orgId,
+      (m) =>
+        m.query(
+          `SELECT 1 FROM user_organization
+            WHERE organization_id = $1 AND user_id = $2 AND deleted_at IS NULL
+              FOR SHARE`,
+          [orgId, userId],
+        ),
+    );
+    return rows.length > 0;
   }
 
   // Ordem por user_id (v7); o cursor é o último user_id.

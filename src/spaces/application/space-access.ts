@@ -42,6 +42,10 @@ function permissionDenied(): PermissionDeniedError {
 //   + `OrganizationAccess.hasPermission`), cada busca no escopo de RLS daquela organização. Quem não tem a
 //   permissão em nenhuma organização do espaço recebe 404 (não descobre que o id existe); só quem JÁ é membro
 //   do espaço e não tem a permissão da organização recebe 403.
+// A pessoa que AGE só tem o vínculo com a organização conferido (sem lock): se ela sair da organização no meio,
+// o gancho de saída (`SpacesMemberRemovedHook`) trava os espaços dela e só então grava as lápides, então espera
+// esta transação terminar e desfaz o que ela tiver feito (cópia, papel) e marca a troca de chave. Já o ALVO de
+// "pôr alguém" tem o vínculo travado (`OrganizationDirectory.lockActiveMember`, FOR SHARE) antes do espaço.
 // Mutações: `lockAsMember` / `lockWithOrgPermission` rodam DENTRO do UnitOfWork.run. Primeiro a checagem sem
 // lock (quem não é membro nunca trava linha), depois `SELECT ... FOR UPDATE` no espaço e a checagem de novo,
 // a que vale, já com o lock.
@@ -90,16 +94,20 @@ export class SpaceAccess {
   /**
    * MUST run inside `UnitOfWork.run`. Non-locking pre-check, then locks the space row (`FOR UPDATE`) and
    * re-reads the actor's role under the lock (the authoritative check). Returns the LOCKED space.
+   * `beforeLock` runs between the pre-check and the space lock, with the organization known: rows that must be
+   * locked BEFORE the space (lock order of the removal path: membership row, then spaces) go there.
    */
   async lockAsMember(
     spaceId: string,
     userId: string,
     permission?: SpacePermission,
+    beforeLock?: (orgId: string) => Promise<void>,
   ): Promise<SpaceMembership> {
     const pre = permission
       ? await this.requireSpacePermission(spaceId, userId, permission)
       : await this.requireSpaceMember(spaceId, userId);
     const orgId = pre.space.organizationId;
+    if (beforeLock) await beforeLock(orgId);
     const space = await this.spaces.lockForUpdate(orgId, spaceId);
     const roleKey = space
       ? await this.roles.roleOf(orgId, spaceId, userId)

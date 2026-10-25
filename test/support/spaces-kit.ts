@@ -116,6 +116,7 @@ export function makeSpaceKit() {
     findPending: vi.fn(),
     listPending: vi.fn(),
     decline: vi.fn(),
+    countPending: vi.fn(),
     markGranted: vi.fn(),
     cancelForUser: vi.fn(),
   };
@@ -127,6 +128,7 @@ export function makeSpaceKit() {
   };
   const directory = {
     isActiveMember: vi.fn(),
+    lockActiveMember: vi.fn(),
     recoveryPublicKey: vi.fn(),
     organizationIdsOf: vi.fn(),
   };
@@ -394,6 +396,7 @@ export function makeSpaceKit() {
       tag('pending.markGranted'),
     );
     pending.decline.mockResolvedValue(true);
+    pending.countPending.mockResolvedValue(0);
     pending.cancelForUser.mockResolvedValue(0);
     pending.listPending.mockResolvedValue({ items: [], nextCursor: null });
     intents.record.mockImplementation(async () => tag('intents.record'));
@@ -423,6 +426,12 @@ export function makeSpaceKit() {
           throw new PermissionDeniedError('permission-denied', 'x');
         }
         return { organizationId: orgId, userId, roleKey: r };
+      },
+    );
+    directory.lockActiveMember.mockImplementation(
+      async (orgId: string, userId: string) => {
+        tag('directory.lockActiveMember');
+        return orgRole(orgId, userId) !== undefined;
       },
     );
     directory.isActiveMember.mockImplementation(

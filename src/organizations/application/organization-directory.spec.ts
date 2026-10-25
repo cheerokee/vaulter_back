@@ -35,6 +35,27 @@ describe('OrganizationDirectory', () => {
     expect(kit.mocks.memberships.find).not.toHaveBeenCalled();
   });
 
+  it('lockActiveMember: locks through the repository; malformed ids are false without a query', async () => {
+    await expect(directory().lockActiveMember(ORG_ID, MEMBER)).resolves.toBe(
+      true,
+    );
+    expect(kit.mocks.memberships.lockActive).toHaveBeenCalledWith(
+      ORG_ID,
+      MEMBER,
+    );
+    await expect(directory().lockActiveMember(ORG_ID, STRANGER)).resolves.toBe(
+      false,
+    );
+    kit.mocks.memberships.lockActive.mockClear();
+    await expect(directory().lockActiveMember('nope', MEMBER)).resolves.toBe(
+      false,
+    );
+    await expect(directory().lockActiveMember(ORG_ID, 'nope')).resolves.toBe(
+      false,
+    );
+    expect(kit.mocks.memberships.lockActive).not.toHaveBeenCalled();
+  });
+
   it('organizationIdsOf: every active organization of the user, across pages', async () => {
     const O2 = '019a1b2c-0000-7000-8000-000000000002';
     kit.mocks.orgs.listForUser

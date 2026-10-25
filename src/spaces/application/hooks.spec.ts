@@ -164,9 +164,13 @@ describe('SpacesInvitationHook', () => {
     await hook().validateAndRecord(
       created([{ spaceId: SPACE_ID, roleKey: 'space_editor' }]),
     );
-    expect(m.intents.record).toHaveBeenCalledWith(ORG_ID, INVITATION_ID, [
-      { spaceId: SPACE_ID, roleKey: 'space_editor' },
-    ]);
+    // the inviter is recorded with the intents (becomes requestedByUserId on accept)
+    expect(m.intents.record).toHaveBeenCalledWith(
+      ORG_ID,
+      INVITATION_ID,
+      [{ spaceId: SPACE_ID, roleKey: 'space_editor' }],
+      MANAGER,
+    );
   });
 
   it('validateAndRecord: a space of another organization or malformed id -> 404; nothing recorded', async () => {
@@ -202,9 +206,13 @@ describe('SpacesInvitationHook', () => {
     ).rejects.toBeInstanceOf(DomainValidationError);
   });
 
-  it('onAccepted: creates a pending grant per intent (requested_by unknown -> null)', async () => {
+  it('onAccepted: creates a pending grant per intent, requested by whoever indicated the space', async () => {
     m.intents.forInvitation.mockResolvedValue([
-      { spaceId: SPACE_ID, roleKey: 'space_editor' },
+      {
+        spaceId: SPACE_ID,
+        roleKey: 'space_editor',
+        requestedByUserId: MANAGER,
+      },
     ]);
     await hook().onAccepted(accepted());
     expect(m.intents.forInvitation).toHaveBeenCalledWith(ORG_ID, INVITATION_ID);
@@ -214,8 +222,19 @@ describe('SpacesInvitationHook', () => {
       userId: OUTSIDER,
       roleKey: 'space_editor',
       invitationId: INVITATION_ID,
-      requestedByUserId: null,
+      requestedByUserId: MANAGER,
     });
+  });
+
+  it('onAccepted: an intent without a recorded inviter (older rows) -> requestedByUserId null', async () => {
+    m.intents.forInvitation.mockResolvedValue([
+      { spaceId: SPACE_ID, roleKey: 'space_reader', requestedByUserId: null },
+    ]);
+    await hook().onAccepted(accepted());
+    expect(m.pending.create).toHaveBeenCalledWith(
+      ORG_ID,
+      expect.objectContaining({ requestedByUserId: null }),
+    );
   });
 
   it('onAccepted: skips spaces the user is already in, spaces with a pending grant and vanished spaces', async () => {

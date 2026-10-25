@@ -4,6 +4,7 @@ import { runInOrganizationScope } from '../../../shared/infra/db/organization-sc
 import {
   SpaceIntentRepository,
   type SpaceIntent,
+  type StoredSpaceIntent,
 } from '../../domain/space-intent.repository.js';
 import { spaceFactoryRoleId, spaceNotFound } from './db-helpers.js';
 
@@ -20,18 +21,20 @@ export class SpaceIntentTypeormRepository extends SpaceIntentRepository {
     orgId: string,
     invitationId: string,
     intents: readonly SpaceIntent[],
+    requestedByUserId: string,
   ): Promise<void> {
     if (intents.length === 0) return;
     await runInOrganizationScope(this.dataSource, orgId, async (m) => {
       for (const intent of intents) {
         const roleId = await spaceFactoryRoleId(m, intent.roleKey);
         const rows: { id: string }[] = await m.query(
-          `INSERT INTO invitation_space_intents (organization_id, invitation_id, space_id, role_id)
-           SELECT s.organization_id, $2, s.id, $4
+          `INSERT INTO invitation_space_intents
+                  (organization_id, invitation_id, space_id, role_id, requested_by_user_id)
+           SELECT s.organization_id, $2, s.id, $4, $5
              FROM spaces s
             WHERE s.id = $3 AND s.organization_id = $1 AND s.deleted_at IS NULL
            RETURNING id`,
-          [orgId, invitationId, intent.spaceId, roleId],
+          [orgId, invitationId, intent.spaceId, roleId, requestedByUserId],
         );
         if (rows.length === 0) {
           throw spaceNotFound();
@@ -44,17 +47,24 @@ export class SpaceIntentTypeormRepository extends SpaceIntentRepository {
   async forInvitation(
     orgId: string,
     invitationId: string,
-  ): Promise<SpaceIntent[]> {
-    const rows: { space_id: string; role_key: SpaceIntent['roleKey'] }[] =
-      await runInOrganizationScope(this.dataSource, orgId, (m) =>
-        m.query(
-          `SELECT i.space_id, r.key AS role_key
+  ): Promise<StoredSpaceIntent[]> {
+    const rows: {
+      space_id: string;
+      role_key: SpaceIntent['roleKey'];
+      requested_by_user_id: string | null;
+    }[] = await runInOrganizationScope(this.dataSource, orgId, (m) =>
+      m.query(
+        `SELECT i.space_id, r.key AS role_key, i.requested_by_user_id
              FROM invitation_space_intents i JOIN roles r ON r.id = i.role_id
             WHERE i.organization_id = $1 AND i.invitation_id = $2 AND i.deleted_at IS NULL
             ORDER BY i.id ASC`,
-          [orgId, invitationId],
-        ),
-      );
-    return rows.map((r) => ({ spaceId: r.space_id, roleKey: r.role_key }));
+        [orgId, invitationId],
+      ),
+    );
+    return rows.map((r) => ({
+      spaceId: r.space_id,
+      roleKey: r.role_key,
+      requestedByUserId: r.requested_by_user_id,
+    }));
   }
 }

@@ -22,7 +22,7 @@ export type RecoverOrphanSpaceInput = {
 // 1. formato das cópias (422, sem gastar o Argon2);
 // 2. espaço resolvido pela organização com org.members.manage (não admin 404; membro do espaço sem a permissão
 //    403), também sem gastar o Argon2;
-// 3. reautenticação FORA da transação;
+// 3. pré-checagem do órfão (sem lock) e reautenticação, FORA da transação;
 // 4. na transação: espaço travado, permissão de novo, nenhum membro ativo (`space-not-orphan`), cópias de todas
 //    as versões, o admin entra como Gestor, auditoria `space.recovered_with_kit` (sem cópia nem prova).
 @Injectable()
@@ -43,10 +43,14 @@ export class RecoverOrphanSpaceUseCase {
     input: RecoverOrphanSpaceInput,
   ): Promise<{ roleKey: SpaceRoleKey }> {
     assertWrappedKeys(input.grants.map((g) => g.wrappedKey));
-    await this.access.requireOrgPermissionForSpace(
+    const pre = await this.access.requireOrgPermissionForSpace(
       spaceId,
       actor.userId,
       'org.members.manage',
+    );
+    // Pré-checagem sem lock: espaço com membros responde 409 sem gastar o Argon2 (a que vale é a de baixo).
+    OrphanRules.assertOrphan(
+      (await this.roles.activeMemberIds(pre.organizationId, pre.id)).length,
     );
     await this.verifier.verify(actor.userId, input.currentAuthProof);
     return this.uow.run(async () => {

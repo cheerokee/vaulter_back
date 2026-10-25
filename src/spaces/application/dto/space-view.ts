@@ -17,6 +17,9 @@ export type SpaceView = {
   updatedAt: Date | null;
 };
 
+/** `GET /spaces/:id`: the details plus, for managers only, the open pending grants count. */
+export type SpaceDetailsView = SpaceView & { pendingGrants?: number };
+
 /** An item of "my spaces"; `pendingGrants` only for managers (omitted otherwise). */
 export type SpaceListItemView = Omit<SpaceView, 'updatedAt'> & {
   pendingGrants?: number;

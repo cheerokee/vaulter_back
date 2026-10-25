@@ -32,12 +32,17 @@ export abstract class PendingGrantRepository {
     spaceId: string,
     page: CursorPageRequest,
   ): Promise<CursorPage<PendingGrant>>;
-  /** Returns whether a pending row was changed. */
+  /** Open pending grants of the space. */
+  abstract countPending(orgId: string, spaceId: string): Promise<number>;
+  /**
+   * Declines the OPEN pending grant `pendingGrantId` of the space (another space's id never matches); returns
+   * the user it was for, or null when nothing changed.
+   */
   abstract decline(
     orgId: string,
     spaceId: string,
-    userId: string,
-  ): Promise<boolean>;
+    pendingGrantId: string,
+  ): Promise<string | null>;
   abstract markGranted(
     orgId: string,
     spaceId: string,

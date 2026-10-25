@@ -14,6 +14,7 @@ import { SpaceTypeormEntity } from './space.entity.js';
 @Index('fk_invitation_space_intents_invitations_idx', ['invitationId'])
 @Index('fk_invitation_space_intents_spaces_idx', ['spaceId'])
 @Index('fk_invitation_space_intents_roles_idx', ['roleId'])
+@Index('fk_invitation_space_intents_requested_by_idx', ['requestedByUserId'])
 export class InvitationSpaceIntentTypeormEntity extends BaseTypeormEntity {
   @Column({ type: 'uuid' })
   organizationId!: string;
@@ -70,4 +71,16 @@ export class InvitationSpaceIntentTypeormEntity extends BaseTypeormEntity {
     foreignKeyConstraintName: 'fk_invitation_space_intents_roles',
   })
   role?: { id: string };
+
+  // Quem indicou o espaço no convite (Gestor dele); vira o requested_by da pendência no aceite. Nulo só nas
+  // linhas gravadas antes da coluna existir.
+  @Column({ type: 'uuid', nullable: true })
+  requestedByUserId!: string | null;
+
+  @ManyToOne('UserTypeormEntity')
+  @JoinColumn({
+    name: 'requested_by_user_id',
+    foreignKeyConstraintName: 'fk_invitation_space_intents_requested_by',
+  })
+  requestedBy?: { id: string };
 }

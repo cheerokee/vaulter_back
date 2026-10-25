@@ -7,7 +7,7 @@ import { UnitOfWork } from '../../shared/infra/db/unit-of-work.js';
 import { PendingGrantRepository } from '../domain/pending-grant.repository.js';
 import { SpaceAccess } from './space-access.js';
 
-// Recusa a pendência de trancar aberta para `userId` (há no máximo uma por pessoa em cada espaço). Gestor.
+// Recusa uma pendência de trancar aberta, pelo id (só se for deste espaço). Gestor.
 @Injectable()
 export class DeclinePendingGrantUseCase {
   constructor(
@@ -17,17 +17,25 @@ export class DeclinePendingGrantUseCase {
     private readonly uow: UnitOfWork,
   ) {}
 
-  execute(actor: Actor, spaceId: string, userId: string): Promise<void> {
+  execute(
+    actor: Actor,
+    spaceId: string,
+    pendingGrantId: string,
+  ): Promise<void> {
     return this.uow.run(async () => {
       const { space } = await this.access.requireSpacePermission(
         spaceId,
         actor.userId,
         'space.members.manage',
       );
-      const declined =
-        validate(userId) &&
-        (await this.pending.decline(space.organizationId, space.id, userId));
-      if (!declined) {
+      const targetUserId = validate(pendingGrantId)
+        ? await this.pending.decline(
+            space.organizationId,
+            space.id,
+            pendingGrantId,
+          )
+        : null;
+      if (!targetUserId) {
         throw new NotFoundError(
           'pending-grant-not-found',
           'The pending grant was not found.',
@@ -37,7 +45,7 @@ export class DeclinePendingGrantUseCase {
         organizationId: space.organizationId,
         userId: actor.userId,
         action: 'space.pending_grant_declined',
-        metadata: { spaceId: space.id, targetUserId: userId },
+        metadata: { spaceId: space.id, pendingGrantId, targetUserId },
       });
     });
   }

@@ -47,20 +47,24 @@ export class AddSpaceMemberUseCase {
     const roleKey = SpaceMembershipRules.assertSpaceRole(input.roleKey);
     assertWrappedKeys(input.grants.map((g) => g.wrappedKey));
     return this.uow.run(async () => {
+      // Só membro ativo da organização entra num espaço dela. O vínculo do alvo é travado (FOR SHARE) depois da
+      // checagem de acesso de quem age e ANTES do espaço — a mesma ordem da saída da organização (vínculo, depois
+      // espaços): uma saída concorrente espera esta transação (e o gancho dela desfaz a entrada), ou, se já
+      // confirmou, o lock responde false.
       const { space } = await this.access.lockAsMember(
         spaceId,
         actor.userId,
         'space.members.manage',
+        async (orgId) => {
+          if (!(await this.directory.lockActiveMember(orgId, input.userId))) {
+            throw new NotFoundError(
+              'member-not-found',
+              'The member was not found.',
+            );
+          }
+        },
       );
       const orgId = space.organizationId;
-      // Só membro ativo da organização entra num espaço dela (o diretório só é consultado depois da checagem
-      // de acesso de quem age).
-      if (!(await this.directory.isActiveMember(orgId, input.userId))) {
-        throw new NotFoundError(
-          'member-not-found',
-          'The member was not found.',
-        );
-      }
       if (await this.roles.roleOf(orgId, space.id, input.userId)) {
         throw new ConflictError(
           'space-member-exists',

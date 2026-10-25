@@ -100,6 +100,7 @@ export function makeKit() {
     add: vi.fn(),
     remove: vi.fn(),
     find: vi.fn(),
+    lockActive: vi.fn(),
     list: vi.fn(),
     countActive: vi.fn(),
     countAdmins: vi.fn(),
@@ -154,6 +155,12 @@ export function makeKit() {
         return roleKey
           ? { organizationId: orgId, userId, roleKey, joinedAt: NOW }
           : null;
+      },
+    );
+    memberships.lockActive.mockImplementation(
+      async (orgId: string, userId: string) => {
+        tag('memberships.lockActive');
+        return orgId === ORG_ID && members.has(userId);
       },
     );
     memberships.add.mockImplementation(async () => tag('memberships.add'));

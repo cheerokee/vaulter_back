@@ -25,10 +25,10 @@ const HOOK_NAME = 'spaces.invitation';
 // Convite com espaços (decisão 9). Os dois lados rodam no unit of work do `organizations` (criar / aceitar).
 // - validateAndRecord: cada espaço precisa existir NA organização do convite (senão 404 `space-not-found`, o
 //   mesmo para id de outra organização ou malformado: a busca roda no escopo de RLS da organização) e quem
-//   convida precisa ser Gestor dele (senão 403). Grava as intenções.
+//   convida precisa ser Gestor dele (senão 403). Grava as intenções com quem convidou.
 // - onAccepted: uma pendência de trancar por intenção. Pula o espaço que sumiu, aquele em que a pessoa já está
-//   e aquele com pendência aberta para ela (o aceite não falha por isso). `requestedByUserId` fica nulo: a
-//   intenção não guarda quem indicou e o contexto do aceite não traz o criador do convite.
+//   e aquele com pendência aberta para ela (o aceite não falha por isso). `requestedByUserId` = quem
+//   indicou o espaço (gravado na intenção; nulo só em intenções antigas).
 @Injectable()
 export class SpacesInvitationHook implements OnModuleInit, OnModuleDestroy {
   constructor(
@@ -71,7 +71,7 @@ export class SpacesInvitationHook implements OnModuleInit, OnModuleDestroy {
       }
       intents.push({ spaceId: space.id, roleKey });
     }
-    await this.intents.record(orgId, ctx.invitationId, intents);
+    await this.intents.record(orgId, ctx.invitationId, intents, ctx.actorId);
   }
 
   async onAccepted(ctx: InvitationAcceptedContext): Promise<void> {
@@ -91,7 +91,7 @@ export class SpacesInvitationHook implements OnModuleInit, OnModuleDestroy {
         userId: ctx.userId,
         roleKey: intent.roleKey,
         invitationId: ctx.invitationId,
-        requestedByUserId: null,
+        requestedByUserId: intent.requestedByUserId,
       });
     }
   }
