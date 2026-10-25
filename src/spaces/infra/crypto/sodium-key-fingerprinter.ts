@@ -10,6 +10,9 @@ export class SodiumKeyFingerprinter extends KeyFingerprinter {
       publicKeyB64u,
       sodium.base64_variants.URLSAFE_NO_PADDING,
     );
+    if (bytes.length !== 32) {
+      throw new Error('The public key must have exactly 32 bytes.');
+    }
     return sodium.to_hex(sodium.crypto_generichash(32, bytes, null));
   }
 }

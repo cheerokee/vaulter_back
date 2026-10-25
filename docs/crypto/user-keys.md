@@ -111,12 +111,16 @@ Contrato entre backend, app e hub para as cópias trancadas da chave de um espa�
 0x01 ‖ crypto_box_seal(chaveDoEspaço (32), publicKeyX25519DoDestinatário (32))
 ```
 
-  1 + 32 + 48 (sobrecarga do `crypto_box_seal`) = **81 bytes**, em base64url sem padding (**108 caracteres**).
+  1 (versão) + 48 (sobrecarga do selo) + 32 (chave) = **81 bytes**, em base64url sem padding (**108 caracteres**).
   O primeiro byte é a versão do formato (`0x01`); versão diferente deve ser rejeitada.
+  **O byte de versão não é autenticado** (o `crypto_box_seal` não tem dados associados): quem decodifica
+  deve rejeitar versões desconhecidas, e cada versão futura deve usar uma construção **distinta** (nunca
+  reaproveitar o mesmo selo com outro significado).
 - **Destinatários:** a `publicKey` do usuário e a `recoveryPublicKey` da organização (o kit). Hubs e
   instalações de app entram depois, com o mesmo formato.
 - **Impressão do kit:** `recoveryKeyFingerprint` = hex de `crypto_generichash(32, bytesDaRecoveryPublicKey)`
-  (BLAKE2b-256 dos bytes decodificados, **64 caracteres hex**). O backend grava a impressão em cada versão da
+  (BLAKE2b-256 **sem chave** — `key = null` — sobre os 32 bytes decodificados, **64 caracteres hex**).
+  Vetor: a impressão da `publicKey` de teste abaixo é `213651d4214dfd9437ca03e59a0ea03f8f53a1f6aae410a239df9f1096f703c4`. O backend grava a impressão em cada versão da
   chave para saber para qual kit ela está trancada; assim calcula quais versões precisam ser **retrancadas**
   quando a organização troca de kit. A impressão vem da chave atual da organização, nunca do cliente.
 - **Validação no backend:** só formato, tamanho e byte de versão. Ele não consegue conferir se a cópia abre;
