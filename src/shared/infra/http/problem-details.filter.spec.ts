@@ -9,8 +9,16 @@ import {
   PermissionDeniedError,
   UnauthenticatedError,
 } from '../../domain/errors.js';
+import * as Sentry from '@sentry/nestjs';
+import { DomainError } from '../../domain/errors.js';
 import { ProblemDetailsFilter } from './problem-details.filter.js';
 import { RequestValidationError } from './request-validation.error.js';
+
+vi.mock('@sentry/nestjs', () => ({ captureException: vi.fn() }));
+
+import { Logger } from '@nestjs/common';
+
+vi.spyOn(Logger.prototype, 'error').mockImplementation(() => undefined);
 
 const BASE = 'https://errors.example.invalid';
 
@@ -117,5 +125,28 @@ describe('ProblemDetailsFilter', () => {
     const res = run(new NotFoundError('x', 'y'), undefined);
     expect(typeof res.body.requestId).toBe('string');
     expect(res.body.requestId.length).toBeGreaterThan(0);
+  });
+
+  describe('hardening', () => {
+    it('treats an unmapped DomainError like an unknown error', () => {
+      const spy = vi.mocked(Sentry.captureException);
+      spy.mockClear();
+      class Odd extends DomainError {}
+      const res = run(new Odd('odd', 'secret internals'));
+      expect(res.statusCode).toBe(500);
+      expect(res.body.detail).toBe('An unexpected error occurred');
+      expect(JSON.stringify(res.body)).not.toContain('secret internals');
+      expect(spy).toHaveBeenCalledOnce();
+    });
+
+    it('keeps the status of an HttpException >= 500 with a generic detail', () => {
+      const spy = vi.mocked(Sentry.captureException);
+      spy.mockClear();
+      const res = run(new HttpException('db host 10.0.0.1 down', 503));
+      expect(res.statusCode).toBe(503);
+      expect(res.body.type).toBe(`${BASE}/service-unavailable`);
+      expect(res.body.detail).toBe('An unexpected error occurred');
+      expect(spy).toHaveBeenCalledOnce();
+    });
   });
 });

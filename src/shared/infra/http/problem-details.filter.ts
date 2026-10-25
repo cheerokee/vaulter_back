@@ -101,11 +101,11 @@ export class ProblemDetailsFilter implements ExceptionFilter {
       };
     }
     if (exception instanceof DomainError) {
-      return {
-        status: this.domainStatus(exception),
-        code: exception.code,
-        detail: exception.message,
-      };
+      const status = this.domainStatus(exception);
+      if (status !== undefined) {
+        return { status, code: exception.code, detail: exception.message };
+      }
+      // DomainError fora do mapeamento: tratado como erro desconhecido (nunca ecoa a mensagem).
     }
     if (
       exception instanceof QueryFailedError &&
@@ -119,19 +119,14 @@ export class ProblemDetailsFilter implements ExceptionFilter {
     }
     if (exception instanceof HttpException) {
       const status = exception.getStatus();
+      const code = HTTP_CODES[status] ?? `http-${status}`;
       if (status < 500) {
-        return {
-          status,
-          code: HTTP_CODES[status] ?? `http-${status}`,
-          detail: exception.message,
-        };
+        return { status, code, detail: exception.message };
       }
+      this.report(exception, requestId);
+      return { status, code, detail: 'An unexpected error occurred' };
     }
-    this.logger.error(
-      `Unhandled error (requestId=${requestId})`,
-      exception instanceof Error ? exception.stack : String(exception),
-    );
-    Sentry.captureException(exception);
+    this.report(exception, requestId);
     return {
       status: HttpStatus.INTERNAL_SERVER_ERROR,
       code: 'internal-error',
@@ -139,13 +134,21 @@ export class ProblemDetailsFilter implements ExceptionFilter {
     };
   }
 
-  private domainStatus(e: DomainError): number {
+  private report(exception: unknown, requestId: string): void {
+    this.logger.error(
+      `Unhandled error (requestId=${requestId})`,
+      exception instanceof Error ? exception.stack : String(exception),
+    );
+    Sentry.captureException(exception);
+  }
+
+  private domainStatus(e: DomainError): number | undefined {
     if (e instanceof DomainValidationError) return 422;
     if (e instanceof NotFoundError) return 404;
     if (e instanceof PermissionDeniedError) return 403;
     if (e instanceof ConflictError) return 409;
     if (e instanceof UnauthenticatedError) return 401;
     if (e instanceof HubOfflineError) return 503;
-    return 500;
+    return undefined;
   }
 }

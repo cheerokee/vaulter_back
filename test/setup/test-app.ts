@@ -1,4 +1,5 @@
 import type { INestApplication } from '@nestjs/common';
+import { Logger } from 'nestjs-pino';
 import { Test } from '@nestjs/testing';
 import { DataSource } from 'typeorm';
 import { AppModule } from '../../src/app.module.js';
@@ -11,7 +12,8 @@ export async function createTestApp(): Promise<INestApplication> {
   const moduleRef = await Test.createTestingModule({
     imports: [AppModule],
   }).compile();
-  const app = moduleRef.createNestApplication();
+  const app = moduleRef.createNestApplication({ bufferLogs: true });
+  app.useLogger(app.get(Logger));
   configureApp(app);
   await app.init();
   return app;
