@@ -77,6 +77,33 @@ npm run start:dev                    # dentro do container: API em live reload
 - **Formatação:** Prettier com aspas simples e trailing comma (`.prettierrc`).
 - **Estrutura:** veja [Arquitetura](#arquitetura).
 
+## Decisões técnicas transversais (24/10/2026)
+Decididas antes do primeiro módulo porque são caras de mudar depois. Valem também para hub e app quando
+couber (spec de contas, §12).
+- **Nome do produto ainda não definido** ("Vaulter" está bloqueado por marca registrada). Enquanto isso:
+  - `src/` usa termos do domínio (`Hub`, `Space`, `Organization`), **nunca** o nome do produto em classes,
+    módulos, tabelas ou rotas;
+  - tudo que leva o nome vem do `.env` (bucket, domínio, título da documentação, emissor `iss` dos tokens, base
+    das URLs `type` dos erros);
+  - **rótulos de contexto da criptografia nunca contêm o nome** (ficam embutidos no dado cifrado para sempre);
+  - **não criar recursos de produção** (bucket, domínio, lojas de apps) antes do nome final.
+- **Criptografia:** **libsodium** no backend, no app e no hub — Argon2id (derivar chave da senha),
+  X25519 + XChaCha20-Poly1305 (cifrar), Ed25519 (assinar). Todo dado cifrado começa com um **byte de versão
+  do formato**. O backend quase não cifra (guarda blobs), mas valida formatos e assinaturas.
+- **IDs:** **UUID v7** (ordenado pelo tempo; `uuidv7()` nativo no Postgres 18). Hub e app geram v7 offline.
+- **Isolamento entre organizações:** o repositório base **exige a organização** em toda consulta de dado de
+  cliente; **Row-Level Security** do Postgres como segunda trava, ligado desde as primeiras migrations.
+- **Convenções da API:** JSON em **`camelCase`** (banco em `snake_case`, o mapper converte); paginação por
+  **cursor**; datas em **ISO 8601, UTC**; erros com `type` **estável** (código que não muda) e mensagem
+  separada, para traduzir sem quebrar integrador.
+- **Hub ↔ backend:** **WebSocket puro** com mensagens **JSON versionadas** (sem socket.io, que prende os dois
+  lados à biblioteca).
+- **Sessão de usuário:** token de acesso curto + **refresh rotativo**, sessão **por aparelho**, revogável.
+  Detalhe no módulo `identity`.
+- **Tarefas em segundo plano:** **pg-boss** (fila no próprio Postgres, sem serviço novo).
+- **AWS:** região **São Paulo (`sa-east-1`)** — latência e LGPD.
+- **CI:** GitHub Actions rodando `build`, `test` e `lint` desde o primeiro commit de código.
+
 ## Arquitetura
 Monólito modular: **uma aplicação Nest só**, um módulo por contexto (`identity`, `organizations`, `spaces`,
 `hubs`, `storage`...), e **dentro de cada módulo** as camadas `domain`, `application` e `infra`. Inspirado no
