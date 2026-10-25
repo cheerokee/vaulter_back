@@ -45,6 +45,17 @@ describe('validateEnv', () => {
     }
   });
 
+  it('defaults RATE_LIMIT_ENABLED to true and parses false', () => {
+    expect(validateEnv(validConfig()).RATE_LIMIT_ENABLED).toBe(true);
+    expect(
+      validateEnv({ ...validConfig(), RATE_LIMIT_ENABLED: 'false' })
+        .RATE_LIMIT_ENABLED,
+    ).toBe(false);
+    expect(() =>
+      validateEnv({ ...validConfig(), RATE_LIMIT_ENABLED: 'nope' }),
+    ).toThrow(/RATE_LIMIT_ENABLED/);
+  });
+
   it('rejects an invalid TRUST_PROXY', () => {
     expect(() =>
       validateEnv({ ...validConfig(), TRUST_PROXY: 'maybe' }),

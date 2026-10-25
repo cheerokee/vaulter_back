@@ -147,6 +147,10 @@ export class EnvironmentVariables {
   @Min(1)
   ARGON2_POOL_SIZE?: number;
 
+  @Transform(toBoolean)
+  @IsBoolean()
+  RATE_LIMIT_ENABLED: boolean = true;
+
   @Validate(TrustProxyConstraint)
   TRUST_PROXY: string = 'false';
 

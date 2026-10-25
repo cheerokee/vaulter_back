@@ -7,6 +7,7 @@ import { AppService } from './app.service.js';
 import { DatabaseModule } from './database/database.module.js';
 import { IdentityModule } from './identity/identity.module.js';
 import { pinoHttpOptions } from './shared/infra/observability/logger.config.js';
+import { ThrottlingModule } from './shared/infra/http/throttling.module.js';
 import { validateEnv } from './shared/infra/config/env.validation.js';
 
 @Module({
@@ -21,6 +22,8 @@ import { validateEnv } from './shared/infra/config/env.validation.js';
     SentryModule.forRoot(),
     DatabaseModule,
     IdentityModule,
+    // Depois do IdentityModule: o guard de token precisa rodar antes do throttler.
+    ThrottlingModule,
   ],
   controllers: [AppController],
   providers: [AppService],

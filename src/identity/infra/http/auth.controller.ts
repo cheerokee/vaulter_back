@@ -1,16 +1,20 @@
 import { Body, Controller, HttpCode, Post, Req } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
+import { Throttle } from '@nestjs/throttler';
 import {
   type AuthContext,
   CurrentAuth,
   Public,
 } from '../../../shared/infra/http/auth.decorators.js';
+import { RATE_LIMITS } from '../../../shared/infra/http/rate-limits.js';
+import { ThrottleByEmail } from '../../../shared/infra/http/throttling.decorators.js';
 import type { ClientInfo } from '../../application/session-issuer.js';
 import { LoginUseCase } from '../../application/login.use-case.js';
 import { LogoutUseCase } from '../../application/logout.use-case.js';
 import { PreLoginUseCase } from '../../application/pre-login.use-case.js';
 import { RefreshSessionUseCase } from '../../application/refresh-session.use-case.js';
 import { RegisterUserUseCase } from '../../application/register-user.use-case.js';
+import { loginEmailTracker } from './login-email.tracker.js';
 import { LoginDto } from './dto/login.dto.js';
 import { LoginResponse } from './dto/login-response.dto.js';
 import { PreLoginDto, PreLoginResponse } from './dto/pre-login.dto.js';
@@ -43,6 +47,7 @@ export class AuthController {
   ) {}
 
   @Public()
+  @Throttle({ default: RATE_LIMITS.prelogin })
   @Post('prelogin')
   @HttpCode(200)
   async doPreLogin(@Body() dto: PreLoginDto): Promise<PreLoginResponse> {
@@ -50,6 +55,7 @@ export class AuthController {
   }
 
   @Public()
+  @Throttle({ default: RATE_LIMITS.register })
   @Post('register')
   async doRegister(
     @Body() dto: RegisterDto,
@@ -70,6 +76,8 @@ export class AuthController {
   }
 
   @Public()
+  @Throttle({ default: RATE_LIMITS.loginIp })
+  @ThrottleByEmail(loginEmailTracker)
   @Post('login')
   @HttpCode(200)
   async doLogin(
@@ -86,6 +94,7 @@ export class AuthController {
   }
 
   @Public()
+  @Throttle({ default: RATE_LIMITS.refresh })
   @Post('refresh')
   @HttpCode(200)
   async doRefresh(

@@ -296,6 +296,15 @@ Os valores do `.env.example` para os segredos são **só de desenvolvimento**; p
 - JWKS público para o hub validar tokens offline.
 - Exclusão de conta (LGPD) precisa revogar as sessões.
 
+## Rate limit
+- `@nestjs/throttler` com guard global (`ThrottlingModule`, registrado **depois** do `IdentityModule` para o guard de
+  token rodar antes) e storage no Postgres (`PostgresThrottlerStorage`, upsert atômico; várias instâncias dividem
+  os contadores). Limites em `src/shared/infra/http/rate-limits.ts`; chave por IP (`req.ip`, respeita `TRUST_PROXY`),
+  por e-mail normalizado no login e por usuário em `PUT /me/password`. O padrão global é por IP **e por rota**.
+- Tabela `rate_limit_hits` (UNLOGGED) é **exceção documentada** à regra de timestamps/lápides/sem `DELETE`: contador
+  técnico, fora do TypeORM (sem entidade), e só nela o `app_runtime` tem `DELETE` (limpeza das linhas expiradas).
+- `RATE_LIMIT_ENABLED` (padrão `true`); os e2e rodam com `false`, e `test/shared/rate-limit.e2e-spec.ts` liga.
+
 ## Observabilidade
 - **Sentry** para erros e tracing — o mesmo nos três softwares (backend Nest, app Ionic, hub Python), para
   seguir um problema de ponta a ponta. Sem DSN no `.env` (desenvolvimento), fica desligado.
