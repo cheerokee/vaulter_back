@@ -1,3 +1,4 @@
+import { EventEmitter } from 'node:events';
 import { scrubSensitive, SENSITIVE_KEYS } from './sensitive-fields.js';
 
 describe('scrubSensitive', () => {
@@ -44,11 +45,44 @@ describe('scrubSensitive with errors and class instances', () => {
     expect(out.err.response.wrappedKey).toBe('[REDACTED]');
   });
 
-  it('passes non-plain objects through untouched', () => {
-    class Sock {
+  it('scrubs class instances such as DTOs', () => {
+    class Dto {
       authProof = 'x';
+      email = 'a@b.c';
     }
-    const s = new Sock();
-    expect((scrubSensitive({ s }) as any).s).toBe(s);
+    class Wrapper {
+      inner = new Dto();
+    }
+    const out = scrubSensitive({ dto: new Dto(), w: new Wrapper() }) as any;
+    expect(out.dto).toEqual({ authProof: '[REDACTED]', email: 'a@b.c' });
+    expect(out.w.inner.authProof).toBe('[REDACTED]');
+  });
+
+  it('scrubs Map keys and walks Set values', () => {
+    const out = scrubSensitive({
+      m: new Map<string, unknown>([
+        ['refreshToken', 'r'],
+        ['ok', { kdfSalt: 's' }],
+      ]),
+      s: new Set([{ wrappedKey: 'w' }]),
+    }) as any;
+    expect(out.m.refreshToken).toBe('[REDACTED]');
+    expect(out.m.ok.kdfSalt).toBe('[REDACTED]');
+    expect(out.s[0].wrappedKey).toBe('[REDACTED]');
+  });
+
+  it('returns EventEmitters as-is without touching getters', () => {
+    let touched = false;
+    class Emitter extends EventEmitter {
+      authProof = 'x';
+      get socket() {
+        touched = true;
+        return {};
+      }
+    }
+    const e = new Emitter();
+    const out = scrubSensitive({ e }) as any;
+    expect(out.e).toBe(e);
+    expect(touched).toBe(false);
   });
 });
