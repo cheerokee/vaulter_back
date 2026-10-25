@@ -385,6 +385,13 @@ describe('Auth endpoints (e2e)', () => {
       );
       return Number(rows[0]!.n);
     };
+    const tableCount = async (table: 'user_sessions' | 'organizations') => {
+      const ds = await adminDataSource();
+      const rows: { n: string }[] = await ds.query(
+        `SELECT count(*)::text AS n FROM ${table}`,
+      );
+      return Number(rows[0]!.n);
+    };
 
     it('a throwing hook rolls the whole registration back (no user row)', async () => {
       const hooks = app.get(RegistrationHooks);
@@ -396,9 +403,18 @@ describe('Auth endpoints (e2e)', () => {
       });
       try {
         const before = await usersCount();
+        const sessionsBefore = await tableCount('user_sessions');
+        const orgsBefore = await tableCount('organizations');
         const res = await register('hook-fail@example.com');
         expect(res.status).toBe(500);
+        expect(res.text).not.toContain('hook exploded');
+        expect(res.body).toMatchObject({
+          status: 500,
+          detail: 'An unexpected error occurred',
+        });
         expect(await usersCount()).toBe(before);
+        expect(await tableCount('user_sessions')).toBe(sessionsBefore);
+        expect(await tableCount('organizations')).toBe(orgsBefore);
       } finally {
         hooks.unregister('test-throwing');
       }
