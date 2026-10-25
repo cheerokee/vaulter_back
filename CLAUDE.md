@@ -101,7 +101,10 @@ couber (spec de contas, §12).
 - **Sessão de usuário:** token de acesso curto + **refresh rotativo**, sessão **por aparelho**, revogável.
   Detalhe no módulo `identity`.
 - **Tarefas em segundo plano:** **pg-boss** (fila no próprio Postgres, sem serviço novo).
-- **AWS:** região **São Paulo (`sa-east-1`)** — latência e LGPD.
+- **AWS:** região **`us-east-1` (Virgínia)** — o backend fica perto dos serviços externos (Anthropic, OpenRouter,
+  Sentry), então só a ida app → backend cruza o continente; mais barata e com todos os serviços. LGPD permite
+  transferência internacional com salvaguardas (o backup é cifrado e ilegível para nós). Região é
+  configuração: se um cliente exigir dados no Brasil, a organização dele pode ir para um bucket em `sa-east-1`.
 - **CI:** GitHub Actions rodando `build`, `test` e `lint` desde o primeiro commit de código.
 
 ## Arquitetura
@@ -202,7 +205,8 @@ src/
   - `beforeSend` remove campos sensíveis (`wrapped_key`, `encrypted_private_key`, `auth_hash`, `kdf_*`, tokens,
     cabeçalho `Authorization`) — vale para Sentry e para os logs (redaction do pino);
   - o hub nunca envia conteúdo de memória, transcrição ou imagem; só tipo e local do erro;
-  - LGPD: Sentry na região da UE, ou **GlitchTip** (compatível com o SDK do Sentry) se precisar hospedar.
+  - Sentry na **região dos EUA**, junto com o resto; a proteção é a limpeza acima, não a região. **GlitchTip**
+    (compatível com o SDK do Sentry) se um dia precisar hospedar.
 
 ## Documentação da API (interna × externa)
 Dois públicos, nunca misturados: o **time** e os **integradores** (apps como Orion e Salte). A externa não pode
