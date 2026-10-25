@@ -38,9 +38,17 @@ import { RoleAssignmentTypeormEntity } from './infra/db/role-assignment.entity.j
 import { RoleAssignmentTypeormRepository } from './infra/db/role-assignment.typeorm-repository.js';
 import { RolePermissionTypeormEntity } from './infra/db/role-permission.entity.js';
 import { RoleTypeormEntity } from './infra/db/role.entity.js';
+import { InvitationsController } from './infra/http/invitations.controller.js';
+import { MembersController } from './infra/http/members.controller.js';
+import { OrganizationsController } from './infra/http/organizations.controller.js';
 import { UserOrganizationTypeormEntity } from './infra/db/user-organization.entity.js';
 
 @Module({
+  controllers: [
+    OrganizationsController,
+    MembersController,
+    InvitationsController,
+  ],
   imports: [
     // Uma direção só: organizations usa o que o identity exporta (UserDirectory, CurrentAuthProofVerifier).
     IdentityModule,

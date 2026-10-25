@@ -13,6 +13,9 @@ export const RATE_LIMITS = {
   refresh: { limit: 60, ttl: MINUTE },
   /** Troca de senha: por usuário autenticado. */
   changePassword: { limit: 5, ttl: 15 * MINUTE },
+  /** Prévia pública e aceite de convite: por IP. */
+  invitationPreview: { limit: 30, ttl: MINUTE },
+  invitationAccept: { limit: 10, ttl: MINUTE },
 } as const;
 
 /** Nome do throttler extra, cobrado só nas rotas marcadas com @ThrottleByEmail(). */

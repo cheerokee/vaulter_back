@@ -190,10 +190,11 @@ exportado pela `application/` do módulo, porque os próximos módulos vão perg
 | `POST /organizations/:id/invitations` | cria convite e devolve **o link (segredo) uma vez** | admin |
 | `GET /organizations/:id/invitations` | convites pendentes (sem segredo) | admin |
 | `DELETE /organizations/:id/invitations/:invitationId` | revoga | admin |
-| `GET /invitations/:token` | prévia pública do convite: nome da organização, quem convidou, validade | público, com rate limit |
-| `POST /invitations/:token/accept` | aceita estando logado | logado |
+| `POST /invitations/preview` | corpo `{ token }`: prévia pública do convite (nome da organização, quem convidou, validade) | público, com rate limit |
+| `POST /invitations/accept` | corpo `{ token }`: aceita estando logado; responde `{ organizationId, roleKey }` | logado, com rate limit |
 | `POST /auth/register` | ganha `inviteToken` opcional; cria a organização pessoal e, se houver convite válido, o vínculo, tudo na mesma transação | público |
 
+- **Token no corpo, nunca na URL:** a URL aparece nos logs de requisição e no Sentry; por isso prévia e aceite recebem o `token` no corpo (formato inválido dá 422 de validação; bem formado mas sem valor dá `invitation-invalid`).
 - **Cadastro com convite inválido (decisão do Claude):** o cadastro **segue**. A conta e a organização pessoal são
   criadas, sem o vínculo, e a resposta informa `invitation: { accepted: false }`, para o app avisar "o convite não
   valia mais". Bloquear o cadastro por causa de um link velho trava quem só quer criar a conta.

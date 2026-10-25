@@ -41,5 +41,37 @@ export function identityClient(getApp: () => INestApplication) {
       device: { name: string; platform: string } = DEFAULT_DEVICE,
     ) => http().post('/auth/login').send({ email, authProof, device }),
     bearer: (token: string) => ({ Authorization: `Bearer ${token}` }),
+    /** Registers a user and returns what the org specs need. */
+    signUp: async (account: ClientAccount, email: string, name = 'Ana') => {
+      const res = await http()
+        .post('/auth/register')
+        .send(registerBody(account, email, { name }))
+        .expect(201);
+      return {
+        userId: res.body.user.id as string,
+        token: res.body.session.accessToken as string,
+        email,
+      };
+    },
+    createOrg: (token: string, name = 'Acme') =>
+      http()
+        .post('/organizations')
+        .set({ Authorization: `Bearer ${token}` })
+        .send({ name }),
+    invite: (
+      token: string,
+      orgId: string,
+      roleKey: 'org_admin' | 'org_member' = 'org_member',
+      email?: string,
+    ) =>
+      http()
+        .post(`/organizations/${orgId}/invitations`)
+        .set({ Authorization: `Bearer ${token}` })
+        .send(email ? { roleKey, email } : { roleKey }),
+    acceptInvite: (token: string, inviteToken: string) =>
+      http()
+        .post('/invitations/accept')
+        .set({ Authorization: `Bearer ${token}` })
+        .send({ token: inviteToken }),
   };
 }
