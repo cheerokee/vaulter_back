@@ -1,4 +1,4 @@
-import { ipTracker } from '../../../shared/infra/http/ip-tracker.js';
+import { ipTracker } from './ip-tracker.js';
 /**
  * Rate-limit tracker for authenticated routes: the user from `request.auth` (set by the access token
  * guard, which runs first), so changing IP does not reset the counter. IP fallback if there is no auth.

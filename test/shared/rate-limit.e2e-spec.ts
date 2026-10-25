@@ -135,6 +135,52 @@ describe('rate limiting (e2e)', () => {
     expect(Number(res.headers['retry-after'])).toBeGreaterThan(60);
   }, 60_000);
 
+  it('shares one per-user reauthentication budget (5 per 15 min) between recovery-key and password', async () => {
+    const user = await c.signUp(account, 'reauth@example.com');
+    const org = (await c.createOrg(user.token).expect(201)).body.id as string;
+    const wrong = await createClientAccount('not the right password');
+    const admin = await adminDataSource();
+    await admin.query('TRUNCATE rate_limit_hits');
+    const recoveryKey = (ip: string) =>
+      c
+        .http()
+        .put(`/organizations/${org}/recovery-key`)
+        .set(c.bearer(user.token))
+        .set('X-Forwarded-For', ip)
+        .send({
+          recoveryPublicKey: wrong.publicKey,
+          currentAuthProof: wrong.authProof,
+        });
+    const password = (ip: string) =>
+      c
+        .http()
+        .put('/me/password')
+        .set(c.bearer(user.token))
+        .set('X-Forwarded-For', ip)
+        .send({});
+    for (let i = 0; i < 3; i++) {
+      const res = await recoveryKey(`198.51.100.${i + 60}`);
+      expect(res.status).toBe(422);
+      expect(res.body.type).toMatch(/current-auth-proof-invalid$/);
+    }
+    for (let i = 0; i < 2; i++) {
+      expect((await password(`198.51.100.${i + 70}`)).status).toBe(422);
+    }
+    // one counter for the user, whatever the route or the IP
+    const rows: { hits: number }[] = await admin.query(
+      `SELECT hits FROM rate_limit_hits WHERE key LIKE 'reauth:%'`,
+    );
+    expect(rows).toEqual([{ hits: 5 }]);
+    for (const res of [
+      await recoveryKey('198.51.100.80'),
+      await password('198.51.100.81'),
+    ]) {
+      expect(res.status).toBe(429);
+      expect(res.body.type).toMatch(/\/too-many-requests$/);
+      expect(Number(res.headers['retry-after'])).toBeGreaterThan(60);
+    }
+  }, 60_000);
+
   it('authenticates before throttling /me/password (unauthenticated gets 401, never 429)', async () => {
     for (let i = 0; i < 8; i++) {
       const res = await c

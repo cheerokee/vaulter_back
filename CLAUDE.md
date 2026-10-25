@@ -270,8 +270,9 @@ src/organizations/
   (`revokeInvitationsOfCreator`, auditado `invitation.revoked` com `reason: creator_lost_permission`), e prévia/aceite
   reconferem o criador (`invitationCreatorCanInvite`) — admin removido não volta pelo próprio link.
 - **Chave de recuperação da organização:** `PUT /organizations/:id/recovery-key` só **substitui** (nunca apaga),
-  exige `org.members.manage` **e** reautenticação (`currentAuthProof`, verificada por `CurrentAuthProofVerifier`) e é
-  auditada (`registered`/`replaced`, sem a prova nem a chave privada).
+  exige `org.members.manage` **e** reautenticação (`currentAuthProof`, verificada por `CurrentAuthProofVerifier`, com o
+  rate limit de reautenticação compartilhado com `PUT /me/password`) e é auditada (`registered`/`replaced`, sem a
+  prova nem a chave privada).
 - **Auditoria (`audit_logs`):** *append-only* — o papel de runtime tem só `INSERT`/`SELECT` (sem `UPDATE`/`DELETE`),
   via `AuditLog.record` dentro da mesma transação da ação. Ações: `organization.created`, `organization.updated`,
   `organization.recovery_key.registered|replaced`, `member.joined`, `member.left`, `member.removed`,
@@ -384,7 +385,7 @@ Os valores do `.env.example` para os segredos são **só de desenvolvimento**; p
 - `@nestjs/throttler` com guard global (`AppThrottlerGuard` em `ThrottlingModule`, registrado **depois** do
   `IdentityModule` para o guard de token rodar antes — fixado por e2e) e storage no Postgres
   (`PostgresThrottlerStorage`, upsert atômico; várias instâncias dividem os contadores). Chave por IP (`req.ip`,
-  respeita `TRUST_PROXY`; IPv6 agrupado no /64), por e-mail normalizado no login e por usuário em `PUT /me/password`.
+  respeita `TRUST_PROXY`; IPv6 agrupado no /64), por e-mail normalizado no login e por usuário nas rotas de reautenticação.
 - Limites (`src/shared/infra/http/rate-limits.ts`):
   | Rota | Limite |
   |---|---|
@@ -393,10 +394,14 @@ Os valores do `.env.example` para os segredos são **só de desenvolvimento**; p
   | `POST /auth/register` | 10/h por IP |
   | `POST /auth/login` | 10/min por IP **e** 5/min por e-mail normalizado |
   | `POST /auth/refresh` | 60/min por IP |
-  | `PUT /me/password` | 5 por 15 min por usuário |
+  | `PUT /me/password` **e** `PUT /organizations/:id/recovery-key` (reautenticação) | 5 por 15 min por usuário, **um orçamento só para as duas** |
   | `POST /invitations/preview` (pública) | 30/min por IP |
   | `POST /invitations/accept` | 10/min por IP |
   Rota com `@Throttle` próprio tem contador próprio (por rota). Os contadores por e-mail não vão em cabeçalho.
+  **Reautenticação:** toda rota que confere a prova da senha atual (`currentAuthProof`) leva `@ThrottleReauth()`
+  (`throttling.decorators.ts`): throttler nomeado `reauth` (`REAUTH_THROTTLER`, `RATE_LIMITS.reauth`), chaveado só
+  pelo usuário (`userIdTracker`, sem a rota — veja `AppThrottlerGuard.generateKey`), então as tentativas nas duas
+  rotas somam no mesmo contador. Rota nova que verifica a senha atual entra nele.
 - Estourou: **429 `problem+json`** (`type` `.../too-many-requests`) com `Retry-After` em segundos.
 - Tabela `rate_limit_hits` (UNLOGGED) é **exceção documentada** às regras de timestamps/lápides/sem `DELETE`:
   contador técnico, sem `created_at`/`updated_at`/`deleted_at`, fora do TypeORM (sem entidade), e só nela o

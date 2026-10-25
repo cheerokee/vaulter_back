@@ -1,4 +1,4 @@
-import { ThrottleByEmail } from './throttling.decorators.js';
+import { ThrottleByEmail, ThrottleReauth } from './throttling.decorators.js';
 
 describe('ThrottleByEmail', () => {
   it('is a method decorator only (the skipIf reads handler metadata)', () => {
@@ -10,5 +10,11 @@ describe('ThrottleByEmail', () => {
     @ThrottleByEmail(() => 'x')
     class Dummy {}
     expect(Dummy).toBeDefined();
+  });
+});
+
+describe('ThrottleReauth', () => {
+  it('is a method decorator only (the skipIf reads handler metadata)', () => {
+    expectTypeOf(ThrottleReauth()).toEqualTypeOf<MethodDecorator>();
   });
 });

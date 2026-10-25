@@ -16,6 +16,7 @@ import {
 } from '../../../shared/infra/http/auth.decorators.js';
 import { CursorPaginationQuery } from '../../../shared/infra/http/cursor-pagination.query.js';
 import { RequestValidationError } from '../../../shared/infra/http/request-validation.error.js';
+import { ThrottleReauth } from '../../../shared/infra/http/throttling.decorators.js';
 import { CreateOrganizationUseCase } from '../../application/create-organization.use-case.js';
 import { GetOrganizationUseCase } from '../../application/get-organization.use-case.js';
 import { ListMyOrganizationsUseCase } from '../../application/list-my-organizations.use-case.js';
@@ -90,6 +91,7 @@ export class OrganizationsController {
     );
   }
 
+  @ThrottleReauth()
   @Put(':id/recovery-key')
   @HttpCode(204)
   async doSetRecoveryKey(

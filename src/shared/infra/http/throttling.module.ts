@@ -6,8 +6,16 @@ import { ThrottlerModule } from '@nestjs/throttler';
 import { DataSource } from 'typeorm';
 import { AppThrottlerGuard } from './app-throttler.guard.js';
 import { PostgresThrottlerStorage } from './postgres-throttler.storage.js';
-import { EMAIL_THROTTLER, RATE_LIMITS } from './rate-limits.js';
-import { THROTTLE_BY_EMAIL_KEY } from './throttling.decorators.js';
+import {
+  EMAIL_THROTTLER,
+  RATE_LIMITS,
+  REAUTH_THROTTLER,
+} from './rate-limits.js';
+import {
+  THROTTLE_BY_EMAIL_KEY,
+  THROTTLE_REAUTH_KEY,
+} from './throttling.decorators.js';
+import { userIdTracker } from './user-id.tracker.js';
 
 /** RATE_LIMIT_ENABLED arrives as boolean (validated env) or as the raw string (test overrides). */
 function isEnabled(value: unknown): boolean {
@@ -16,7 +24,7 @@ function isEnabled(value: unknown): boolean {
 
 /**
  * Global rate limiting. Register it AFTER the module that owns the access token guard in AppModule:
- * global guards run in module order, and the per-user counter of /me/password needs `request.auth`.
+ * global guards run in module order, and the per-user reauthentication counter needs `request.auth`.
  */
 @Module({
   imports: [
@@ -46,6 +54,15 @@ function isEnabled(value: unknown): boolean {
                   THROTTLE_BY_EMAIL_KEY,
                   context.getHandler(),
                 ),
+            },
+            {
+              // One budget per user across every @ThrottleReauth() route (key without the route: see the guard).
+              name: REAUTH_THROTTLER,
+              ...RATE_LIMITS.reauth,
+              getTracker: userIdTracker,
+              skipIf: (context: ExecutionContext) =>
+                !enabled() ||
+                !Reflect.getMetadata(THROTTLE_REAUTH_KEY, context.getHandler()),
             },
           ],
         };
