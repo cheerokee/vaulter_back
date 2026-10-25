@@ -33,25 +33,18 @@ export class RegisterUserUseCase {
   async execute(input: RegisterUserInput): Promise<LoginResult> {
     // Validate everything before the (expensive) hash and before touching the repository.
     assertAuthProof(input.authProof);
-    const fields = {
-      name: input.name,
-      email: input.email,
-      kdfSalt: input.kdfSalt,
-      kdfParams: input.kdfParams,
-      publicKey: input.publicKey,
-      encryptedPrivateKey: input.encryptedPrivateKey,
-    };
-    User.register({ ...fields, authHash: 'validation-placeholder' });
+    User.validateRegistration(input);
 
+    const now = new Date();
     const authHash = await this.hasher.hash(input.authProof);
-    const user = User.register({ ...fields, authHash });
+    const user = User.register({ ...input, authHash, now });
     await this.users.create(user);
 
     const tokens = await this.sessionIssuer.start(
       user,
       input.device,
       input.client,
-      new Date(),
+      now,
     );
     return toLoginResult(user, tokens);
   }

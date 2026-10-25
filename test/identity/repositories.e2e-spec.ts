@@ -26,6 +26,7 @@ const makeUser = (email = 'ana@x.com') =>
     kdfParams: { ...DEFAULT_KDF_PARAMS },
     publicKey: b64(32),
     encryptedPrivateKey: b64(73, 0x01),
+    now: new Date('2026-10-24T12:34:56.789Z'),
   });
 
 const now = new Date('2026-10-24T12:00:00.000Z');
@@ -81,7 +82,8 @@ describe('identity repositories', () => {
     expect(loaded!.kdfParams).toEqual(DEFAULT_KDF_PARAMS);
     expect(loaded!.publicKey).toBe(user.publicKey);
     expect(loaded!.encryptedPrivateKey).toBe(user.encryptedPrivateKey);
-    expect(loaded!.createdAt).toBeInstanceOf(Date);
+    expect(loaded!.createdAt).toEqual(user.createdAt);
+    expect(loaded!.createdAt!.toISOString()).toBe('2026-10-24T12:34:56.789Z');
     expect((await users.findByEmail('ana@x.com'))!.id).toBe(user.id);
     expect(await users.findByEmail('nobody@x.com')).toBeNull();
   });

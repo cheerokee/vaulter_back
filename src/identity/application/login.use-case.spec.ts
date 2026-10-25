@@ -19,6 +19,7 @@ const user = User.register({
   kdfParams: { algorithm: 'argon2id13', opsLimit: 3, memLimitBytes: 67108864 },
   publicKey: b64(32),
   encryptedPrivateKey: epk.toString('base64url'),
+  now: new Date('2026-10-24T11:00:00Z'),
 });
 const device = { name: 'Pixel', platform: 'android' as const };
 const client = { ip: null, userAgent: null };
@@ -99,5 +100,39 @@ describe('LoginUseCase', () => {
     expect(hasher.verifyAgainstDummy).toHaveBeenCalledTimes(4);
     expect(hasher.verify).not.toHaveBeenCalled();
     expect(issuer.start).not.toHaveBeenCalled();
+  });
+
+  it('failure paths are indistinguishable: same constructor, code and message', async () => {
+    const run = async (
+      email: unknown,
+      authProof: string,
+    ): Promise<UnauthenticatedError> => {
+      try {
+        await useCase.execute({
+          email: email as string,
+          authProof,
+          device,
+          client,
+        });
+      } catch (e) {
+        return e as UnauthenticatedError;
+      }
+      throw new Error('expected a failure');
+    };
+    users.findByEmail.mockImplementation((e: string) =>
+      Promise.resolve(e === 'ana@x.com' ? user : null),
+    );
+    hasher.verify.mockResolvedValue(false);
+    const unknown = await run('no@x.com', PROOF);
+    const malformed = await run('ana@x.com', 'short');
+    const wrong = await run('ana@x.com', PROOF);
+    const nonString = await run(undefined, PROOF);
+    for (const e of [malformed, wrong, nonString]) {
+      expect(e.constructor).toBe(unknown.constructor);
+      expect(e.code).toBe(unknown.code);
+      expect(e.message).toBe(unknown.message);
+    }
+    expect(unknown.code).toBe('invalid-credentials');
+    expect(hasher.verifyAgainstDummy).toHaveBeenCalledTimes(3);
   });
 });

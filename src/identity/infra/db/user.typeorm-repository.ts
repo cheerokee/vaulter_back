@@ -49,7 +49,11 @@ export class UserTypeormRepository extends UserRepository {
   }
 
   async save(user: User): Promise<void> {
-    const { id, ...rest } = UserMapper.toPersistence(user);
+    const {
+      id,
+      createdAt: _createdAt,
+      ...rest
+    } = UserMapper.toPersistence(user);
     await this.repo.update({ id }, rest);
   }
 }

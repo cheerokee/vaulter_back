@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import { DomainValidationError } from '../../shared/domain/errors.js';
 import { DEFAULT_KDF_PARAMS, type KdfParams } from '../domain/kdf-params.js';
 import { normalizeEmail } from '../domain/email.js';
 import { UserRepository } from '../domain/user.repository.js';
@@ -14,6 +15,12 @@ export class PreLoginUseCase {
   async execute(input: {
     email: string;
   }): Promise<{ kdfSalt: string; kdfParams: KdfParams }> {
+    if (typeof input.email !== 'string') {
+      throw new DomainValidationError(
+        'email-invalid',
+        'The e-mail is invalid.',
+      );
+    }
     const email = normalizeEmail(input.email);
     const user = await this.users.findByEmail(email);
     if (user) return { kdfSalt: user.kdfSalt, kdfParams: user.kdfParams };

@@ -19,6 +19,7 @@ const input = () => ({
   kdfParams: { ...DEFAULT_KDF_PARAMS },
   publicKey: b64(32),
   encryptedPrivateKey: epk(),
+  now: new Date('2026-10-24T12:00:00Z'),
 });
 
 describe('User', () => {
@@ -27,6 +28,7 @@ describe('User', () => {
     expect(isUuidV7(u.id)).toBe(true);
     expect(u.email).toBe('ana@x.com');
     expect(u.name).toBe('Ana');
+    expect(u.createdAt).toEqual(new Date('2026-10-24T12:00:00Z'));
     expect(u.authHash).toBe('hash');
     expect(u.kdfParams).toEqual(DEFAULT_KDF_PARAMS);
   });

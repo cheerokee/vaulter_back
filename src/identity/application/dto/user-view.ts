@@ -8,10 +8,13 @@ export type UserView = {
 };
 
 export function toUserView(user: User): UserView {
+  if (!user.createdAt) {
+    throw new Error('User without createdAt cannot be viewed');
+  }
   return {
     id: user.id,
     name: user.name,
     email: user.email,
-    createdAt: user.createdAt ?? new Date(0),
+    createdAt: user.createdAt,
   };
 }

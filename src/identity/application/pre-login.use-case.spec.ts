@@ -33,6 +33,7 @@ describe('PreLoginUseCase', () => {
         kdfParams: params,
         publicKey: b64(32),
         encryptedPrivateKey: epk.toString('base64url'),
+        now: new Date('2026-10-24T11:00:00Z'),
       }),
     );
     const out = await useCase.execute({ email: '  Ana@X.com ' });
@@ -50,5 +51,12 @@ describe('PreLoginUseCase', () => {
       kdfSalt: 'decoy-salt',
       kdfParams: DEFAULT_KDF_PARAMS,
     });
+  });
+
+  it('rejects a non-string email with a validation error, not a crash', async () => {
+    await expect(
+      useCase.execute({ email: undefined as unknown as string }),
+    ).rejects.toMatchObject({ code: 'email-invalid' });
+    expect(users.findByEmail).not.toHaveBeenCalled();
   });
 });

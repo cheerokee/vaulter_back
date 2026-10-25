@@ -25,7 +25,11 @@ export class LoginUseCase {
     device: DeviceInput;
     client: ClientInfo;
   }): Promise<LoginResult> {
-    const user = await this.users.findByEmail(normalizeEmail(input.email));
+    // A non-string e-mail (the DTO normally prevents it) takes the same path as an unknown one.
+    const user =
+      typeof input.email === 'string'
+        ? await this.users.findByEmail(normalizeEmail(input.email))
+        : null;
     // A malformed proof never matches a stored hash; the verification still runs so that
     // neither format nor account existence shows in the response time or the error.
     const wellFormed = isWellFormed(input.authProof);

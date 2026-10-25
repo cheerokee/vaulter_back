@@ -31,6 +31,36 @@ function assertAuthHash(authHash: string): string {
 }
 
 export class User extends Entity<UserProps> {
+  /**
+   * Validates and normalizes everything a registration carries except the auth hash, so the
+   * caller can reject bad input before the expensive hashing. Throws DomainValidationError.
+   */
+  static validateRegistration(input: {
+    name: string;
+    email: string;
+    kdfSalt: string;
+    kdfParams: unknown;
+    publicKey: string;
+    encryptedPrivateKey: string;
+  }): Omit<UserProps, 'authHash' | 'createdAt' | 'updatedAt'> {
+    const name = typeof input.name === 'string' ? input.name.trim() : '';
+    if (name.length < 1 || name.length > 255) {
+      throw new DomainValidationError(
+        'user-name-invalid',
+        'The name must have between 1 and 255 characters.',
+      );
+    }
+    return {
+      name,
+      email: normalizeEmail(input.email),
+      kdfSalt: assertKdfSalt(input.kdfSalt),
+      kdfParams: parseKdfParams(input.kdfParams),
+      publicKey: assertPublicKey(input.publicKey),
+      encryptedPrivateKey: assertEncryptedPrivateKey(input.encryptedPrivateKey),
+    };
+  }
+
+  /** `now` becomes `createdAt`: the domain owns the creation time, the database only stores it. */
   static register(input: {
     name: string;
     email: string;
@@ -39,22 +69,13 @@ export class User extends Entity<UserProps> {
     kdfParams: unknown;
     publicKey: string;
     encryptedPrivateKey: string;
+    now: Date;
   }): User {
-    const name = typeof input.name === 'string' ? input.name.trim() : '';
-    if (name.length < 1 || name.length > 255) {
-      throw new DomainValidationError(
-        'user-name-invalid',
-        'The name must have between 1 and 255 characters.',
-      );
-    }
+    const fields = User.validateRegistration(input);
     return new User({
-      name,
-      email: normalizeEmail(input.email),
+      ...fields,
       authHash: assertAuthHash(input.authHash),
-      kdfSalt: assertKdfSalt(input.kdfSalt),
-      kdfParams: parseKdfParams(input.kdfParams),
-      publicKey: assertPublicKey(input.publicKey),
-      encryptedPrivateKey: assertEncryptedPrivateKey(input.encryptedPrivateKey),
+      createdAt: input.now,
     });
   }
 

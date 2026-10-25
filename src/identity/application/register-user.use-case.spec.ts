@@ -70,6 +70,8 @@ describe('RegisterUserUseCase', () => {
     });
     expect(out.session).toBe(tokens);
     expect(out.user).toMatchObject({ id: created.id, email: 'ana@x.com' });
+    expect(out.user.createdAt).toEqual(now);
+    expect(created.createdAt).toEqual(now);
   });
 
   it('rejects a malformed encryptedPrivateKey before touching the repository', async () => {

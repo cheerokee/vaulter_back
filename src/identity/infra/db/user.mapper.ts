@@ -19,10 +19,11 @@ export const UserMapper = {
     );
   },
 
-  // createdAt/updatedAt e syncVersion ficam com o banco.
+  // createdAt vem do domínio (explícito no insert); updatedAt e syncVersion ficam com o banco.
   toPersistence(user: User): Partial<UserTypeormEntity> {
     return {
       id: user.id,
+      createdAt: user.createdAt,
       name: user.name,
       email: user.email,
       authHash: user.authHash,
