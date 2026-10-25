@@ -5,6 +5,11 @@ import { newId } from '../../../shared/domain/id.js';
 import { getSodium } from '../../../shared/infra/crypto/sodium.js';
 import { JoseAccessTokenService } from './jose-access-token-service.js';
 
+vi.mock('jose', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('jose')>();
+  return { ...actual, importJWK: vi.fn(actual.importJWK) };
+});
+
 const SEED_A = 'A'.repeat(42) + 'A';
 const SEED_B = 'B'.repeat(42) + 'A';
 const config = (
@@ -31,7 +36,7 @@ async function signRaw(
   payload: Record<string, unknown>,
   issuer: string,
   subject?: string,
-  opts: { typ?: string | null; aud?: string; kid?: string } = {},
+  opts: { typ?: string | null; aud?: string; kid?: string | null } = {},
 ): Promise<string> {
   const sodium = await getSodium();
   const B64 = sodium.base64_variants.URLSAFE_NO_PADDING;
@@ -47,10 +52,8 @@ async function signRaw(
     },
     'EdDSA',
   );
-  const header: Record<string, unknown> = {
-    alg: 'EdDSA',
-    kid: opts.kid ?? 'key-1',
-  };
+  const header: Record<string, unknown> = { alg: 'EdDSA' };
+  if (opts.kid !== null) header.kid = opts.kid ?? 'key-1';
   if (opts.typ !== null) header.typ = opts.typ ?? 'at+jwt';
   const jwt = new SignJWT(payload)
     .setProtectedHeader(header as { alg: string })
@@ -184,6 +187,20 @@ describe('JoseAccessTokenService', () => {
     expect(decodeJwt(token).aud).toBe('test-audience');
   });
 
+  it.each(['at+jwt', 'AT+JWT', 'application/at+jwt'])(
+    'accepts typ %s',
+    async (typ) => {
+      const token = await signRaw(
+        SEED_A,
+        { sid: claims.sessionId },
+        'test-issuer',
+        claims.userId,
+        { typ },
+      );
+      await expect(svc.verify(token, now)).resolves.toEqual(claims);
+    },
+  );
+
   it.each([null, 'JWT', 'jwt'])('rejects typ %s', async (typ) => {
     const token = await signRaw(
       SEED_A,
@@ -258,6 +275,30 @@ describe('JoseAccessTokenService', () => {
       await expect(svc.verify(token, now)).rejects.toMatchObject({
         code: 'invalid-access-token',
       });
+    });
+
+    it('rejects a correctly signed token with no kid header', async () => {
+      const token = await signRaw(
+        SEED_A,
+        { sid: claims.sessionId },
+        'test-issuer',
+        claims.userId,
+        { kid: null },
+      );
+      await expect(svc.verify(token, now)).rejects.toMatchObject({
+        code: 'invalid-access-token',
+      });
+    });
+
+    it('verify-only previous keys never import a private key', async () => {
+      const spy = vi.mocked(importJWK);
+      spy.mockClear();
+      const next = rotating(`key-1:${oldSeed}`);
+      await next.onModuleInit();
+      const withPrivate = spy.mock.calls.filter(
+        ([jwk]) => 'd' in (jwk as object),
+      );
+      expect(withPrivate).toHaveLength(1); // only the current signing key
     });
 
     it('signs with the current key id', async () => {

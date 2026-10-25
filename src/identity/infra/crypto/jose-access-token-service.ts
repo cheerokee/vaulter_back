@@ -31,7 +31,7 @@ export class JoseAccessTokenService
   async onModuleInit(): Promise<void> {
     const sodium = await getSodium();
     const B64 = sodium.base64_variants.URLSAFE_NO_PADDING;
-    const derive = async (seedText: string) => {
+    const derive = async (seedText: string, withPrivate: boolean) => {
       const { publicKey } = sodium.crypto_sign_seed_keypair(
         sodium.from_base64(seedText, B64),
       );
@@ -41,12 +41,15 @@ export class JoseAccessTokenService
         x: sodium.to_base64(publicKey, B64),
       };
       return {
-        privateKey: await importJWK({ ...jwk, d: seedText }, 'EdDSA'),
+        privateKey: withPrivate
+          ? await importJWK({ ...jwk, d: seedText }, 'EdDSA')
+          : undefined,
         publicKey: await importJWK(jwk, 'EdDSA'),
       };
     };
     const current = await derive(
       this.config.getOrThrow<string>('AUTH_JWT_SIGNING_SEED'),
+      true,
     );
     this.privateKey = current.privateKey;
     this.publicKeys.clear();
@@ -61,7 +64,7 @@ export class JoseAccessTokenService
       if (sep <= 0 || this.publicKeys.has(kid)) {
         throw new Error('Invalid AUTH_JWT_PREVIOUS_KEYS');
       }
-      this.publicKeys.set(kid, (await derive(item.slice(sep + 1))).publicKey);
+      this.publicKeys.set(kid, (await derive(item.slice(sep + 1), false)).publicKey);
     }
   }
 
