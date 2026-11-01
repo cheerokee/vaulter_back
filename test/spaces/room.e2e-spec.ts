@@ -25,12 +25,13 @@ import {
   auditRows,
   hubRoom,
   hubWrappedKey,
+  insertHub,
   spaceRow,
 } from '../support/spaces-db.js';
 
-// A Sala dos Hubs vista pelo `spaces` (as rotas e a tabela `hubs` chegam com o módulo de hubs): o serviço é
-// chamado direto, com um id de Hub qualquer e um par X25519 novo como chave de cifra do Hub. A cópia selada
-// para o Hub é aberta com a chave privada dele, como o aparelho faria.
+// A Sala dos Hubs vista pelo `spaces` (as rotas chegam com o módulo de hubs): o serviço é chamado direto, com
+// uma linha crua em `hubs` (dona: Olivia; as FKs de hub_id/room_hub_id exigem o Hub) e um par X25519 novo como
+// chave de cifra do Hub. A cópia selada para o Hub é aberta com a chave privada dele, como o aparelho faria.
 describe('Hub Room in a space (e2e)', () => {
   let app: INestApplication;
   const c = identityClient(() => app);
@@ -59,10 +60,10 @@ describe('Hub Room in a space (e2e)', () => {
   const newHub = async (): Promise<{
     hubId: string;
     identity: HubIdentity;
-  }> => ({
-    hubId: newId(),
-    identity: await createHubIdentity(),
-  });
+  }> => {
+    const identity = await createHubIdentity();
+    return { hubId: await insertHub(owner.userId, identity), identity };
+  };
 
   const grant = async (
     by: KeyedUser,

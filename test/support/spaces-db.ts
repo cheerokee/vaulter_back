@@ -142,3 +142,19 @@ export async function auditRows(
     [orgId, `${prefix}%`],
   );
 }
+
+/** Inserts a bare `hubs` row (owner role, no RLS) so that hub ids satisfy the FKs; returns its id. */
+export async function insertHub(
+  ownerUserId: string,
+  keys: { signingPublicKey: string; encryptionPublicKey: string },
+  name = 'Hub',
+): Promise<string> {
+  const rows: { id: string }[] = await (
+    await adminDataSource()
+  ).query(
+    `INSERT INTO hubs (owner_user_id, name, signing_public_key, encryption_public_key)
+     VALUES ($1, $2, $3, $4) RETURNING id`,
+    [ownerUserId, name, keys.signingPublicKey, keys.encryptionPublicKey],
+  );
+  return rows[0]!.id;
+}

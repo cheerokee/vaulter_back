@@ -431,6 +431,12 @@ exportam); nenhum dos dois importa `spaces`.
     (`set_config(..., true)`) até o fim da transação; fora de `run` lança erro. Para trocar só num trecho (ex.:
     gravar na organização pessoal e na do convite na mesma transação), use `uow.withContext(ctx, work)` ou
     `runInOrganizationScope`: dentro de um `run`, entram nele num savepoint e restauram o contexto anterior ao sair.
+    Chaves que abrem uma linha só (`invitationTokenHash`, `hubSigningPublicKey` -> `app.hub_signing_public_key`,
+    busca do Hub pela chave de assinatura) entram só por `withContext`, nunca por `setContext`.
+  - RLS dos Hubs (matriz no cabeçalho da migration `CreateHubs`): `hubs` não tem `organization_id`; o dono lê
+    `hub_organization` pela coluna desnormalizada `hub_owner_user_id` (FK composta com `hubs (id, owner_user_id)`),
+    porque a policy de `hubs` consulta `hub_organization` e uma policy que consultasse `hubs` de volta daria
+    recursão. Escrita em `hub_organization`/`hub_space` só no escopo da organização da linha (os repositórios põem).
 - **Banco de teste:** os e2e rodam em `DB_TEST_DATABASE` (padrão `${DB_DATABASE}_test`), criado e migrado pelo
   `globalSetup`; o banco de desenvolvimento nunca é truncado.
 - **Enums do DER** viram `varchar` + `CHECK` (alterar enum nativo depois é caro). **Índices únicos parciais**
@@ -487,6 +493,8 @@ Os valores do `.env.example` para os segredos são **só de desenvolvimento**; p
 
 ## Pendências antes de produção
 - JWKS público para o hub validar tokens offline.
+- Hubs: limpeza física das linhas antigas de `hub_enrollments`, `hub_link_codes` e `hub_auth_challenges` (o runtime
+  não tem `DELETE`; hoje a apresentação vencida só vira `expired` e códigos/desafios usados ficam).
 - Exclusão de conta (LGPD) precisa revogar as sessões.
 - Organizações: avisar admins por notificação (convite aceito, membro saiu); exclusão de organização; papéis
   próprios (modo avançado: `role_permission` com RLS por organização, hoje o catálogo é só leitura); escopo de

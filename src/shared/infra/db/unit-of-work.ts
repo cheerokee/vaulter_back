@@ -50,6 +50,9 @@ export interface UnitOfWorkContext {
   hubId?: string;
   // Hash do token de convite: abre só esse convite (policy invitation_by_token) antes de haver organização.
   invitationTokenHash?: string;
+  // Chave de assinatura de um Hub: abre só o Hub dessa chave (policy hubs_by_signing_key), para a apresentação
+  // recusar uma chave já usada (inclusive por Hub desregistrado) antes de haver qualquer contexto.
+  hubSigningPublicKey?: string;
 }
 
 const SETTINGS = {
@@ -57,6 +60,7 @@ const SETTINGS = {
   userId: 'app.user_id',
   hubId: 'app.hub_id',
   invitationTokenHash: 'app.invitation_token_hash',
+  hubSigningPublicKey: 'app.hub_signing_public_key',
 } as const satisfies Record<keyof UnitOfWorkContext, string>;
 
 // `set_config(..., true)` vale até o fim da transação: não vaza para a próxima da mesma conexão.
@@ -119,10 +123,10 @@ export class UnitOfWork {
 
   // Contexto do RLS (`app.organization_id`, `app.user_id`, `app.hub_id`) para o resto da transação ativa. Para uma
   // troca temporária (ex.: gravar em outra organização no meio do `run`), use `withContext`.
-  // O hash do convite fica fora: ele só abre um convite por vez, via `runWithContext`/`withContext`, que
-  // restauram o valor anterior — nunca para o resto da transação.
+  // O hash do convite e a chave de assinatura do Hub ficam fora: cada um só abre uma linha por vez, via
+  // `runWithContext`/`withContext`, que restauram o valor anterior — nunca para o resto da transação.
   async setContext(
-    ctx: Omit<UnitOfWorkContext, 'invitationTokenHash'>,
+    ctx: Omit<UnitOfWorkContext, 'invitationTokenHash' | 'hubSigningPublicKey'>,
   ): Promise<void> {
     const manager = activeManager(this.dataSource);
     if (!manager) {

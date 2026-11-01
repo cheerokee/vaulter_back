@@ -4,7 +4,7 @@ import { SpaceKeyTypeormEntity } from './space-key.entity.js';
 
 // Cópia trancada da chave de uma versão: para exatamente um de usuário, hub ou instalação. Sincronizável;
 // remover é lápide, e quem volta tem a lápide limpa na mesma linha. organization_id desnormalizado para o RLS.
-// hub_id e app_installation_id nascem nulas e sem FK: as tabelas chegam nos módulos de hubs e de integração.
+// hub_id tem FK para hubs (migration CreateHubs); app_installation_id ainda sem FK (módulo de integração).
 @Entity('space_key_grants')
 @Check(
   'ck_space_key_grants_recipient',
@@ -70,9 +70,16 @@ export class SpaceKeyGrantTypeormEntity extends SyncableTypeormEntity {
   })
   user?: { id: string };
 
-  // FK para hubs: módulo de hubs.
   @Column({ type: 'uuid', nullable: true })
   hubId!: string | null;
+
+  // Alvo por nome: um módulo não importa a infra/ do outro.
+  @ManyToOne('HubTypeormEntity')
+  @JoinColumn({
+    name: 'hub_id',
+    foreignKeyConstraintName: 'fk_space_key_grants_hubs',
+  })
+  hub?: { id: string };
 
   // FK para app_installations: módulo de integração.
   @Column({ type: 'uuid', nullable: true })

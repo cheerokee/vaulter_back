@@ -182,8 +182,9 @@ CREATE TABLE organization_invitations (
 -- dos espaços liberados na Sala). Formatos e rótulos em docs/crypto/hub-identity.md.
 -- hubs é sincronizável e NÃO tem organization_id (o Hub não pertence a nenhuma organização).
 -- RLS (Postgres): SELECT se owner_user_id = app.user_id, OU id = app.hub_id (Hub autenticado), OU o Hub tem vínculo
--- aprovado com organização de que app.user_id é membro ativo; INSERT/UPDATE só pelo dono (ou pelo contexto de
--- reivindicação, em que app.user_id é o owner_user_id gravado).
+-- aprovado com organização de que app.user_id é membro ativo, OU signing_public_key = app.hub_signing_public_key
+-- (busca da apresentação); INSERT pelo dono (contexto de reivindicação: app.user_id = owner_user_id gravado);
+-- UPDATE pelo dono ou pelo próprio Hub (last_seen_at). Matriz completa na migration CreateHubs.
 CREATE TABLE hubs (
   id CHAR(36) NOT NULL,
   created_at DATETIME NOT NULL,
@@ -197,6 +198,7 @@ CREATE TABLE hubs (
   sync_version BIGINT NOT NULL COMMENT 'versão de sincronização: sequência global do servidor, muda a cada insert/update/exclusão',
   PRIMARY KEY (id),
   UNIQUE INDEX uq_hubs_signing_public_key (signing_public_key),
+  UNIQUE INDEX uq_hubs_id_owner (id, owner_user_id) COMMENT 'alvo da FK composta de hub_organization (hub_id, hub_owner_user_id)',
   INDEX fk_hubs_users_idx (owner_user_id),
   CONSTRAINT fk_hubs_users FOREIGN KEY (owner_user_id) REFERENCES users (id),
   INDEX ix_hubs_sync_version (sync_version)
@@ -221,14 +223,15 @@ CREATE TABLE hub_enrollments (
   claimed_hub_id CHAR(36) NULL,
   PRIMARY KEY (id),
   UNIQUE INDEX uq_hub_enrollments_key_nonce (signing_public_key, nonce),
-  INDEX ix_hub_enrollments_claim_code_hash (claim_code_hash),
+  UNIQUE INDEX uq_hub_enrollments_claim_code_hash (claim_code_hash) COMMENT 'Postgres: parcial WHERE status = pending',
   INDEX fk_hub_enrollments_hubs_idx (claimed_hub_id),
   CONSTRAINT fk_hub_enrollments_hubs FOREIGN KEY (claimed_hub_id) REFERENCES hubs (id)
 );
 
 -- Código de vínculo pedido pelo Hub (o dono o usa para vincular o Hub a uma organização). Uso único, só hash.
 -- Só do backend (não sincroniza). Fora do RLS de organização. Postgres: índice único parcial em code_hash
--- WHERE used_at IS NULL (vigentes).
+-- WHERE used_at IS NULL (vigentes). As três tabelas só do backend não têm DELETE para o runtime: apresentação
+-- vencida vira status = expired; códigos e desafios usados/vencidos ficam; a remoção física é pendência.
 CREATE TABLE hub_link_codes (
   id CHAR(36) NOT NULL,
   created_at DATETIME NOT NULL,
@@ -239,7 +242,7 @@ CREATE TABLE hub_link_codes (
   expires_at DATETIME NOT NULL,
   used_at DATETIME NULL,
   PRIMARY KEY (id),
-  INDEX ix_hub_link_codes_code_hash (code_hash),
+  UNIQUE INDEX uq_hub_link_codes_code_hash (code_hash) COMMENT 'Postgres: parcial WHERE used_at IS NULL',
   INDEX fk_hub_link_codes_hubs_idx (hub_id),
   CONSTRAINT fk_hub_link_codes_hubs FOREIGN KEY (hub_id) REFERENCES hubs (id)
 );
@@ -387,10 +390,14 @@ CREATE TABLE space_key_grants (
 -- Vínculo com dois consentimentos: o dono do hub pede; a política da organização decide se precisa de admin.
 -- Os dois consentimentos têm colunas próprias (owner_approved_*, org_approved_*), no lugar do antigo
 -- approved_by_user_id/approved_at; status (pending | approved | rejected | revoked) é derivado dos dois.
--- RLS: a policy da organização, mais leitura pelo dono do Hub e pelo próprio Hub (hub_id = app.hub_id).
+-- RLS: a policy da organização (única via de escrita), mais leitura pelo membro ativo da organização, pelo dono do
+-- Hub (hub_owner_user_id = app.user_id) e pelo próprio Hub (hub_id = app.hub_id). hub_owner_user_id é o dono
+-- desnormalizado: a policy de hubs consulta esta tabela, então a desta não pode consultar hubs (recursão); a FK
+-- composta (hub_id, hub_owner_user_id) -> hubs (id, owner_user_id) garante que é o dono real.
 CREATE TABLE hub_organization (
   hub_id CHAR(36) NOT NULL,
   organization_id CHAR(36) NOT NULL,
+  hub_owner_user_id CHAR(36) NOT NULL COMMENT 'dono do Hub, desnormalizado para o RLS (FK composta com hub_id)',
   status ENUM('pending', 'approved', 'rejected', 'revoked') NOT NULL DEFAULT 'pending',
   requested_by_user_id CHAR(36) NOT NULL,
   owner_approved_by_user_id CHAR(36) NULL,
@@ -403,10 +410,12 @@ CREATE TABLE hub_organization (
   sync_version BIGINT NOT NULL COMMENT 'versão de sincronização: sequência global do servidor, muda a cada insert/update/exclusão',
   PRIMARY KEY (hub_id, organization_id),
   INDEX fk_hub_organization_organizations_idx (organization_id),
+  INDEX fk_hub_organization_hubs_idx (hub_id, hub_owner_user_id),
+  INDEX fk_hub_organization_hub_owner_idx (hub_owner_user_id),
   INDEX fk_hub_organization_requested_by_idx (requested_by_user_id),
   INDEX fk_hub_organization_owner_approved_by_idx (owner_approved_by_user_id),
   INDEX fk_hub_organization_org_approved_by_idx (org_approved_by_user_id),
-  CONSTRAINT fk_hub_organization_hubs FOREIGN KEY (hub_id) REFERENCES hubs (id),
+  CONSTRAINT fk_hub_organization_hubs FOREIGN KEY (hub_id, hub_owner_user_id) REFERENCES hubs (id, owner_user_id),
   CONSTRAINT fk_hub_organization_organizations FOREIGN KEY (organization_id) REFERENCES organizations (id),
   CONSTRAINT fk_hub_organization_requested_by FOREIGN KEY (requested_by_user_id) REFERENCES users (id),
   CONSTRAINT fk_hub_organization_owner_approved_by FOREIGN KEY (owner_approved_by_user_id) REFERENCES users (id),
@@ -416,11 +425,13 @@ CREATE TABLE hub_organization (
 
 -- Quais espaços estão num hub. Quem usa o quê nele (inclusive a "sala", sem login) vem de role_assignments.
 -- organization_id desnormalizado, com FK composta (space_id, organization_id) -> spaces (id, organization_id)
--- (a checagem de FK ignora o RLS); RLS por organização.
+-- (a checagem de FK ignora o RLS); RLS por organização (única via de escrita), mais leitura pelo membro ativo da
+-- organização, pelo dono do Hub e pelo próprio Hub (hub_id = app.hub_id).
 CREATE TABLE hub_space (
   hub_id CHAR(36) NOT NULL,
   space_id CHAR(36) NOT NULL,
   organization_id CHAR(36) NOT NULL,
+  added_by_user_id CHAR(36) NOT NULL COMMENT 'quem pôs (ou pôs de novo) o espaço no Hub',
   created_at DATETIME NOT NULL,
   deleted_at DATETIME NULL,
   updated_at DATETIME NULL,
@@ -428,9 +439,11 @@ CREATE TABLE hub_space (
   PRIMARY KEY (hub_id, space_id),
   INDEX fk_hub_space_spaces_idx (space_id, organization_id),
   INDEX fk_hub_space_organizations_idx (organization_id),
+  INDEX fk_hub_space_added_by_idx (added_by_user_id),
   CONSTRAINT fk_hub_space_hubs FOREIGN KEY (hub_id) REFERENCES hubs (id),
   CONSTRAINT fk_hub_space_spaces FOREIGN KEY (space_id, organization_id) REFERENCES spaces (id, organization_id),
   CONSTRAINT fk_hub_space_organizations FOREIGN KEY (organization_id) REFERENCES organizations (id),
+  CONSTRAINT fk_hub_space_added_by FOREIGN KEY (added_by_user_id) REFERENCES users (id),
   INDEX ix_hub_space_sync_version (sync_version)
 );
 
@@ -521,8 +534,12 @@ CREATE TABLE role_permission (
 -- no máximo uma atribuição ativa por pessoa em cada espaço (MySQL não expressa índice parcial) — e o CHECK
 -- ck_role_assignments_space_id_scope (scope_type = 'space' OR space_id IS NULL): só linha de espaço leva space_id.
 -- Escopo de Hub (scope_type = 'hub'): hub_id preenchido e organization_id NULO (o Hub não é de organização; papéis
--- hub_*). Por isso o RLS ganha uma policy própria: o dono do Hub lê e grava, o próprio Hub (app.hub_id) lê e cada
--- usuário lê a própria linha (self_read).
+-- hub_*). Por isso o RLS ganha uma policy própria: o dono do Hub lê e grava, o próprio Hub (app.hub_id) lê e
+-- atualiza (cascatas que agem sobre o Hub) e cada usuário lê a própria linha (self_read). No Postgres: CHECKs
+-- ck_role_assignments_hub_scope (scope_type <> 'hub' OR (hub_id NOT NULL AND organization_id NULL)) e
+-- ck_role_assignments_hub_id_scope (scope_type = 'hub' OR hub_id IS NULL); únicos parciais
+-- uq_role_assignments_hub_user (hub_id, user_id) e uq_role_assignments_hub_room (hub_id, room_hub_id), ambos
+-- WHERE scope_type = 'hub' AND deleted_at IS NULL (o da Sala também room_hub_id IS NOT NULL).
 -- Sala (room_hub_id): o "quem" é a Sala do Hub, com escopo de espaço (papel da Sala no espaço liberado) ou de Hub.
 -- No Postgres: índice único parcial uq_role_assignments_space_room_hub (space_id, room_hub_id) WHERE
 -- scope_type = 'space' AND room_hub_id IS NOT NULL AND deleted_at IS NULL — no máximo uma liberação ativa na Sala
@@ -556,6 +573,8 @@ CREATE TABLE role_assignments (
   INDEX fk_role_assignments_app_installations_idx (app_installation_id),
   INDEX fk_role_assignments_approved_by_idx (approved_by_user_id),
   UNIQUE INDEX uq_role_assignments_space_room_hub (space_id, room_hub_id) COMMENT 'Postgres: parcial WHERE scope_type = space AND room_hub_id IS NOT NULL AND deleted_at IS NULL',
+  UNIQUE INDEX uq_role_assignments_hub_user (hub_id, user_id) COMMENT 'Postgres: parcial WHERE scope_type = hub AND deleted_at IS NULL',
+  UNIQUE INDEX uq_role_assignments_hub_room (hub_id, room_hub_id) COMMENT 'Postgres: parcial WHERE scope_type = hub AND room_hub_id IS NOT NULL AND deleted_at IS NULL',
   CONSTRAINT fk_role_assignments_roles FOREIGN KEY (role_id) REFERENCES roles (id),
   CONSTRAINT fk_role_assignments_users FOREIGN KEY (user_id) REFERENCES users (id),
   CONSTRAINT fk_role_assignments_room_hub FOREIGN KEY (room_hub_id) REFERENCES hubs (id),

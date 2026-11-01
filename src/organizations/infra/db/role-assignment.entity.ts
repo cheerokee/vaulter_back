@@ -7,11 +7,12 @@ import { RoleTypeormEntity } from './role.entity.js';
 export type ApprovalStatus =
   'not_required' | 'pending' | 'approved' | 'rejected';
 
-// Completa como no DER. Quem: exatamente um de user_id / room_hub_id / app_installation_id. As colunas de
-// Hub e instalação já existem (nulas); as FKs para hubs e app_installations entram nas migrations desses
-// módulos (a de spaces entrou na CreateSpaces). RLS por organization_id, que vale também para as linhas de
-// espaço (elas levam organization_id: ck_role_assignments_space_scope) + leitura das próprias atribuições
-// (`user_id = app.user_id`). Uma atribuição de espaço ativa por pessoa em cada espaço.
+// Completa como no DER. Quem: exatamente um de user_id / room_hub_id / app_installation_id. As FKs para hubs
+// entraram na CreateHubs; a de app_installations entra no módulo de integração. RLS por organization_id, que
+// vale também para as linhas de espaço (elas levam organization_id: ck_role_assignments_space_scope) + leitura
+// das próprias atribuições (`user_id = app.user_id`). Escopo hub (organization_id nulo): policies próprias da
+// CreateHubs (o dono do Hub lê e grava, o próprio Hub lê e atualiza). Uma atribuição de espaço ativa por pessoa
+// em cada espaço; um papel de Hub ativo por pessoa em cada Hub.
 @Entity('role_assignments')
 @Check(
   'ck_role_assignments_scope_type',
@@ -37,6 +38,14 @@ export type ApprovalStatus =
   'ck_role_assignments_space_id_scope',
   `"scope_type" = 'space' OR "space_id" IS NULL`,
 )
+@Check(
+  'ck_role_assignments_hub_scope',
+  `"scope_type" <> 'hub' OR ("hub_id" IS NOT NULL AND "organization_id" IS NULL)`,
+)
+@Check(
+  'ck_role_assignments_hub_id_scope',
+  `"scope_type" = 'hub' OR "hub_id" IS NULL`,
+)
 @Index('ix_role_assignments_sync_version', ['syncVersion'])
 @Index('fk_role_assignments_roles_idx', ['roleId'])
 @Index('ix_role_assignments_user_scope', ['userId', 'scopeType'])
@@ -61,6 +70,15 @@ export type ApprovalStatus =
   unique: true,
   where: `"scope_type" = 'space' AND "room_hub_id" IS NOT NULL AND "deleted_at" IS NULL`,
 })
+// Escopo hub: um papel ativo por pessoa em cada Hub e uma Sala (hub_room) por Hub.
+@Index('uq_role_assignments_hub_user', ['hubId', 'userId'], {
+  unique: true,
+  where: `"scope_type" = 'hub' AND "deleted_at" IS NULL`,
+})
+@Index('uq_role_assignments_hub_room', ['hubId', 'roomHubId'], {
+  unique: true,
+  where: `"scope_type" = 'hub' AND "room_hub_id" IS NOT NULL AND "deleted_at" IS NULL`,
+})
 export class RoleAssignmentTypeormEntity extends SyncableTypeormEntity {
   @Column({ type: 'uuid' })
   roleId!: string;
@@ -82,9 +100,16 @@ export class RoleAssignmentTypeormEntity extends SyncableTypeormEntity {
   })
   user?: { id: string };
 
-  // FK para hubs: módulo de hubs.
   @Column({ type: 'uuid', nullable: true })
   roomHubId!: string | null;
+
+  // Alvo por nome: um módulo não importa a infra/ do outro.
+  @ManyToOne('HubTypeormEntity')
+  @JoinColumn({
+    name: 'room_hub_id',
+    foreignKeyConstraintName: 'fk_role_assignments_room_hub',
+  })
+  roomHub?: { id: string };
 
   // FK para app_installations: módulo de integração.
   @Column({ type: 'uuid', nullable: true })
@@ -122,9 +147,15 @@ export class RoleAssignmentTypeormEntity extends SyncableTypeormEntity {
   ])
   space?: { id: string };
 
-  // FK para hubs: módulo de hubs.
   @Column({ type: 'uuid', nullable: true })
   hubId!: string | null;
+
+  @ManyToOne('HubTypeormEntity')
+  @JoinColumn({
+    name: 'hub_id',
+    foreignKeyConstraintName: 'fk_role_assignments_hubs',
+  })
+  hub?: { id: string };
 
   @Column({ type: 'uuid', nullable: true })
   grantedByUserId!: string | null;
