@@ -15,8 +15,7 @@ describe('HubOrganizationLink', () => {
       expect(l.status).toBe('approved');
       expect(l.isActive).toBe(true);
       expect(l.ownerApprovedByUserId).toBe('owner');
-      expect(l.orgApprovedAt).toEqual(now);
-      expect(l.orgApprovedByUserId).toBeNull();
+      expect(l.orgApprovedAt).toBeNull();
     });
 
     it('waits for an admin under admin_approved', () => {
@@ -29,7 +28,7 @@ describe('HubOrganizationLink', () => {
       expect(l.isActive).toBe(false);
       expect(l.ownerApprovedAt).toEqual(now);
       expect(l.orgApprovedAt).toBeNull();
-      l.approveAsOrgAdmin('admin', later);
+      l.approveAsOrgAdmin('admin', later, 'admin_approved');
       expect(l.status).toBe('approved');
       expect(l.orgApprovedByUserId).toBe('admin');
     });
@@ -44,7 +43,7 @@ describe('HubOrganizationLink', () => {
       });
       expect(l.status).toBe('pending');
       expect(l.requestedByUserId).toBe('ana');
-      l.approveAsOwner('owner', later);
+      l.approveAsOwner('owner', later, 'any_member_hub');
       expect(l.status).toBe('approved');
       expect(l.ownerApprovedByUserId).toBe('owner');
     });
@@ -55,9 +54,9 @@ describe('HubOrganizationLink', () => {
         userId: 'ana',
         policy: 'admin_approved',
       });
-      a.approveAsOwner('owner', later);
+      a.approveAsOwner('owner', later, 'admin_approved');
       expect(a.status).toBe('pending');
-      a.approveAsOrgAdmin('admin', later);
+      a.approveAsOrgAdmin('admin', later, 'admin_approved');
       expect(a.status).toBe('approved');
 
       const b = HubOrganizationLink.requestByOther({
@@ -65,9 +64,9 @@ describe('HubOrganizationLink', () => {
         userId: 'ana',
         policy: 'admin_approved',
       });
-      b.approveAsOrgAdmin('admin', later);
+      b.approveAsOrgAdmin('admin', later, 'admin_approved');
       expect(b.status).toBe('pending');
-      b.approveAsOwner('owner', later);
+      b.approveAsOwner('owner', later, 'admin_approved');
       expect(b.status).toBe('approved');
     });
   });
@@ -83,10 +82,10 @@ describe('HubOrganizationLink', () => {
     expect(() => l.reject()).toThrow(
       expect.objectContaining({ code: 'link-not-pending' }),
     );
-    expect(() => l.approveAsOwner('o', later)).toThrow(
+    expect(() => l.approveAsOwner('o', later, 'admin_approved')).toThrow(
       expect.objectContaining({ code: 'link-not-pending' }),
     );
-    expect(() => l.approveAsOrgAdmin('a', later)).toThrow(
+    expect(() => l.approveAsOrgAdmin('a', later, 'admin_approved')).toThrow(
       expect.objectContaining({ code: 'link-not-pending' }),
     );
   });
@@ -97,7 +96,7 @@ describe('HubOrganizationLink', () => {
       userId: 'owner',
       policy: 'any_member_hub',
     });
-    expect(() => l.approveAsOwner('owner', later)).toThrow(
+    expect(() => l.approveAsOwner('owner', later, 'any_member_hub')).toThrow(
       expect.objectContaining({ code: 'link-not-pending' }),
     );
   });
@@ -172,5 +171,57 @@ describe('HubOrganizationLink', () => {
     expect(again.requestedByUserId).toBe('ana');
     expect(again.ownerApprovedAt).toBeNull();
     expect(again.orgApprovedAt).toBeNull();
+  });
+
+  it('re-evaluates the org side with the current policy while pending', () => {
+    const a = HubOrganizationLink.requestByOther({
+      ...base,
+      userId: 'ana',
+      policy: 'any_member_hub',
+    });
+    a.approveAsOwner('owner', later, 'admin_approved');
+    expect(a.status).toBe('pending');
+    a.approveAsOrgAdmin('admin', later, 'admin_approved');
+    expect(a.status).toBe('approved');
+
+    const b = HubOrganizationLink.requestByOther({
+      ...base,
+      userId: 'ana',
+      policy: 'admin_approved',
+    });
+    b.approveAsOwner('owner', later, 'admin_approved');
+    expect(b.status).toBe('pending');
+    const c = HubOrganizationLink.ownerLinks({
+      ...base,
+      userId: 'owner',
+      policy: 'admin_approved',
+    });
+    expect(c.status).toBe('pending');
+    // policy relaxed to any_member_hub: the owner approval already given settles on the next owner/admin action
+    const d = HubOrganizationLink.requestByOther({
+      ...base,
+      userId: 'ana',
+      policy: 'admin_approved',
+    });
+    d.approveAsOwner('owner', later, 'any_member_hub');
+    expect(d.status).toBe('approved');
+  });
+
+  it('restarts an owner link over a rejected one', () => {
+    const old = HubOrganizationLink.ownerLinks({
+      ...base,
+      userId: 'owner',
+      policy: 'admin_approved',
+    });
+    old.reject();
+    const again = HubOrganizationLink.ownerLinks({
+      ...base,
+      now: later,
+      userId: 'owner',
+      policy: 'any_member_hub',
+      existing: old,
+    });
+    expect(again.id).toBe(old.id);
+    expect(again.status).toBe('approved');
   });
 });

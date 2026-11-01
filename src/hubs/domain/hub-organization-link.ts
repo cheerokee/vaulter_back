@@ -12,7 +12,7 @@ export type HubOrganizationLinkProps = {
   requestedByUserId: string;
   ownerApprovedByUserId: string | null;
   ownerApprovedAt: Date | null;
-  /** Null user with a date = implicit consent (policy any_member_hub). */
+  /** Only a real admin consent is recorded; under any_member_hub the org side is satisfied by the policy itself. */
   orgApprovedByUserId: string | null;
   orgApprovedAt: Date | null;
   createdAt?: Date;
@@ -49,7 +49,8 @@ function begin(
     hubId: input.hubId,
     organizationId: input.organizationId,
     status:
-      consent.ownerApprovedAt !== null && consent.orgApprovedAt !== null
+      consent.ownerApprovedAt !== null &&
+      (input.policy === 'any_member_hub' || consent.orgApprovedAt !== null)
         ? 'approved'
         : 'pending',
     requestedByUserId: input.userId,
@@ -60,25 +61,23 @@ function begin(
 }
 
 export class HubOrganizationLink extends Entity<HubOrganizationLinkProps> {
-  /** The hub owner asks: owner consent is given; org consent is implicit unless the policy needs an admin. */
+  /** The hub owner asks: owner consent is given; approved at once under any_member_hub (no org consent stamped). */
   static ownerLinks(input: Start): HubOrganizationLink {
-    const implicit = input.policy === 'any_member_hub';
     return begin(input, {
       ownerApprovedByUserId: input.userId,
       ownerApprovedAt: input.now,
       orgApprovedByUserId: null,
-      orgApprovedAt: implicit ? input.now : null,
+      orgApprovedAt: null,
     });
   }
 
   /** Another member asks (via link code): the owner must approve, and an admin too under admin_approved. */
   static requestByOther(input: Start): HubOrganizationLink {
-    const implicit = input.policy === 'any_member_hub';
     return begin(input, {
       ownerApprovedByUserId: null,
       ownerApprovedAt: null,
       orgApprovedByUserId: null,
-      orgApprovedAt: implicit ? input.now : null,
+      orgApprovedAt: null,
     });
   }
 
@@ -120,7 +119,7 @@ export class HubOrganizationLink extends Entity<HubOrganizationLinkProps> {
     return this.props.status === 'approved';
   }
 
-  approveAsOwner(userId: string, now: Date): void {
+  approveAsOwner(userId: string, now: Date, policy: HubLinkPolicy): void {
     this.assertPending();
     if (this.props.ownerApprovedAt === null) {
       this.props = {
@@ -129,10 +128,10 @@ export class HubOrganizationLink extends Entity<HubOrganizationLinkProps> {
         ownerApprovedAt: now,
       };
     }
-    this.settle();
+    this.settle(policy);
   }
 
-  approveAsOrgAdmin(userId: string, now: Date): void {
+  approveAsOrgAdmin(userId: string, now: Date, policy: HubLinkPolicy): void {
     this.assertPending();
     if (this.props.orgApprovedAt === null) {
       this.props = {
@@ -141,7 +140,7 @@ export class HubOrganizationLink extends Entity<HubOrganizationLinkProps> {
         orgApprovedAt: now,
       };
     }
-    this.settle();
+    this.settle(policy);
   }
 
   reject(): void {
@@ -169,12 +168,12 @@ export class HubOrganizationLink extends Entity<HubOrganizationLinkProps> {
     }
   }
 
-  /** Approved only when both consents exist. */
-  private settle(): void {
+  /** Approved when the owner consented and the org side is satisfied by the CURRENT policy or a real admin. */
+  private settle(policy: HubLinkPolicy): void {
     if (
       this.props.status === 'pending' &&
       this.props.ownerApprovedAt !== null &&
-      this.props.orgApprovedAt !== null
+      (policy === 'any_member_hub' || this.props.orgApprovedAt !== null)
     ) {
       this.props = { ...this.props, status: 'approved' };
     }

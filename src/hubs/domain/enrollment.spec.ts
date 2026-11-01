@@ -37,6 +37,12 @@ describe('Enrollment', () => {
     );
   });
 
+  it('rejects an empty nonce', () => {
+    expect(() =>
+      Enrollment.issue({ keys, nonce: '', codeHash: 'h', now }),
+    ).toThrow(expect.objectContaining({ code: 'nonce-invalid' }));
+  });
+
   it('is claimable before expiry', () => {
     expect(() =>
       issue().assertClaimable(new Date(now.getTime() + 1000)),
