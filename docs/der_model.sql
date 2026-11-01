@@ -117,6 +117,7 @@ CREATE TABLE organizations (
   name VARCHAR(255) NOT NULL,
   is_personal TINYINT NOT NULL DEFAULT 0 COMMENT 'organização de uma pessoa só',
   hub_link_policy ENUM('any_member_hub', 'admin_approved') NOT NULL DEFAULT 'any_member_hub',
+  allow_room_spaces TINYINT NOT NULL DEFAULT 1 COMMENT 'política da organização: permite liberar espaços na Sala dos Hubs; admin muda no PATCH da organização',
   plan VARCHAR(50) NOT NULL DEFAULT 'free' COMMENT 'decide se a nuvem ativa está liberada',
   -- Kit de recuperação: a parte privada é mostrada uma vez ao cliente; aqui só a pública, para trancar as
   -- chaves dos espaços (space_keys.recovery_wrapped_key). Nulo até o primeiro espaço ou ação explícita.
@@ -177,6 +178,12 @@ CREATE TABLE organization_invitations (
 -- Hubs
 -- ---------------------------------------------------------------------------------------------------
 
+-- Identidade do Hub: par Ed25519 (assina: apresentação, status e autenticação) + par X25519 (recebe as chaves
+-- dos espaços liberados na Sala). Formatos e rótulos em docs/crypto/hub-identity.md.
+-- hubs é sincronizável e NÃO tem organization_id (o Hub não pertence a nenhuma organização).
+-- RLS (Postgres): SELECT se owner_user_id = app.user_id, OU id = app.hub_id (Hub autenticado), OU o Hub tem vínculo
+-- aprovado com organização de que app.user_id é membro ativo; INSERT/UPDATE só pelo dono (ou pelo contexto de
+-- reivindicação, em que app.user_id é o owner_user_id gravado).
 CREATE TABLE hubs (
   id CHAR(36) NOT NULL,
   created_at DATETIME NOT NULL,
@@ -184,13 +191,75 @@ CREATE TABLE hubs (
   deleted_at DATETIME NULL,
   owner_user_id CHAR(36) NOT NULL,
   name VARCHAR(255) NOT NULL,
-  public_key TEXT NOT NULL COMMENT 'para trancar as chaves dos espaços abertos na sala',
+  encryption_public_key TEXT NOT NULL COMMENT 'X25519 (antes public_key): para trancar as chaves dos espaços abertos na sala',
+  signing_public_key VARCHAR(64) NOT NULL COMMENT 'Ed25519 (base64url): única para sempre, inclusive de Hubs desregistrados (sem WHERE deleted_at no Postgres)',
   last_seen_at DATETIME NULL,
   sync_version BIGINT NOT NULL COMMENT 'versão de sincronização: sequência global do servidor, muda a cada insert/update/exclusão',
   PRIMARY KEY (id),
+  UNIQUE INDEX uq_hubs_signing_public_key (signing_public_key),
   INDEX fk_hubs_users_idx (owner_user_id),
   CONSTRAINT fk_hubs_users FOREIGN KEY (owner_user_id) REFERENCES users (id),
   INDEX ix_hubs_sync_version (sync_version)
+);
+
+-- Apresentação de um Hub que ainda não tem dono (assinada com a chave do Hub, rótulo hub-enroll-v1).
+-- Só do backend (não sincroniza com hub/app). Fora do RLS de organização: ainda não pertence a ninguém; só o
+-- caso de uso de reivindicação a acessa, pelo hash do código. Não é dado de cliente.
+-- Postgres: UNIQUE (signing_public_key, nonce) (nonce de uso único) e índice único parcial em claim_code_hash
+-- WHERE status = 'pending'. Limpeza das expiradas por rotina.
+CREATE TABLE hub_enrollments (
+  id CHAR(36) NOT NULL,
+  created_at DATETIME NOT NULL,
+  updated_at DATETIME NULL,
+  deleted_at DATETIME NULL,
+  signing_public_key VARCHAR(64) NOT NULL,
+  encryption_public_key TEXT NOT NULL,
+  nonce VARCHAR(32) NOT NULL COMMENT '16 bytes em base64url; uso único por signing_public_key',
+  claim_code_hash VARCHAR(64) NOT NULL COMMENT 'hex de crypto_generichash(32, código de 8 dígitos) com chave do servidor; nunca o código',
+  expires_at DATETIME NOT NULL COMMENT 'vale 10 minutos',
+  status ENUM('pending', 'claimed', 'expired') NOT NULL DEFAULT 'pending',
+  claimed_hub_id CHAR(36) NULL,
+  PRIMARY KEY (id),
+  UNIQUE INDEX uq_hub_enrollments_key_nonce (signing_public_key, nonce),
+  INDEX ix_hub_enrollments_claim_code_hash (claim_code_hash),
+  INDEX fk_hub_enrollments_hubs_idx (claimed_hub_id),
+  CONSTRAINT fk_hub_enrollments_hubs FOREIGN KEY (claimed_hub_id) REFERENCES hubs (id)
+);
+
+-- Código de vínculo pedido pelo Hub (o dono o usa para vincular o Hub a uma organização). Uso único, só hash.
+-- Só do backend (não sincroniza). Fora do RLS de organização. Postgres: índice único parcial em code_hash
+-- WHERE used_at IS NULL (vigentes).
+CREATE TABLE hub_link_codes (
+  id CHAR(36) NOT NULL,
+  created_at DATETIME NOT NULL,
+  updated_at DATETIME NULL,
+  deleted_at DATETIME NULL,
+  hub_id CHAR(36) NOT NULL,
+  code_hash VARCHAR(64) NOT NULL,
+  expires_at DATETIME NOT NULL,
+  used_at DATETIME NULL,
+  PRIMARY KEY (id),
+  INDEX ix_hub_link_codes_code_hash (code_hash),
+  INDEX fk_hub_link_codes_hubs_idx (hub_id),
+  CONSTRAINT fk_hub_link_codes_hubs FOREIGN KEY (hub_id) REFERENCES hubs (id)
+);
+
+-- Desafio de autenticação do Hub (válido por 60 s, uso único; assinatura com rótulo hub-auth-v1). hub_id nulo =
+-- desafio falso para Hub inexistente (sem oráculo; nunca valida). Só hash. Só do backend (não sincroniza).
+-- Fora do RLS de organização.
+CREATE TABLE hub_auth_challenges (
+  id CHAR(36) NOT NULL,
+  created_at DATETIME NOT NULL,
+  updated_at DATETIME NULL,
+  deleted_at DATETIME NULL,
+  hub_id CHAR(36) NULL,
+  challenge_hash VARCHAR(64) NOT NULL,
+  expires_at DATETIME NOT NULL,
+  used_at DATETIME NULL,
+  PRIMARY KEY (id),
+  UNIQUE INDEX uq_hub_auth_challenges_hash (challenge_hash),
+  INDEX fk_hub_auth_challenges_hubs_idx (hub_id),
+  CONSTRAINT fk_hub_auth_challenges_hubs FOREIGN KEY (hub_id) REFERENCES hubs (id)
 );
 
 -- ---------------------------------------------------------------------------------------------------
@@ -316,13 +385,18 @@ CREATE TABLE space_key_grants (
 );
 
 -- Vínculo com dois consentimentos: o dono do hub pede; a política da organização decide se precisa de admin.
+-- Os dois consentimentos têm colunas próprias (owner_approved_*, org_approved_*), no lugar do antigo
+-- approved_by_user_id/approved_at; status (pending | approved | rejected | revoked) é derivado dos dois.
+-- RLS: a policy da organização, mais leitura pelo dono do Hub e pelo próprio Hub (hub_id = app.hub_id).
 CREATE TABLE hub_organization (
   hub_id CHAR(36) NOT NULL,
   organization_id CHAR(36) NOT NULL,
-  status ENUM('pending', 'approved', 'revoked') NOT NULL DEFAULT 'pending',
+  status ENUM('pending', 'approved', 'rejected', 'revoked') NOT NULL DEFAULT 'pending',
   requested_by_user_id CHAR(36) NOT NULL,
-  approved_by_user_id CHAR(36) NULL,
-  approved_at DATETIME NULL,
+  owner_approved_by_user_id CHAR(36) NULL,
+  owner_approved_at DATETIME NULL,
+  org_approved_by_user_id CHAR(36) NULL,
+  org_approved_at DATETIME NULL,
   created_at DATETIME NOT NULL,
   updated_at DATETIME NULL,
   deleted_at DATETIME NULL,
@@ -330,26 +404,33 @@ CREATE TABLE hub_organization (
   PRIMARY KEY (hub_id, organization_id),
   INDEX fk_hub_organization_organizations_idx (organization_id),
   INDEX fk_hub_organization_requested_by_idx (requested_by_user_id),
-  INDEX fk_hub_organization_approved_by_idx (approved_by_user_id),
+  INDEX fk_hub_organization_owner_approved_by_idx (owner_approved_by_user_id),
+  INDEX fk_hub_organization_org_approved_by_idx (org_approved_by_user_id),
   CONSTRAINT fk_hub_organization_hubs FOREIGN KEY (hub_id) REFERENCES hubs (id),
   CONSTRAINT fk_hub_organization_organizations FOREIGN KEY (organization_id) REFERENCES organizations (id),
   CONSTRAINT fk_hub_organization_requested_by FOREIGN KEY (requested_by_user_id) REFERENCES users (id),
-  CONSTRAINT fk_hub_organization_approved_by FOREIGN KEY (approved_by_user_id) REFERENCES users (id),
+  CONSTRAINT fk_hub_organization_owner_approved_by FOREIGN KEY (owner_approved_by_user_id) REFERENCES users (id),
+  CONSTRAINT fk_hub_organization_org_approved_by FOREIGN KEY (org_approved_by_user_id) REFERENCES users (id),
   INDEX ix_hub_organization_sync_version (sync_version)
 );
 
 -- Quais espaços estão num hub. Quem usa o quê nele (inclusive a "sala", sem login) vem de role_assignments.
+-- organization_id desnormalizado, com FK composta (space_id, organization_id) -> spaces (id, organization_id)
+-- (a checagem de FK ignora o RLS); RLS por organização.
 CREATE TABLE hub_space (
   hub_id CHAR(36) NOT NULL,
   space_id CHAR(36) NOT NULL,
+  organization_id CHAR(36) NOT NULL,
   created_at DATETIME NOT NULL,
   deleted_at DATETIME NULL,
   updated_at DATETIME NULL,
   sync_version BIGINT NOT NULL COMMENT 'versão de sincronização: sequência global do servidor, muda a cada insert/update/exclusão',
   PRIMARY KEY (hub_id, space_id),
-  INDEX fk_hub_space_spaces_idx (space_id),
+  INDEX fk_hub_space_spaces_idx (space_id, organization_id),
+  INDEX fk_hub_space_organizations_idx (organization_id),
   CONSTRAINT fk_hub_space_hubs FOREIGN KEY (hub_id) REFERENCES hubs (id),
-  CONSTRAINT fk_hub_space_spaces FOREIGN KEY (space_id) REFERENCES spaces (id),
+  CONSTRAINT fk_hub_space_spaces FOREIGN KEY (space_id, organization_id) REFERENCES spaces (id, organization_id),
+  CONSTRAINT fk_hub_space_organizations FOREIGN KEY (organization_id) REFERENCES organizations (id),
   INDEX ix_hub_space_sync_version (sync_version)
 );
 
@@ -439,6 +520,10 @@ CREATE TABLE role_permission (
 -- No Postgres: índice único parcial (space_id, user_id) WHERE scope_type = 'space' AND deleted_at IS NULL —
 -- no máximo uma atribuição ativa por pessoa em cada espaço (MySQL não expressa índice parcial) — e o CHECK
 -- ck_role_assignments_space_id_scope (scope_type = 'space' OR space_id IS NULL): só linha de espaço leva space_id.
+-- Escopo de Hub (scope_type = 'hub'): hub_id preenchido e organization_id NULO (o Hub não é de organização; papéis
+-- hub_*). Por isso o RLS ganha uma policy própria: o dono do Hub lê e grava, o próprio Hub (app.hub_id) lê e cada
+-- usuário lê a própria linha (self_read).
+-- Sala (room_hub_id): o "quem" é a Sala do Hub, com escopo de espaço (papel da Sala no espaço liberado) ou de Hub.
 CREATE TABLE role_assignments (
   id CHAR(36) NOT NULL,
   created_at DATETIME NOT NULL,
