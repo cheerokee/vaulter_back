@@ -18,10 +18,20 @@ function validConfig(): Record<string, unknown> {
     AUTH_JWT_KEY_ID: 'dev-1',
     AUTH_JWT_SIGNING_SEED: seed,
     IDENTITY_DECOY_SALT_KEY: seed,
+    HUB_CODE_HASH_KEY: seed,
   };
 }
 
 describe('validateEnv', () => {
+  it('rejects missing or malformed HUB_CODE_HASH_KEY', () => {
+    const config = validConfig();
+    delete config.HUB_CODE_HASH_KEY;
+    expect(() => validateEnv(config)).toThrow(/HUB_CODE_HASH_KEY/);
+    expect(() =>
+      validateEnv({ ...validConfig(), HUB_CODE_HASH_KEY: 'short' }),
+    ).toThrow(/HUB_CODE_HASH_KEY/);
+  });
+
   it('rejects missing AUTH_JWT_SIGNING_SEED', () => {
     const config = validConfig();
     delete config.AUTH_JWT_SIGNING_SEED;

@@ -455,6 +455,7 @@ Validadas na subida por `src/shared/infra/config/env.validation.ts` (faltou ou i
 | `AUTH_ACCESS_TOKEN_TTL_SECONDS` | validade do access token | `900` |
 | `AUTH_REFRESH_TOKEN_IDLE_DAYS` | inatividade máxima do refresh | `30` |
 | `IDENTITY_DECOY_SALT_KEY` | chave do salt falso do pré-login (32 bytes em base64url) — **segredo** | obrigatória |
+| `HUB_CODE_HASH_KEY` | chave (BLAKE2b com chave) do hash do código de reivindicação e do desafio do Hub (32 bytes em base64url) — **segredo**; trocar invalida códigos e desafios pendentes | obrigatória |
 | `TRUST_PROXY` | confiança em `X-Forwarded-For`: `false`, nº de saltos ou lista de IPs/CIDRs (`true` só em dev; veja abaixo) | `false` |
 | `ARGON2_MAX_QUEUE` | fila máxima do pool do Argon2id; cheia, responde 503 (inteiro >= 1) | `threads × 64` |
 | `RATE_LIMIT_ENABLED` | liga o rate limit (os e2e rodam com `false`) | `true` |
