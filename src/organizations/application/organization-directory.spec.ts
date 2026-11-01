@@ -88,4 +88,30 @@ describe('OrganizationDirectory', () => {
     await expect(directory().recoveryPublicKey(ORG_ID)).resolves.toBeNull();
     await expect(directory().recoveryPublicKey('nope')).resolves.toBeNull();
   });
+
+  it('hubLinkPolicy: the policy, or null for an unknown org or a malformed id', async () => {
+    await expect(directory().hubLinkPolicy(ORG_ID)).resolves.toBe(
+      'any_member_hub',
+    );
+    kit.setOrganization(makeOrganization({ hubLinkPolicy: 'admin_approved' }));
+    await expect(directory().hubLinkPolicy(ORG_ID)).resolves.toBe(
+      'admin_approved',
+    );
+    kit.setOrganization(null);
+    await expect(directory().hubLinkPolicy(ORG_ID)).resolves.toBeNull();
+    kit.mocks.orgs.findById.mockClear();
+    await expect(directory().hubLinkPolicy('nope')).resolves.toBeNull();
+    expect(kit.mocks.orgs.findById).not.toHaveBeenCalled();
+  });
+
+  it('allowRoomSpaces: the policy, false for an unknown org or a malformed id', async () => {
+    await expect(directory().allowRoomSpaces(ORG_ID)).resolves.toBe(true);
+    kit.setOrganization(makeOrganization({ allowRoomSpaces: false }));
+    await expect(directory().allowRoomSpaces(ORG_ID)).resolves.toBe(false);
+    kit.setOrganization(null);
+    await expect(directory().allowRoomSpaces(ORG_ID)).resolves.toBe(false);
+    kit.mocks.orgs.findById.mockClear();
+    await expect(directory().allowRoomSpaces('nope')).resolves.toBe(false);
+    expect(kit.mocks.orgs.findById).not.toHaveBeenCalled();
+  });
 });

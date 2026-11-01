@@ -22,10 +22,11 @@ import {
   updatedRows,
 } from './db-helpers.js';
 
-// Membro do espaço = atribuição ativa em role_assignments com scope_type = 'space' (decisão 4), com
+// Membro do espaço = atribuição ativa em role_assignments com scope_type = 'space' de uma PESSOA (decisão 4), com
 // organization_id preenchido para o RLS por organização. uq_role_assignments_space_user garante no máximo uma
-// ativa por (space_id, user_id).
-const ACTIVE = `ra.organization_id = $1 AND ra.space_id = $2 AND ra.scope_type = 'space' AND ra.deleted_at IS NULL`;
+// ativa por (space_id, user_id). As linhas da Sala dos Hubs (room_hub_id, user_id nulo) ficam de fora: são do
+// SpaceRoomRepository.
+const ACTIVE = `ra.organization_id = $1 AND ra.space_id = $2 AND ra.scope_type = 'space' AND ra.user_id IS NOT NULL AND ra.deleted_at IS NULL`;
 
 @Injectable()
 export class SpaceRoleTypeormRepository extends SpaceRoleRepository {

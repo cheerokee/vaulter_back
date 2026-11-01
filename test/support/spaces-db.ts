@@ -2,13 +2,14 @@ import { adminDataSource } from '../setup/test-app.js';
 
 // Leituras diretas no banco (papel dono, sem RLS) para conferir invariantes dos espaços nos e2e.
 
-/** Active space members (user ids, sorted). */
+/** Active space members (people only: user ids, sorted). */
 export async function activeSpaceMembers(spaceId: string): Promise<string[]> {
   const rows: { user_id: string }[] = await (
     await adminDataSource()
   ).query(
     `SELECT user_id FROM role_assignments
-      WHERE scope_type = 'space' AND space_id = $1 AND deleted_at IS NULL
+      WHERE scope_type = 'space' AND space_id = $1 AND user_id IS NOT NULL
+        AND deleted_at IS NULL
       ORDER BY user_id`,
     [spaceId],
   );
@@ -25,7 +26,8 @@ export async function membersMissingVersions(
        JOIN space_keys sk ON sk.space_id = ra.space_id AND sk.deleted_at IS NULL
        LEFT JOIN space_key_grants g
          ON g.space_key_id = sk.id AND g.user_id = ra.user_id AND g.deleted_at IS NULL
-      WHERE ra.scope_type = 'space' AND ra.space_id = $1 AND ra.deleted_at IS NULL AND g.id IS NULL
+      WHERE ra.scope_type = 'space' AND ra.space_id = $1 AND ra.user_id IS NOT NULL
+        AND ra.deleted_at IS NULL AND g.id IS NULL
       ORDER BY ra.user_id, sk.version`,
     [spaceId],
   );
@@ -63,6 +65,48 @@ export async function versionsEverGranted(
     [spaceId, userId],
   );
   return rows.map((r) => r.version);
+}
+
+/** Room state of a hub in a space: active Room role key (or null) and the versions of its ACTIVE copies. */
+export async function hubRoom(
+  spaceId: string,
+  hubId: string,
+): Promise<{ roleKey: string | null; versions: number[]; tombstoned: number }> {
+  const ds = await adminDataSource();
+  const role: { key: string }[] = await ds.query(
+    `SELECT r.key FROM role_assignments ra JOIN roles r ON r.id = ra.role_id
+      WHERE ra.scope_type = 'space' AND ra.space_id = $1 AND ra.room_hub_id = $2
+        AND ra.deleted_at IS NULL`,
+    [spaceId, hubId],
+  );
+  const grants: { version: number; active: boolean }[] = await ds.query(
+    `SELECT sk.version, g.deleted_at IS NULL AS active FROM space_key_grants g
+       JOIN space_keys sk ON sk.id = g.space_key_id
+      WHERE sk.space_id = $1 AND g.hub_id = $2 ORDER BY sk.version`,
+    [spaceId, hubId],
+  );
+  return {
+    roleKey: role[0]?.key ?? null,
+    versions: grants.filter((g) => g.active).map((g) => g.version),
+    tombstoned: grants.filter((g) => !g.active).length,
+  };
+}
+
+/** The active copy of one version sealed for the hub (null when none). */
+export async function hubWrappedKey(
+  spaceId: string,
+  hubId: string,
+  version: number,
+): Promise<string | null> {
+  const rows: { wrapped_key: string }[] = await (
+    await adminDataSource()
+  ).query(
+    `SELECT g.wrapped_key FROM space_key_grants g
+       JOIN space_keys sk ON sk.id = g.space_key_id
+      WHERE sk.space_id = $1 AND g.hub_id = $2 AND sk.version = $3 AND g.deleted_at IS NULL`,
+    [spaceId, hubId, version],
+  );
+  return rows[0]?.wrapped_key ?? null;
 }
 
 export async function spaceRow(spaceId: string): Promise<{

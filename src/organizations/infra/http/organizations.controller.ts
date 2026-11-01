@@ -78,15 +78,23 @@ export class OrganizationsController {
     @Param('id', uuidPipe('id')) id: string,
     @Body() dto: UpdateOrganizationDto,
   ) {
-    if (dto.name === undefined && dto.hubLinkPolicy === undefined) {
+    if (
+      dto.name === undefined &&
+      dto.hubLinkPolicy === undefined &&
+      dto.allowRoomSpaces === undefined
+    ) {
       throw new RequestValidationError([
-        { field: 'name', messages: ['name or hubLinkPolicy is required'] },
+        {
+          field: 'name',
+          messages: ['name, hubLinkPolicy or allowRoomSpaces is required'],
+        },
       ]);
     }
     return organizationResponse(
       await this.update.execute(auth, id, {
         name: dto.name,
         hubLinkPolicy: dto.hubLinkPolicy,
+        allowRoomSpaces: dto.allowRoomSpaces,
       }),
     );
   }

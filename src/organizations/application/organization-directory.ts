@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { validate } from 'uuid';
+import type { HubLinkPolicy } from '../domain/organization.js';
 import { MembershipRepository } from '../domain/membership.repository.js';
 import { OrganizationRepository } from '../domain/organization.repository.js';
 
@@ -56,5 +57,19 @@ export class OrganizationDirectory {
     // O repositório roda no contexto de RLS da organização.
     const org = await this.orgs.findById(orgId);
     return org?.recoveryPublicKey ?? null;
+  }
+
+  /** How Hub links are approved in the organization; null for an unknown org or a malformed id. */
+  async hubLinkPolicy(orgId: string): Promise<HubLinkPolicy | null> {
+    if (!validate(orgId)) return null;
+    const org = await this.orgs.findById(orgId);
+    return org?.hubLinkPolicy ?? null;
+  }
+
+  /** Whether NEW room grants are allowed; false for an unknown org or a malformed id (deny by default). */
+  async allowRoomSpaces(orgId: string): Promise<boolean> {
+    if (!validate(orgId)) return false;
+    const org = await this.orgs.findById(orgId);
+    return org?.allowRoomSpaces ?? false;
   }
 }

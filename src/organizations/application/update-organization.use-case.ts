@@ -14,6 +14,7 @@ import { OrganizationAccess } from './organization-access.js';
 export type UpdateOrganizationInput = {
   name?: string;
   hubLinkPolicy?: HubLinkPolicy;
+  allowRoomSpaces?: boolean;
 };
 
 @Injectable()
@@ -45,6 +46,10 @@ export class UpdateOrganizationUseCase {
       if (input.hubLinkPolicy !== undefined) {
         org.setHubLinkPolicy(input.hubLinkPolicy);
         fields.push('hubLinkPolicy');
+      }
+      if (input.allowRoomSpaces !== undefined) {
+        org.setAllowRoomSpaces(input.allowRoomSpaces);
+        fields.push('allowRoomSpaces');
       }
       if (fields.length > 0) {
         await this.orgs.save(org);

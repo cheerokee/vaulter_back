@@ -13,6 +13,7 @@ import {
   type SpaceRoleKey,
 } from '../domain/space-membership.js';
 import { SpaceRoleRepository } from '../domain/space-role.repository.js';
+import { SpaceRoomRepository } from '../domain/space-room.repository.js';
 import { assertWrappedKeys, type VersionGrantInput } from './dto/key-inputs.js';
 import { SpaceAccess } from './space-access.js';
 
@@ -34,6 +35,7 @@ export class AddSpaceMemberUseCase {
     private readonly keys: SpaceKeyRepository,
     private readonly grants: SpaceGrantRepository,
     private readonly roles: SpaceRoleRepository,
+    private readonly room: SpaceRoomRepository,
     private readonly pending: PendingGrantRepository,
     private readonly audit: AuditLog,
     private readonly uow: UnitOfWork,
@@ -71,9 +73,11 @@ export class AddSpaceMemberUseCase {
           'The user is already a member of the space.',
         );
       }
-      // Contado com o espaço travado: toda entrada passa por este lock, então duas entradas não furam o limite.
+      // Contado com o espaço travado: toda entrada (pessoa ou Hub na Sala) passa por este lock, então duas
+      // entradas não furam o limite. Pessoas e Hubs da Sala contam juntos.
       SpaceMembershipRules.assertCanAddMember(
-        (await this.roles.activeMemberIds(orgId, space.id)).length,
+        (await this.roles.activeMemberIds(orgId, space.id)).length +
+          (await this.room.roomHubIds(orgId, space.id)).length,
       );
       const versions = await this.keys.versions(orgId, space.id);
       KeyRotationRules.assertGrantsCoverVersions(

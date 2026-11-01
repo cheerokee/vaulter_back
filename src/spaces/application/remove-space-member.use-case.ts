@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import type { Actor } from '../../identity/application/dto/actor.js';
 import { AuditLog } from '../../organizations/application/audit-log.js';
+import { SpaceMemberLeftHooks } from '../../shared/application/space-member-left-hooks.js';
 import { UnitOfWork } from '../../shared/infra/db/unit-of-work.js';
 import { SpaceGrantRepository } from '../domain/space-grant.repository.js';
 import { SpaceMembershipRules } from '../domain/space-membership.js';
@@ -20,6 +21,7 @@ export class RemoveSpaceMemberUseCase {
     private readonly spaces: SpaceRepository,
     private readonly audit: AuditLog,
     private readonly uow: UnitOfWork,
+    private readonly leftHooks: SpaceMemberLeftHooks,
   ) {}
 
   execute(actor: Actor, spaceId: string, userId: string): Promise<void> {
@@ -45,6 +47,14 @@ export class RemoveSpaceMemberUseCase {
         userId: actor.userId,
         action: 'space.member_removed',
         metadata: { spaceId: space.id, targetUserId: userId },
+      });
+      // Quem reage à saída do espaço (ex.: `hubs` tira o espaço da Sala dos Hubs da pessoa) roda nesta transação;
+      // erro desfaz a saída.
+      await this.leftHooks.run({
+        organizationId: orgId,
+        spaceId: space.id,
+        userId: userId,
+        now: new Date(),
       });
     });
   }

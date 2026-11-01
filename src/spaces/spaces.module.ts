@@ -23,12 +23,14 @@ import { RemoveSpaceMemberUseCase } from './application/remove-space-member.use-
 import { RewrapRecoveryUseCase } from './application/rewrap-recovery.use-case.js';
 import { RotateSpaceKeyUseCase } from './application/rotate-space-key.use-case.js';
 import { SpaceAccess } from './application/space-access.js';
+import { SpaceRoomService } from './application/space-room.service.js';
 import { KeyFingerprinter } from './application/ports/key-fingerprinter.js';
 import { PendingGrantRepository } from './domain/pending-grant.repository.js';
 import { SpaceGrantRepository } from './domain/space-grant.repository.js';
 import { SpaceIntentRepository } from './domain/space-intent.repository.js';
 import { SpaceKeyRepository } from './domain/space-key.repository.js';
 import { SpaceRoleRepository } from './domain/space-role.repository.js';
+import { SpaceRoomRepository } from './domain/space-room.repository.js';
 import { SpaceRepository } from './domain/space.repository.js';
 import { SodiumKeyFingerprinter } from './infra/crypto/sodium-key-fingerprinter.js';
 import { InvitationSpaceIntentTypeormEntity } from './infra/db/invitation-space-intent.entity.js';
@@ -40,6 +42,7 @@ import { SpaceKeyTypeormEntity } from './infra/db/space-key.entity.js';
 import { SpaceKeyTypeormRepository } from './infra/db/space-key.typeorm-repository.js';
 import { SpacePendingGrantTypeormEntity } from './infra/db/space-pending-grant.entity.js';
 import { SpaceRoleTypeormRepository } from './infra/db/space-role.typeorm-repository.js';
+import { SpaceRoomTypeormRepository } from './infra/db/space-room.typeorm-repository.js';
 import { SpaceTypeormEntity } from './infra/db/space.entity.js';
 import { SpaceTypeormRepository } from './infra/db/space.typeorm-repository.js';
 import { SpaceKeysController } from './infra/http/space-keys.controller.js';
@@ -65,6 +68,7 @@ import { SpacesController } from './infra/http/spaces.controller.js';
     { provide: SpaceKeyRepository, useClass: SpaceKeyTypeormRepository },
     { provide: SpaceGrantRepository, useClass: SpaceGrantTypeormRepository },
     { provide: SpaceRoleRepository, useClass: SpaceRoleTypeormRepository },
+    { provide: SpaceRoomRepository, useClass: SpaceRoomTypeormRepository },
     {
       provide: PendingGrantRepository,
       useClass: PendingGrantTypeormRepository,
@@ -92,8 +96,9 @@ import { SpacesController } from './infra/http/spaces.controller.js';
     RewrapRecoveryUseCase,
     RotateSpaceKeyUseCase,
     SpaceAccess,
+    SpaceRoomService,
   ],
-  // Para os próximos módulos (storage, hubs): checagem de acesso ao espaço.
-  exports: [SpaceAccess],
+  // Para os próximos módulos (storage, hubs): checagem de acesso ao espaço e a Sala dos Hubs.
+  exports: [SpaceAccess, SpaceRoomService],
 })
 export class SpacesModule {}

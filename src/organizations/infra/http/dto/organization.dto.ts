@@ -1,4 +1,5 @@
 import {
+  IsBoolean,
   IsIn,
   IsOptional,
   IsString,
@@ -29,6 +30,11 @@ export class UpdateOrganizationDto {
   @IsOptional()
   @IsIn(HUB_LINK_POLICIES)
   hubLinkPolicy?: HubLinkPolicy;
+
+  /** Members may open spaces in a Hub's Room; off blocks only new room grants. */
+  @IsOptional()
+  @IsBoolean()
+  allowRoomSpaces?: boolean;
 }
 
 export class SetRecoveryKeyDto {

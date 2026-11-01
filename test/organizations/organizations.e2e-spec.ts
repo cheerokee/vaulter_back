@@ -83,7 +83,24 @@ describe('Organizations endpoints (e2e)', () => {
     expect(patched.body).toMatchObject({
       name: 'Acme 2',
       hubLinkPolicy: 'admin_approved',
+      allowRoomSpaces: true,
     });
+    const noRoom = await c
+      .http()
+      .patch(`/organizations/${id}`)
+      .set(c.bearer(ana.token))
+      .send({ allowRoomSpaces: false })
+      .expect(200);
+    expect(noRoom.body).toMatchObject({
+      name: 'Acme 2',
+      allowRoomSpaces: false,
+    });
+    await c
+      .http()
+      .patch(`/organizations/${id}`)
+      .set(c.bearer(ana.token))
+      .send({ allowRoomSpaces: 'no' })
+      .expect(422);
 
     const empty = await c
       .http()

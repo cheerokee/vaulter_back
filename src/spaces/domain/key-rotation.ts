@@ -25,6 +25,22 @@ export const KeyRotationRules = {
     }
   },
 
+  /**
+   * Rotation: the Hub copies must be exactly the Hubs with the space open in their Room (people and Hubs are
+   * compared the same way, same 409 so the app reloads).
+   */
+  assertHubGrantsMatchRoom(
+    grantHubIds: readonly string[],
+    roomHubIds: readonly string[],
+  ): void {
+    if (!sameSet(grantHubIds, roomHubIds)) {
+      throw new ConflictError(
+        'key-rotation-mismatch',
+        'The hub grants must cover exactly the hubs with the space in their room.',
+      );
+    }
+  },
+
   /** Adding a member: grants must cover every existing key version (1..current), no duplicates. */
   assertGrantsCoverVersions(
     grantVersions: readonly number[],

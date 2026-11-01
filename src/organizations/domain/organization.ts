@@ -10,6 +10,8 @@ export type OrganizationProps = {
   isPersonal: boolean;
   personalOwnerUserId: string | null;
   hubLinkPolicy: HubLinkPolicy;
+  /** Organization policy: members may open spaces in a Hub's Room (only for NEW room grants). */
+  allowRoomSpaces: boolean;
   plan: string;
   recoveryPublicKey: string | null;
   createdAt?: Date;
@@ -35,6 +37,7 @@ export class Organization extends Entity<OrganizationProps> {
       isPersonal: false,
       personalOwnerUserId: null,
       hubLinkPolicy: 'any_member_hub',
+      allowRoomSpaces: true,
       plan: 'free',
       recoveryPublicKey: null,
       createdAt: input.now,
@@ -51,6 +54,7 @@ export class Organization extends Entity<OrganizationProps> {
       isPersonal: true,
       personalOwnerUserId: input.ownerId,
       hubLinkPolicy: 'any_member_hub',
+      allowRoomSpaces: true,
       plan: 'free',
       recoveryPublicKey: null,
       createdAt: input.now,
@@ -79,6 +83,17 @@ export class Organization extends Entity<OrganizationProps> {
       );
     }
     this.props = { ...this.props, hubLinkPolicy: policy };
+  }
+
+  /** Turning it off blocks NEW room grants only; existing ones stay until removed (spec hubs §6). */
+  setAllowRoomSpaces(allow: boolean): void {
+    if (typeof allow !== 'boolean') {
+      throw new DomainValidationError(
+        'allow-room-spaces-invalid',
+        'allowRoomSpaces must be a boolean.',
+      );
+    }
+    this.props = { ...this.props, allowRoomSpaces: allow };
   }
 
   /** Registers the first key or replaces the current one; validates before touching state. */
@@ -113,6 +128,9 @@ export class Organization extends Entity<OrganizationProps> {
   }
   get hubLinkPolicy(): HubLinkPolicy {
     return this.props.hubLinkPolicy;
+  }
+  get allowRoomSpaces(): boolean {
+    return this.props.allowRoomSpaces;
   }
   get createdAt(): Date | undefined {
     return this.props.createdAt;

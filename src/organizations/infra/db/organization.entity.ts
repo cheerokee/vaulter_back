@@ -29,6 +29,9 @@ export class OrganizationTypeormEntity extends SyncableTypeormEntity {
   @Column({ type: 'varchar', length: 20, default: 'any_member_hub' })
   hubLinkPolicy!: HubLinkPolicy;
 
+  @Column({ type: 'boolean', default: true })
+  allowRoomSpaces!: boolean;
+
   @Column({ type: 'varchar', length: 50, default: 'free' })
   plan!: string;
 

@@ -24,7 +24,9 @@ export type AuditAction =
   | 'space.recovered_with_kit'
   | 'space.recovery_copies_read'
   | 'space.manager_promoted'
-  | 'space.pending_grant_declined';
+  | 'space.pending_grant_declined'
+  | 'hub.room.granted'
+  | 'hub.room.revoked';
 
 export type AuditRecord = {
   organizationId: string;

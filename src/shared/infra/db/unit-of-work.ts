@@ -46,6 +46,8 @@ export function runInTransaction<T>(
 export interface UnitOfWorkContext {
   organizationId?: string;
   userId?: string;
+  // Hub autenticado (token de Hub): as policies dos Hubs liberam o que é do próprio Hub (`app.hub_id`).
+  hubId?: string;
   // Hash do token de convite: abre só esse convite (policy invitation_by_token) antes de haver organização.
   invitationTokenHash?: string;
 }
@@ -53,6 +55,7 @@ export interface UnitOfWorkContext {
 const SETTINGS = {
   organizationId: 'app.organization_id',
   userId: 'app.user_id',
+  hubId: 'app.hub_id',
   invitationTokenHash: 'app.invitation_token_hash',
 } as const satisfies Record<keyof UnitOfWorkContext, string>;
 
@@ -114,7 +117,7 @@ export class UnitOfWork {
     return runInTransaction(this.dataSource, work);
   }
 
-  // Contexto do RLS (`app.organization_id`, `app.user_id`) para o resto da transação ativa. Para uma
+  // Contexto do RLS (`app.organization_id`, `app.user_id`, `app.hub_id`) para o resto da transação ativa. Para uma
   // troca temporária (ex.: gravar em outra organização no meio do `run`), use `withContext`.
   // O hash do convite fica fora: ele só abre um convite por vez, via `runWithContext`/`withContext`, que
   // restauram o valor anterior — nunca para o resto da transação.
@@ -127,8 +130,8 @@ export class UnitOfWork {
         'UnitOfWork.setContext requires an active unit of work (call it inside UnitOfWork.run).',
       );
     }
-    const { organizationId, userId } = ctx;
-    await setTransactionContext(manager, { organizationId, userId });
+    const { organizationId, userId, hubId } = ctx;
+    await setTransactionContext(manager, { organizationId, userId, hubId });
   }
 
   // Roda `work` com o contexto dado e restaura o anterior ao terminar (abre transação se não houver).

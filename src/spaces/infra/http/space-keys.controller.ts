@@ -70,6 +70,10 @@ export class SpaceKeysController {
         userId: g.userId,
         wrappedKey: g.wrappedKey,
       })),
+      hubGrants: dto.hubGrants.map((g) => ({
+        hubId: g.hubId,
+        wrappedKey: g.wrappedKey,
+      })),
     });
   }
 

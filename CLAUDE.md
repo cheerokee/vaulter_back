@@ -254,8 +254,10 @@ src/organizations/
   já era membro e o convite só foi consumido; vale para a rota logada e para o gancho de cadastro). O DTO aceita
   `spaces` (até 20, sem `spaceId` repetido -> 422 `duplicate-space`).
 - **`OrganizationDirectory`** (exportado, junto com `OrganizationAccess` e `AuditLog`): `isActiveMember(orgId, userId)`,
-  `recoveryPublicKey(orgId)` (`null` se não houver) e `organizationIdsOf(userId)` (organizações ativas da pessoa),
-  sem lançar para org/usuário inexistente. Não é checagem de autorização.
+  `recoveryPublicKey(orgId)` (`null` se não houver), `organizationIdsOf(userId)` (organizações ativas da pessoa),
+  `hubLinkPolicy(orgId)` (`null` se desconhecida) e `allowRoomSpaces(orgId)` (`false` se desconhecida), sem lançar
+  para org/usuário inexistente. Não é checagem de autorização. `allowRoomSpaces` (padrão `true`, no `PATCH`) bloqueia
+  só **novas** liberações na Sala dos Hubs.
 - **`OrganizationAccess` é o padrão para os próximos módulos (spaces, hubs):** `requireMember(orgId, userId)` ->
   **404** para não membro (não revela que a organização existe); `requirePermission(orgId, userId, permissao)` ->
   **403** para membro sem a permissão. Todo caso de uso que toca dado de organização chama um dos dois primeiro;
@@ -323,6 +325,19 @@ exportam); nenhum dos dois importa `spaces`.
   (com `requestedByUserId`, o Gestor que indicou); no aceite vira `space_pending_grants`. Sem o módulo `spaces`
   registrado, convite com `spaces` dá 422 `spaces-not-supported`. Outros módulos que reagirem a saída/convite assinam
   do mesmo jeito, sem o `organizations` importá-los.
+- **Sala dos Hubs (`SpaceRoomService`, exportado para o `hubs`):** a Sala é uma linha de `role_assignments` com
+  `room_hub_id` (escopo espaço, papel `space_reader`/`space_editor`, `uq_role_assignments_space_room_hub`) mais a
+  cópia de cada versão em `space_key_grants.hub_id`. O `spaces` não conhece a tabela `hubs`: `grantRoom` recebe o
+  `hubId` e um `confirmHubLink(orgId)` do chamador (roda antes do lock do espaço: vínculo, depois espaço), exige
+  Gestor, `allowRoomSpaces` (403 `room-spaces-disabled`), kit atual e as cópias de **todas** as versões; o assento
+  conta no `SPACE_MAX_MEMBERS` (pessoas + Hubs). `revokeRoom` (Gestor, ou `trusted` quando o chamador já autorizou),
+  `revokeRoomForOrganization` e `revokeAllRoomForHub` gravam lápide no papel e nas cópias e marcam
+  `keyRotationRequired`; auditoria `hub.room.granted|revoked`. A troca de chave exige `hubGrants` com exatamente os
+  Hubs da Sala (409 `key-rotation-mismatch`). As consultas de membros do espaço (`SpaceRoleRepository`, `memberCount`)
+  contam **só pessoas** (`user_id IS NOT NULL`).
+- **`SpaceMemberLeftHooks`** (`src/shared/application/`, global como os outros ganchos): o `spaces` emite
+  `{ organizationId, spaceId, userId, now }` no Remove, no Leave e, no gancho de saída da organização, uma vez por
+  espaço; roda no unit of work da saída, depois das lápides, e erro desfaz a saída.
 - **Fluxo de chaves** (cifra no app; o backend só guarda blobs e valida formato — libsodium, formato em
   `docs/crypto/user-keys.md`, seção da cópia trancada: `0x01 ‖ crypto_box_seal`, 81 bytes, base64url, 108 chars):
   - cada **versão** da chave do espaço é uma linha de `space_keys` (`spaces.current_key_version`); **todo membro tem
@@ -406,7 +421,8 @@ exportam); nenhum dos dois importa `spaces`.
     aninhado** — a transação fica abortada e o `run` externo rejeita com `25P02` (há uma sonda antes do COMMIT
     para isso não virar ROLLBACK silencioso).
   - Efeitos pós-commit (fila pg-boss, e-mail, chamadas externas) vão **depois** do `run`, não dentro.
-  - Contexto do RLS: `uow.setContext({ organizationId?, userId? })` grava `app.organization_id` / `app.user_id`
+  - Contexto do RLS: `uow.setContext({ organizationId?, userId?, hubId? })` grava `app.organization_id` /
+    `app.user_id` / `app.hub_id` (Hub autenticado)
     (`set_config(..., true)`) até o fim da transação; fora de `run` lança erro. Para trocar só num trecho (ex.:
     gravar na organização pessoal e na do convite na mesma transação), use `uow.withContext(ctx, work)` ou
     `runInOrganizationScope`: dentro de um `run`, entram nele num savepoint e restauram o contexto anterior ao sair.

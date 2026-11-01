@@ -59,6 +59,7 @@ describe('spaces DTO limits', () => {
         userId: USER,
         wrappedKey: WK,
       })),
+      hubGrants: [],
     });
     expect(
       await errorsOf(RotateSpaceKeyDto, body(SPACE_MAX_MEMBERS, 2)),
@@ -67,6 +68,24 @@ describe('spaces DTO limits', () => {
       await errorsOf(RotateSpaceKeyDto, body(SPACE_MAX_MEMBERS + 1, 2)),
     ).toEqual(['grants']);
     expect(await errorsOf(RotateSpaceKeyDto, body(1, 1_000_000))).toEqual([]);
+    // hubGrants is required (may be empty) and bounded like the member copies
+    const { hubGrants: _omit, ...noHubs } = body(1, 2);
+    expect(await errorsOf(RotateSpaceKeyDto, noHubs)).toEqual(['hubGrants']);
+    expect(
+      await errorsOf(RotateSpaceKeyDto, {
+        ...body(1, 2),
+        hubGrants: Array.from({ length: SPACE_MAX_MEMBERS + 1 }, () => ({
+          hubId: USER,
+          wrappedKey: WK,
+        })),
+      }),
+    ).toEqual(['hubGrants']);
+    expect(
+      await errorsOf(RotateSpaceKeyDto, {
+        ...body(1, 2),
+        hubGrants: [{ hubId: 'nope', wrappedKey: WK }],
+      }),
+    ).toEqual(['hubGrants']);
   });
 
   it('the largest bodies stay under the 100 kB default JSON limit', () => {

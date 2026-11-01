@@ -40,6 +40,14 @@ describe('SpaceMembershipRules', () => {
     }
   });
 
+  it('a Room takes only space_reader or space_editor (a Hub never manages a space)', () => {
+    expect(R.assertRoomRole('space_reader')).toBe('space_reader');
+    expect(R.assertRoomRole('space_editor')).toBe('space_editor');
+    for (const bad of ['space_manager', 'hub_room', '']) {
+      expect(() => R.assertRoomRole(bad)).toThrow(DomainValidationError);
+    }
+  });
+
   it('isLastManager is true only for a single manager who is the target', () => {
     expect(R.isLastManager(['a'], 'a')).toBe(true);
     expect(R.isLastManager(['a'], 'b')).toBe(false);

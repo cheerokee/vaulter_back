@@ -8,11 +8,13 @@ import {
   ADMIN,
   BAD_WK,
   EDITOR,
+  HUB_ID,
   KIT_PK,
   MANAGER,
   OLD_KIT_PK,
   ORG_ID,
   OTHER_ADMIN,
+  OTHER_HUB,
   OUTSIDER,
   PROOF,
   READER,
@@ -77,6 +79,7 @@ describe('RotateSpaceKeyUseCase', () => {
       d.keys,
       d.grants,
       d.roles,
+      d.room,
       d.audit,
       d.uow,
     );
@@ -89,6 +92,7 @@ describe('RotateSpaceKeyUseCase', () => {
     recoveryPublicKey: KIT_PK,
     recoveryWrappedKey: wk(20),
     grants: allGrants,
+    hubGrants: [] as { hubId: string; wrappedKey: string }[],
   };
   const members: [string, SpaceRoleKey][] = [
     [MANAGER, 'space_manager'],
@@ -219,6 +223,47 @@ describe('RotateSpaceKeyUseCase', () => {
     expect(m.grants.upsert).not.toHaveBeenCalled();
   });
 
+  it('without a copy for each Room hub: 409 key-rotation-mismatch; with exactly them it passes', async () => {
+    kit.roomBySpace.get(SPACE_ID)!.set(HUB_ID, 'space_reader');
+    kit.roomBySpace.get(SPACE_ID)!.set(OTHER_HUB, 'space_editor');
+    const hubGrants = [
+      { hubId: HUB_ID, wrappedKey: wk(30) },
+      { hubId: OTHER_HUB, wrappedKey: wk(31) },
+    ];
+    for (const bad of [
+      [],
+      hubGrants.slice(0, 1),
+      [
+        ...hubGrants,
+        { hubId: '019a1b2c-0000-7000-8000-0000000000a9', wrappedKey: wk(32) },
+      ],
+      [hubGrants[0]!, hubGrants[0]!],
+    ]) {
+      await expect(
+        useCase().execute(actor(READER), SPACE_ID, {
+          ...input,
+          hubGrants: bad,
+        }),
+      ).rejects.toMatchObject({
+        constructor: ConflictError,
+        code: 'key-rotation-mismatch',
+      });
+    }
+    expect(m.keys.addVersion).not.toHaveBeenCalled();
+    await expect(
+      useCase().execute(actor(READER), SPACE_ID, { ...input, hubGrants }),
+    ).resolves.toEqual({ currentVersion: 2 });
+    expect(m.room.upsertHubGrant.mock.calls).toEqual([
+      [ORG_ID, kId(2), HUB_ID, wk(30)],
+      [ORG_ID, kId(2), OTHER_HUB, wk(31)],
+    ]);
+    // the Room is read under the space lock
+    expect(kit.trace.lastIndexOf('room.roomHubIds')).toBeGreaterThan(
+      kit.trace.lastIndexOf('spaces.lockForUpdate'),
+    );
+    expect(kit.auditDump()).not.toContain(wk(30));
+  });
+
   it('kit changed meanwhile: 409 recovery-key-changed; no kit: 422 recovery-key-required', async () => {
     await expect(
       useCase().execute(actor(READER), SPACE_ID, {
@@ -253,6 +298,7 @@ describe('RotateSpaceKeyUseCase', () => {
     for (const bad of [
       { ...input, recoveryWrappedKey: BAD_WK },
       { ...input, grants: [{ userId: MANAGER, wrappedKey: 'x' }] },
+      { ...input, hubGrants: [{ hubId: HUB_ID, wrappedKey: BAD_WK }] },
       { ...input, recoveryPublicKey: 'x' },
     ]) {
       await expect(

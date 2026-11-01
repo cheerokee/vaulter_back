@@ -7,6 +7,7 @@ import type { OrganizationAccess } from '../../src/organizations/application/org
 import type { OrganizationDirectory } from '../../src/organizations/application/organization-directory.js';
 import type { MemberRemovedHooks } from '../../src/shared/application/member-removed-hooks.js';
 import type { InvitationHooks } from '../../src/shared/application/invitation-hooks.js';
+import type { SpaceMemberLeftHooks } from '../../src/shared/application/space-member-left-hooks.js';
 import {
   NotFoundError,
   PermissionDeniedError,
@@ -24,6 +25,7 @@ import type {
 } from '../../src/spaces/domain/space-key.repository.js';
 import type { SpaceRoleKey } from '../../src/spaces/domain/space-membership.js';
 import type { SpaceRoleRepository } from '../../src/spaces/domain/space-role.repository.js';
+import type { SpaceRoomRepository } from '../../src/spaces/domain/space-room.repository.js';
 import { Space } from '../../src/spaces/domain/space.js';
 import type { SpaceRepository } from '../../src/spaces/domain/space.repository.js';
 
@@ -44,6 +46,8 @@ export const STRANGER = '019a1b2c-0000-7000-8000-0000000000c1';
 /** Admin of OTHER_ORG only. */
 export const OTHER_ADMIN = '019a1b2c-0000-7000-8000-0000000000f1';
 export const INVITATION_ID = '019a1b2c-0000-7000-8000-0000000000e1';
+export const HUB_ID = '019a1b2c-0000-7000-8000-0000000000aa';
+export const OTHER_HUB = '019a1b2c-0000-7000-8000-0000000000a2';
 
 export const KIT_PK = Buffer.alloc(32, 7).toString('base64url');
 export const OLD_KIT_PK = Buffer.alloc(32, 8).toString('base64url');
@@ -77,6 +81,10 @@ export function makeSpaceKit() {
   /** spaceId -> userId -> role. */
   const spaceRoles = new Map<string, Map<string, SpaceRoleKey>>();
   const versionsBySpace = new Map<string, SpaceKeyVersion[]>();
+  /** spaceId -> hubId -> Room role. */
+  const roomBySpace = new Map<string, Map<string, SpaceRoleKey>>();
+  /** orgId -> allow_room_spaces. */
+  const roomPolicy = new Map<string, boolean>();
   let depth = 0;
   const trace: string[] = [];
   const tag = (name: string) => trace.push(depth > 0 ? name : `${name}@out`);
@@ -111,6 +119,14 @@ export function makeSpaceKit() {
     tombstoneUser: vi.fn(),
     tombstoneUserInOrg: vi.fn(),
   };
+  const room = {
+    roomHubIds: vi.fn(),
+    assignRoom: vi.fn(),
+    upsertHubGrant: vi.fn(),
+    removeRoom: vi.fn(),
+    roomSpaceIdsOfHub: vi.fn(),
+    removeHubInOrg: vi.fn(),
+  };
   const pending = {
     create: vi.fn(),
     findPending: vi.fn(),
@@ -131,6 +147,8 @@ export function makeSpaceKit() {
     lockActiveMember: vi.fn(),
     recoveryPublicKey: vi.fn(),
     organizationIdsOf: vi.fn(),
+    allowRoomSpaces: vi.fn(),
+    hubLinkPolicy: vi.fn(),
   };
   const fingerprinter = { fingerprint: vi.fn() };
   const audit = { record: vi.fn() };
@@ -138,6 +156,7 @@ export function makeSpaceKit() {
   const verifier = { verify: vi.fn() };
   const memberRemovedHooks = { register: vi.fn(), unregister: vi.fn() };
   const invitationHooks = { register: vi.fn(), unregister: vi.fn() };
+  const spaceMemberLeftHooks = { run: vi.fn() };
   const uow = {
     run: vi.fn(async (work: () => Promise<unknown>) => {
       depth++;
@@ -201,6 +220,7 @@ export function makeSpaceKit() {
       ),
     );
     spaceRoles.set(id, new Map(members));
+    roomBySpace.set(id, new Map());
     versionsBySpace.set(
       id,
       Array.from({ length: version }, (_, i) => ({
@@ -234,6 +254,8 @@ export function makeSpaceKit() {
     kits.set(OTHER_ORG, null);
     spacesById.clear();
     spaceRoles.clear();
+    roomBySpace.clear();
+    roomPolicy.clear();
     versionsBySpace.clear();
     addSpace(SPACE_ID, ORG_ID, [
       [MANAGER, 'space_manager'],
@@ -247,6 +269,7 @@ export function makeSpaceKit() {
       tag('spaces.create');
       spacesById.set(s.id, s);
       spaceRoles.set(s.id, new Map());
+      roomBySpace.set(s.id, new Map());
       versionsBySpace.set(s.id, []);
     });
     spaces.save.mockImplementation(async (s: Space) => {
@@ -354,6 +377,70 @@ export function makeSpaceKit() {
         return ids.sort();
       },
     );
+    room.roomHubIds.mockImplementation(
+      async (orgId: string, spaceId: string) => {
+        tag('room.roomHubIds');
+        return spaceIn(orgId, spaceId)
+          ? [...roomBySpace.get(spaceId)!.keys()].sort()
+          : [];
+      },
+    );
+    room.assignRoom.mockImplementation(
+      async (
+        orgId: string,
+        spaceId: string,
+        hubId: string,
+        role: SpaceRoleKey,
+      ) => {
+        tag('room.assignRoom');
+        if (!spaceIn(orgId, spaceId))
+          throw new NotFoundError('space-not-found', 'x');
+        roomBySpace.get(spaceId)!.set(hubId, role);
+      },
+    );
+    room.upsertHubGrant.mockImplementation(async () =>
+      tag('room.upsertHubGrant'),
+    );
+    room.removeRoom.mockImplementation(
+      async (orgId: string, spaceId: string, hubId: string) => {
+        tag('room.removeRoom');
+        return spaceIn(orgId, spaceId)
+          ? roomBySpace.get(spaceId)!.delete(hubId)
+          : false;
+      },
+    );
+    room.roomSpaceIdsOfHub.mockImplementation(
+      async (orgId: string, hubId: string) => {
+        tag('room.roomSpaceIdsOfHub');
+        return [...spacesById.values()]
+          .filter(
+            (s) =>
+              s.organizationId === orgId && roomBySpace.get(s.id)!.has(hubId),
+          )
+          .map((s) => s.id)
+          .sort();
+      },
+    );
+    room.removeHubInOrg.mockImplementation(
+      async (orgId: string, hubId: string) => {
+        tag('room.removeHubInOrg');
+        const ids: string[] = [];
+        for (const s of spacesById.values()) {
+          if (
+            s.organizationId === orgId &&
+            roomBySpace.get(s.id)!.delete(hubId)
+          )
+            ids.push(s.id);
+        }
+        return ids.sort();
+      },
+    );
+    spaceMemberLeftHooks.run.mockImplementation(async () =>
+      tag('spaceMemberLeftHooks.run'),
+    );
+    directory.allowRoomSpaces.mockImplementation(
+      async (orgId: string) => roomPolicy.get(orgId) ?? orgMembers.has(orgId),
+    );
     keys.versions.mockImplementation(async (orgId: string, spaceId: string) => {
       tag('keys.versions');
       return spaceIn(orgId, spaceId) ? [...versionsBySpace.get(spaceId)!] : [];
@@ -460,6 +547,7 @@ export function makeSpaceKit() {
   const deps = {
     spaces: spaces as unknown as SpaceRepository,
     roles: roles as unknown as SpaceRoleRepository,
+    room: room as unknown as SpaceRoomRepository,
     keys: keys as unknown as SpaceKeyRepository,
     grants: grants as unknown as SpaceGrantRepository,
     pending: pending as unknown as PendingGrantRepository,
@@ -473,6 +561,8 @@ export function makeSpaceKit() {
     uow: uow as unknown as UnitOfWork,
     memberRemovedHooks: memberRemovedHooks as unknown as MemberRemovedHooks,
     invitationHooks: invitationHooks as unknown as InvitationHooks,
+    spaceMemberLeftHooks:
+      spaceMemberLeftHooks as unknown as SpaceMemberLeftHooks,
   };
   const access = new SpaceAccess(
     deps.spaces,
@@ -490,10 +580,13 @@ export function makeSpaceKit() {
     kits,
     spacesById,
     spaceRoles,
+    roomBySpace,
+    roomPolicy,
     versionsBySpace,
     mocks: {
       spaces,
       roles,
+      room,
       keys,
       grants,
       pending,
@@ -507,6 +600,7 @@ export function makeSpaceKit() {
       uow,
       memberRemovedHooks,
       invitationHooks,
+      spaceMemberLeftHooks,
     },
     deps: { ...deps, access, recoveryKit },
     audited: () =>

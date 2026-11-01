@@ -9,6 +9,7 @@ export const OrganizationMapper = {
         isPersonal: row.isPersonal,
         personalOwnerUserId: row.personalOwnerUserId,
         hubLinkPolicy: row.hubLinkPolicy,
+        allowRoomSpaces: row.allowRoomSpaces,
         plan: row.plan,
         recoveryPublicKey: row.recoveryPublicKey,
         createdAt: row.createdAt,
@@ -27,6 +28,7 @@ export const OrganizationMapper = {
       isPersonal: org.isPersonal,
       personalOwnerUserId: org.personalOwnerUserId,
       hubLinkPolicy: org.hubLinkPolicy,
+      allowRoomSpaces: org.allowRoomSpaces,
       plan: org.plan,
       recoveryPublicKey: org.recoveryPublicKey,
     };

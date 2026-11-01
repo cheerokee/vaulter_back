@@ -56,6 +56,7 @@ describe('Spaces endpoints (e2e)', () => {
           recoveryPublicKey: kitPk,
           recoveryWrappedKey: DUMMY_WK,
           grants: [{ userId, wrappedKey: DUMMY_WK }],
+          hubGrants: [],
         },
       ],
       [

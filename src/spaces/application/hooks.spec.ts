@@ -39,6 +39,7 @@ describe('SpacesMemberRemovedHook', () => {
       d.grants,
       d.pending,
       d.audit,
+      d.spaceMemberLeftHooks,
     );
   const ctx = {
     organizationId: ORG_ID,
@@ -98,6 +99,26 @@ describe('SpacesMemberRemovedHook', () => {
     );
   });
 
+  it('emits the space-left hook once per space the person left, after the tombstones', async () => {
+    kit.addSpace(SPACE_2, ORG_ID, [[READER, 'space_manager']]);
+    await hook().onMemberRemoved(ctx);
+    expect(m.spaceMemberLeftHooks.run.mock.calls).toEqual(
+      [SPACE_ID, SPACE_2]
+        .sort()
+        .map((spaceId) => [
+          { organizationId: ORG_ID, spaceId, userId: READER, now: NOW },
+        ]),
+    );
+    expect(kit.trace.indexOf('spaceMemberLeftHooks.run@out')).toBeGreaterThan(
+      kit.trace.indexOf('roles.removeUserInOrg@out'),
+    );
+  });
+
+  it('a failing space-left hook propagates (the organization exit is undone)', async () => {
+    m.spaceMemberLeftHooks.run.mockRejectedValue(new Error('hook failed'));
+    await expect(hook().onMemberRemoved(ctx)).rejects.toThrow('hook failed');
+  });
+
   it('a space only reached by a copy (a concurrent rotation) is locked and flagged too', async () => {
     m.grants.tombstoneUserInOrg.mockResolvedValue([SPACE_ID, SPACE_2]);
     kit.addSpace(SPACE_2, ORG_ID, [[MANAGER, 'space_manager']]);
@@ -113,6 +134,7 @@ describe('SpacesMemberRemovedHook', () => {
     await hook().onMemberRemoved({ ...ctx, userId: OUTSIDER });
     expect(m.spaces.lockForUpdate).not.toHaveBeenCalled();
     expect(m.spaces.save).not.toHaveBeenCalled();
+    expect(m.spaceMemberLeftHooks.run).not.toHaveBeenCalled();
     expect(m.pending.cancelForUser).toHaveBeenCalledWith(ORG_ID, OUTSIDER);
     expect(m.audit.record).not.toHaveBeenCalled();
   });

@@ -6,6 +6,7 @@ export type OrganizationView = {
   name: string;
   isPersonal: boolean;
   hubLinkPolicy: HubLinkPolicy;
+  allowRoomSpaces: boolean;
   plan: string;
   recoveryPublicKey: string | null;
   /** The caller's organization role. */
@@ -26,6 +27,7 @@ export function toOrganizationView(
     name: org.name,
     isPersonal: org.isPersonal,
     hubLinkPolicy: org.hubLinkPolicy,
+    allowRoomSpaces: org.allowRoomSpaces,
     plan: org.plan,
     recoveryPublicKey: org.recoveryPublicKey,
     roleKey,

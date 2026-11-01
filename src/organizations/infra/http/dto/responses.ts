@@ -8,6 +8,7 @@ export function organizationResponse(v: OrganizationView) {
     name: v.name,
     isPersonal: v.isPersonal,
     hubLinkPolicy: v.hubLinkPolicy,
+    allowRoomSpaces: v.allowRoomSpaces,
     plan: v.plan,
     recoveryPublicKey: v.recoveryPublicKey,
     roleKey: v.roleKey,

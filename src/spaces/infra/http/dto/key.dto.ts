@@ -40,6 +40,16 @@ export class MemberGrantDto {
   wrappedKey!: string;
 }
 
+/** The new version sealed for one hub with the space open in its Room. */
+export class HubGrantDto {
+  @IsUUID()
+  hubId!: string;
+
+  @IsString()
+  @Matches(WRAPPED_KEY)
+  wrappedKey!: string;
+}
+
 export class RotateSpaceKeyDto {
   /** current version + 1 (else 409 key-rotation-mismatch). */
   @IsInt()
@@ -61,6 +71,16 @@ export class RotateSpaceKeyDto {
   @ValidateNested({ each: true })
   @Type(() => MemberGrantDto)
   grants!: MemberGrantDto[];
+
+  /**
+   * Exactly one copy per hub with the space open in its Room, empty when there is none (else 409
+   * key-rotation-mismatch). People and Room hubs together never pass SPACE_MAX_MEMBERS.
+   */
+  @IsArray()
+  @ArrayMaxSize(MAX_ROTATION_GRANTS)
+  @ValidateNested({ each: true })
+  @Type(() => HubGrantDto)
+  hubGrants!: HubGrantDto[];
 }
 
 export class RewrapRecoveryDto {

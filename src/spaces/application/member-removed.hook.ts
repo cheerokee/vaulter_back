@@ -8,6 +8,7 @@ import {
   MemberRemovedHooks,
   type MemberRemovedContext,
 } from '../../shared/application/member-removed-hooks.js';
+import { SpaceMemberLeftHooks } from '../../shared/application/space-member-left-hooks.js';
 import { PendingGrantRepository } from '../domain/pending-grant.repository.js';
 import { SpaceGrantRepository } from '../domain/space-grant.repository.js';
 import { SpaceRoleRepository } from '../domain/space-role.repository.js';
@@ -24,7 +25,7 @@ const HOOK_NAME = 'spaces.member-removed';
 //    terminou entre 1 e 2), trava esse também e repete a lápide: uma cópia da versão nova gravada por uma troca
 //    concorrente vira lápide aqui (o UPDATE seguinte enxerga o que já foi confirmado);
 // 4. marca a troca de chave pendente nos espaços afetados (a partir da leitura travada), cancela as pendências
-//    de trancar dela e audita um `space.member_removed` por espaço.
+//    de trancar dela, audita um `space.member_removed` e emite o `SpaceMemberLeftHooks` por espaço.
 // Pode deixar espaço sem Gestor ou órfão: é permitido (promover Gestor / reabrir pelo kit).
 @Injectable()
 export class SpacesMemberRemovedHook implements OnModuleInit, OnModuleDestroy {
@@ -35,6 +36,7 @@ export class SpacesMemberRemovedHook implements OnModuleInit, OnModuleDestroy {
     private readonly grants: SpaceGrantRepository,
     private readonly pending: PendingGrantRepository,
     private readonly audit: AuditLog,
+    private readonly leftHooks: SpaceMemberLeftHooks,
   ) {}
 
   onModuleInit(): void {
@@ -80,6 +82,14 @@ export class SpacesMemberRemovedHook implements OnModuleInit, OnModuleDestroy {
         userId: ctx.actorId,
         action: 'space.member_removed',
         metadata: { spaceId: id, targetUserId: userId, reason },
+      });
+      // Um gancho de saída do espaço por espaço de que a pessoa saiu (ex.: `hubs` tira o espaço da Sala dos Hubs
+      // dela); erro desfaz a saída da organização inteira.
+      await this.leftHooks.run({
+        organizationId: orgId,
+        spaceId: id,
+        userId,
+        now: ctx.now,
       });
     }
     await this.pending.cancelForUser(orgId, userId);

@@ -41,6 +41,7 @@ export function makeOrganization(
       isPersonal: false,
       personalOwnerUserId: null,
       hubLinkPolicy: 'any_member_hub',
+      allowRoomSpaces: true,
       plan: 'free',
       recoveryPublicKey: null,
       createdAt: new Date('2026-10-01T00:00:00Z'),

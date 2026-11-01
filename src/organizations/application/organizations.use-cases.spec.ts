@@ -75,6 +75,7 @@ describe('CreateOrganizationUseCase', () => {
       name: 'Studio',
       isPersonal: false,
       hubLinkPolicy: 'any_member_hub',
+      allowRoomSpaces: true,
       plan: 'free',
       recoveryPublicKey: null,
       roleKey: 'org_admin',
@@ -181,6 +182,23 @@ describe('UpdateOrganizationUseCase', () => {
       },
     ]);
     expect(kit.trace.every((t) => !t.endsWith('@out'))).toBe(true);
+  });
+
+  it('changes allowRoomSpaces and audits only the field name', async () => {
+    const out = await useCase().execute(actor(ADMIN), ORG_ID, {
+      allowRoomSpaces: false,
+    });
+    const saved = m.orgs.save.mock.calls[0]![0] as Organization;
+    expect(saved.allowRoomSpaces).toBe(false);
+    expect(out).toMatchObject({ allowRoomSpaces: false });
+    expect(kit.audited()).toEqual([
+      {
+        organizationId: ORG_ID,
+        userId: ADMIN,
+        action: 'organization.updated',
+        metadata: { fields: ['allowRoomSpaces'] },
+      },
+    ]);
   });
 
   it('403 for a member without org.members.manage', async () => {

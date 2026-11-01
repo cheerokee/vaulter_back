@@ -7,6 +7,7 @@ import { assertRecoveryPublicKey } from '../domain/recovery-public-key.js';
 import { SpaceGrantRepository } from '../domain/space-grant.repository.js';
 import { SpaceKeyRepository } from '../domain/space-key.repository.js';
 import { SpaceRoleRepository } from '../domain/space-role.repository.js';
+import { SpaceRoomRepository } from '../domain/space-room.repository.js';
 import { SpaceRepository } from '../domain/space.repository.js';
 import { assertWrappedKeys } from './dto/key-inputs.js';
 import { RecoveryKit } from './recovery-kit.js';
@@ -19,14 +20,17 @@ export type RotateSpaceKeyInput = {
   recoveryWrappedKey: string;
   /** Exactly one copy per ACTIVE member of the space. */
   grants: { userId: string; wrappedKey: string }[];
+  /** Exactly one copy per hub with the space open in its Room (empty when there is none). */
+  hubGrants: { hubId: string; wrappedKey: string }[];
 };
 
 // Nova versão da chave (decisão 6). Com troca pendente (`keyRotationRequired`), qualquer membro ativo; sem ela,
 // só o Gestor (troca manual, ex.: suspeita de vazamento) — senão 409 `key-rotation-not-required`, o que limita
 // o número de versões (pôr membro, retrancar e reabrir mandam todas num pedido só). Com o espaço travado:
 // versão = atual + 1 e o conjunto de destinatários = exatamente os membros ativos lidos sob o lock (quem saiu
-// não recebe a versão nova; quem entrou no meio não fica de fora). Divergência: 409 `key-rotation-mismatch`,
-// para o app recarregar. A auditoria leva só a versão.
+// não recebe a versão nova; quem entrou no meio não fica de fora), e o mesmo para os Hubs da Sala (spec hubs
+// §6: um Hub tirado da Sala não recebe a versão nova). Divergência: 409 `key-rotation-mismatch`, para o app
+// recarregar. A auditoria leva só a versão.
 @Injectable()
 export class RotateSpaceKeyUseCase {
   constructor(
@@ -36,6 +40,7 @@ export class RotateSpaceKeyUseCase {
     private readonly keys: SpaceKeyRepository,
     private readonly grants: SpaceGrantRepository,
     private readonly roles: SpaceRoleRepository,
+    private readonly room: SpaceRoomRepository,
     private readonly audit: AuditLog,
     private readonly uow: UnitOfWork,
   ) {}
@@ -49,6 +54,7 @@ export class RotateSpaceKeyUseCase {
     assertWrappedKeys([
       input.recoveryWrappedKey,
       ...input.grants.map((g) => g.wrappedKey),
+      ...input.hubGrants.map((g) => g.wrappedKey),
     ]);
     return this.uow.run(async () => {
       const { space, roleKey } = await this.access.lockAsMember(
@@ -68,6 +74,10 @@ export class RotateSpaceKeyUseCase {
         input.grants.map((g) => g.userId),
         await this.roles.activeMemberIds(orgId, space.id),
       );
+      KeyRotationRules.assertHubGrantsMatchRoom(
+        input.hubGrants.map((g) => g.hubId),
+        await this.room.roomHubIds(orgId, space.id),
+      );
       const key = await this.keys.addVersion(
         orgId,
         space.id,
@@ -77,6 +87,14 @@ export class RotateSpaceKeyUseCase {
       );
       for (const grant of input.grants) {
         await this.grants.upsert(orgId, key.id, grant.userId, grant.wrappedKey);
+      }
+      for (const grant of input.hubGrants) {
+        await this.room.upsertHubGrant(
+          orgId,
+          key.id,
+          grant.hubId,
+          grant.wrappedKey,
+        );
       }
       await this.spaces.save(space);
       await this.audit.record({

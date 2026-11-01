@@ -14,8 +14,24 @@ describe('Organization', () => {
     expect(org.personalOwnerUserId).toBeNull();
     expect(org.plan).toBe('free');
     expect(org.hubLinkPolicy).toBe('any_member_hub');
+    expect(org.allowRoomSpaces).toBe(true);
     expect(org.recoveryPublicKey).toBeNull();
     expect(org.createdAt).toEqual(now);
+  });
+
+  it('allows room spaces by default and toggles the policy', () => {
+    const org = Organization.create({ name: 'A', now });
+    org.setAllowRoomSpaces(false);
+    expect(org.allowRoomSpaces).toBe(false);
+    org.setAllowRoomSpaces(true);
+    expect(org.allowRoomSpaces).toBe(true);
+    expect(() => org.setAllowRoomSpaces('yes' as never)).toThrow(
+      DomainValidationError,
+    );
+    expect(
+      Organization.createPersonal({ name: 'P', ownerId: 'u1', now })
+        .allowRoomSpaces,
+    ).toBe(true);
   });
 
   it('creates a personal organization bound to its owner', () => {
@@ -92,6 +108,7 @@ describe('Organization derived flags', () => {
     const base = {
       name: 'A',
       hubLinkPolicy: 'any_member_hub' as const,
+      allowRoomSpaces: true,
       plan: 'free',
       recoveryPublicKey: null,
     };

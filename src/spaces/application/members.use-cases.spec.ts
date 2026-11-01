@@ -8,6 +8,7 @@ import {
   ADMIN,
   BAD_WK,
   EDITOR,
+  HUB_ID,
   MANAGER,
   NOW,
   ORG_ID,
@@ -82,6 +83,7 @@ describe('AddSpaceMemberUseCase', () => {
       d.keys,
       d.grants,
       d.roles,
+      d.room,
       d.pending,
       d.audit,
       d.uow,
@@ -208,8 +210,17 @@ describe('AddSpaceMemberUseCase', () => {
     expect(kit.trace.indexOf('roles.activeMemberIds')).toBeGreaterThan(
       kit.trace.indexOf('spaces.lockForUpdate'),
     );
-    // one seat left: accepted
+    // a Room hub takes a seat too
     roles.delete(`fake-${SPACE_MAX_MEMBERS - 1}`);
+    kit.roomBySpace.get(SPACE_ID)!.set(HUB_ID, 'space_reader');
+    await expect(
+      useCase().execute(actor(MANAGER), SPACE_ID, input),
+    ).rejects.toMatchObject({ code: 'space-member-limit' });
+    expect(kit.trace.lastIndexOf('room.roomHubIds')).toBeGreaterThan(
+      kit.trace.lastIndexOf('spaces.lockForUpdate'),
+    );
+    // one seat left: accepted
+    kit.roomBySpace.get(SPACE_ID)!.delete(HUB_ID);
     await expect(
       useCase().execute(actor(MANAGER), SPACE_ID, input),
     ).resolves.toEqual({ userId: OUTSIDER, roleKey: 'space_editor' });
@@ -338,6 +349,7 @@ describe('RemoveSpaceMemberUseCase', () => {
       d.spaces,
       d.audit,
       d.uow,
+      d.spaceMemberLeftHooks,
     );
 
   it('tombstones the copies (all versions) and the role, flags the key rotation, audits', async () => {
@@ -362,6 +374,27 @@ describe('RemoveSpaceMemberUseCase', () => {
         metadata: { spaceId: SPACE_ID, targetUserId: READER },
       },
     ]);
+  });
+
+  it('emits the space-left hook inside the unit of work, after the tombstones', async () => {
+    await useCase().execute(actor(MANAGER), SPACE_ID, READER);
+    expect(m.spaceMemberLeftHooks.run).toHaveBeenCalledWith({
+      organizationId: ORG_ID,
+      spaceId: SPACE_ID,
+      userId: READER,
+      now: expect.any(Date),
+    });
+    expect(kit.trace).toContain('spaceMemberLeftHooks.run');
+    expect(kit.trace.indexOf('spaceMemberLeftHooks.run')).toBeGreaterThan(
+      kit.trace.indexOf('roles.remove'),
+    );
+  });
+
+  it('a failing space-left hook fails the removal (the unit of work rolls back)', async () => {
+    m.spaceMemberLeftHooks.run.mockRejectedValue(new Error('hook failed'));
+    await expect(
+      useCase().execute(actor(MANAGER), SPACE_ID, READER),
+    ).rejects.toThrow('hook failed');
   });
 
   it('the last manager cannot be removed while others remain; non-member target 404', async () => {
@@ -395,6 +428,7 @@ describe('LeaveSpaceUseCase', () => {
       d.spaces,
       d.audit,
       d.uow,
+      d.spaceMemberLeftHooks,
     );
 
   it('any member leaves: copies and role tombstoned, rotation flagged, audited', async () => {
@@ -415,6 +449,20 @@ describe('LeaveSpaceUseCase', () => {
         metadata: { spaceId: SPACE_ID },
       },
     ]);
+  });
+
+  it('emits the space-left hook inside the unit of work, after the tombstones', async () => {
+    await useCase().execute(actor(READER), SPACE_ID);
+    expect(m.spaceMemberLeftHooks.run).toHaveBeenCalledWith({
+      organizationId: ORG_ID,
+      spaceId: SPACE_ID,
+      userId: READER,
+      now: expect.any(Date),
+    });
+    expect(kit.trace).toContain('spaceMemberLeftHooks.run');
+    expect(kit.trace.indexOf('spaceMemberLeftHooks.run')).toBeGreaterThan(
+      kit.trace.indexOf('roles.remove'),
+    );
   });
 
   it('the last manager cannot leave while others remain, but the only member can (orphan)', async () => {

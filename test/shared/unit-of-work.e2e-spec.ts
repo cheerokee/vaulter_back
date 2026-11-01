@@ -309,6 +309,38 @@ describe('UnitOfWork (e2e)', () => {
     expect(after[0]!.u ?? '').toBe('');
   });
 
+  it('setContext({ hubId }) sets app.hub_id for the transaction only', async () => {
+    const hubId = newId();
+    const inside = await uow.run(async () => {
+      await uow.setContext({ hubId });
+      return currentManager(ds).query(
+        `SELECT current_setting('app.hub_id', true) AS h, current_setting('app.user_id', true) AS u`,
+      );
+    });
+    expect(inside[0].h).toBe(hubId);
+    expect(inside[0].u ?? '').toBe('');
+    const after: { h: string | null }[] = await ds.query(
+      `SELECT current_setting('app.hub_id', true) AS h`,
+    );
+    expect(after[0]!.h ?? '').toBe('');
+  });
+
+  it('withContext({ hubId }) restores the previous hub when it returns', async () => {
+    const [hubA, hubB] = [newId(), newId()];
+    const probe = async () =>
+      (
+        (await currentManager(ds).query(
+          `SELECT current_setting('app.hub_id', true) AS h`,
+        )) as { h: string }[]
+      )[0]!.h;
+    const result = await uow.run(async () => {
+      await uow.setContext({ hubId: hubA });
+      const inner = await uow.withContext({ hubId: hubB }, probe);
+      return { inner, outer: await probe() };
+    });
+    expect(result).toEqual({ inner: hubB, outer: hubA });
+  });
+
   it('runInOrganizationScope joins an ambient unit of work', async () => {
     const result = await uow.run(async () => {
       const outer: { t: string }[] = await currentManager(ds).query(

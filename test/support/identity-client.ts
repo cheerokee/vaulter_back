@@ -20,6 +20,9 @@ export type KeyedUser = {
 /** Who receives a sealed copy: the user id and the X25519 public key. */
 export type Recipient = { userId: string; publicKey: string };
 
+/** A hub with the space open in its Room: the hub id and its X25519 encryption public key. */
+export type HubRecipient = { hubId: string; publicKey: string };
+
 export const recipientOf = (u: KeyedUser): Recipient => ({
   userId: u.userId,
   publicKey: u.account.publicKey,
@@ -172,7 +175,7 @@ export function identityClient(getApp: () => INestApplication) {
         publicKey: m.publicKey,
       }));
     },
-    /** New key version sealed for exactly `recipients` and for the kit. */
+    /** New key version sealed for exactly `recipients`, the Room `hubs` (none by default) and the kit. */
     rotate: async (
       token: string,
       spaceId: string,
@@ -181,6 +184,7 @@ export function identityClient(getApp: () => INestApplication) {
         key: Uint8Array;
         recipients: Recipient[];
         kitPublicKey: string;
+        hubs?: HubRecipient[];
       },
     ) =>
       http()
@@ -194,6 +198,12 @@ export function identityClient(getApp: () => INestApplication) {
             input.recipients.map(async (r) => ({
               userId: r.userId,
               wrappedKey: await sealSpaceKey(input.key, r.publicKey),
+            })),
+          ),
+          hubGrants: await Promise.all(
+            (input.hubs ?? []).map(async (h) => ({
+              hubId: h.hubId,
+              wrappedKey: await sealSpaceKey(input.key, h.publicKey),
             })),
           ),
         }),

@@ -125,7 +125,7 @@ export class SpaceTypeormRepository extends SpaceRepository {
     return toCursorPage(items, rows.length > page.limit, (i) => i.space.id);
   }
 
-  // Uma consulta: membros ativos (0 = órfão) e "retrancar pendente" com a mesma regra de listForMember. É o que
+  // Uma consulta: membros ativos, só pessoas (0 = órfão, mesmo com Hubs na Sala) e "retrancar pendente" com a mesma regra de listForMember. É o que
   // o admin confere antes de trocar o kit: órfão no kit atual precisa ser reaberto antes (ninguém dentro retranca).
   async listAll(
     orgId: string,
@@ -141,7 +141,8 @@ export class SpaceTypeormRepository extends SpaceRepository {
         `SELECT s.*,
                 (SELECT count(*)::int FROM role_assignments ra
                   WHERE ra.space_id = s.id AND ra.organization_id = s.organization_id
-                    AND ra.scope_type = 'space' AND ra.deleted_at IS NULL) AS member_count,
+                    AND ra.scope_type = 'space' AND ra.user_id IS NOT NULL
+                    AND ra.deleted_at IS NULL) AS member_count,
                 ($2::text IS NOT NULL AND EXISTS (
                   SELECT 1 FROM space_keys k
                    WHERE k.space_id = s.id AND k.organization_id = s.organization_id

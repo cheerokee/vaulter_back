@@ -56,6 +56,11 @@ export type ApprovalStatus =
   unique: true,
   where: `"scope_type" = 'space' AND "deleted_at" IS NULL`,
 })
+// Uma atribuição de Sala ativa por (espaço, Hub).
+@Index('uq_role_assignments_space_room_hub', ['spaceId', 'roomHubId'], {
+  unique: true,
+  where: `"scope_type" = 'space' AND "room_hub_id" IS NOT NULL AND "deleted_at" IS NULL`,
+})
 export class RoleAssignmentTypeormEntity extends SyncableTypeormEntity {
   @Column({ type: 'uuid' })
   roleId!: string;

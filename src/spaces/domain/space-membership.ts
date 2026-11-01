@@ -4,7 +4,7 @@ import {
 } from '../../shared/domain/errors.js';
 
 /**
- * Active members per space. Every member must receive a copy of each new key version in ONE rotation request,
+ * Active members per space: people AND Hubs with the space open in their Room count together. Every member must receive a copy of each new key version in ONE rotation request,
  * so the cap keeps that request possible (and a pending rotation never gets stuck); the rotation DTO derives
  * its limit from this constant.
  */
@@ -96,6 +96,17 @@ export const SpaceMembershipRules = {
       throw new DomainValidationError(
         'role-invalid',
         'The role must be space_reader, space_editor or space_manager.',
+      );
+    }
+    return roleKey;
+  },
+
+  /** Role of a Hub's Room in a space: reader or editor; a Hub never manages a space. */
+  assertRoomRole(roleKey: string): Exclude<SpaceRoleKey, 'space_manager'> {
+    if (roleKey !== 'space_reader' && roleKey !== 'space_editor') {
+      throw new DomainValidationError(
+        'role-invalid',
+        'The room role must be space_reader or space_editor.',
       );
     }
     return roleKey;

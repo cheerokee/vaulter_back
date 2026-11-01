@@ -59,4 +59,24 @@ describe('KeyRotationRules', () => {
       code('key-versions-mismatch'),
     );
   });
+
+  it('hub copies must cover exactly the active room hubs (same 409 key-rotation-mismatch)', () => {
+    expect(() => R.assertHubGrantsMatchRoom([], [])).not.toThrow();
+    expect(() =>
+      R.assertHubGrantsMatchRoom(['h2', 'h1'], ['h1', 'h2']),
+    ).not.toThrow();
+    for (const [g, room] of [
+      [[], ['h1']],
+      [['h1'], []],
+      [['h1', 'h1'], ['h1']],
+      [
+        ['h1', 'h3'],
+        ['h1', 'h2'],
+      ],
+    ] as const) {
+      expect(() => R.assertHubGrantsMatchRoom(g, room)).toThrowError(
+        code('key-rotation-mismatch'),
+      );
+    }
+  });
 });
