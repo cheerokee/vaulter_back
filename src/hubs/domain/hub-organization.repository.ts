@@ -5,7 +5,10 @@ export abstract class HubOrganizationRepository {
     hubId: string,
     organizationId: string,
   ): Promise<HubOrganizationLink | null>;
-  /** Insert, or update the existing (hub, organization) row, reviving a tombstone. */
+  /**
+   * Insert, or update the existing (hub, organization) row, reviving a tombstone. Takes the hub row FOR SHARE first
+   * (lock order: hub -> link -> space) and refuses a missing or deregistered hub (`hub-not-found`).
+   */
   abstract upsert(link: HubOrganizationLink): Promise<void>;
   abstract list(hubId: string): Promise<HubOrganizationLink[]>;
   /** Organizations with an approved link. */

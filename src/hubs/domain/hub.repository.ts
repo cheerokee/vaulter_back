@@ -16,6 +16,11 @@ export abstract class HubRepository {
     userId: string,
     page: CursorPageRequest,
   ): Promise<CursorPage<Hub>>;
-  /** SELECT ... FOR UPDATE. REQUIRES an active unit of work. */
+  /**
+   * SELECT ... FOR UPDATE. REQUIRES an active unit of work. Lock order: the hub row first, then the
+   * hub_organization rows, then spaces. Deregistration takes this lock before tombstoning, and
+   * `HubOrganizationRepository.upsert` takes the hub row FOR SHARE, so a link can never be created or revived
+   * for a hub that is being deregistered.
+   */
   abstract lockForUpdate(hubId: string): Promise<Hub | null>;
 }

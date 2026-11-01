@@ -39,8 +39,9 @@ export class HubOrganizationTypeormRepository extends HubOrganizationRepository 
   // Confere o Hub (existe e não está desregistrado) com o contexto do próprio Hub, só dentro deste trecho: um admin
   // aprovando um pedido pendente não vê o Hub pelas policies dele. Depois, 1) atualiza a linha de (Hub,
   // organização), limpando a lápide, ou 2) insere com o dono do Hub; o ON CONFLICT cobre a corrida com outro
-  // insert. Hub inexistente ou desregistrado -> hub-not-found nos dois caminhos. A corrida com um desregistro
-  // concorrente fica com quem desregistra (trava os vínculos FOR UPDATE antes de gravar as lápides).
+  // insert. Hub inexistente ou desregistrado -> hub-not-found nos dois caminhos.
+  // Ordem de locks: linha do Hub (FOR SHARE aqui; FOR UPDATE no desregistro) -> linha do vínculo -> espaço (ganchos
+  // do `spaces`). Quem chama não pode travar o vínculo ou um espaço antes de chamar upsert.
   async upsert(link: HubOrganizationLink): Promise<void> {
     if (!validate(link.hubId)) throw hubNotFound();
     const params = [
@@ -57,8 +58,12 @@ export class HubOrganizationTypeormRepository extends HubOrganizationRepository 
       this.dataSource,
       { organizationId: link.organizationId, hubId: link.hubId },
       async (m) => {
+        // FOR SHARE (a policy de UPDATE de hubs vale para o contexto do próprio Hub): serializa com o desregistro,
+        // que trava o Hub FOR UPDATE antes de gravar a lápide. Quem espera relê a linha depois do COMMIT e, já com
+        // lápide, não a acha -> hub-not-found, inclusive no caminho do INSERT (vínculo novo, que o desregistro não
+        // teria como travar).
         const hub: { owner_user_id: string }[] = await m.query(
-          `SELECT owner_user_id FROM hubs WHERE id = $1 AND deleted_at IS NULL`,
+          `SELECT owner_user_id FROM hubs WHERE id = $1 AND deleted_at IS NULL FOR SHARE`,
           [link.hubId],
         );
         if (hub.length === 0) throw hubNotFound();

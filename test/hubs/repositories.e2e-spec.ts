@@ -165,6 +165,12 @@ describe('hubs repositories (e2e, app role)', () => {
   ): Promise<Record<string, unknown>[]> =>
     runWithContext(ds, ctx, (m) => m.query(sql, params));
 
+  const gate = () => {
+    let release!: () => void;
+    const promise = new Promise<void>((r) => (release = r));
+    return { promise, release };
+  };
+
   const ids = (rows: Record<string, unknown>[], col = 'id') =>
     rows.map((r) => r[col] as string).sort();
 
@@ -479,6 +485,73 @@ describe('hubs repositories (e2e, app role)', () => {
       });
     });
 
+    it('upsert waits for a concurrent deregistration (hub FOR SHARE) and is refused after it commits, on both paths', async () => {
+      const olivia = await makeUser('olivia@x.com');
+      const ana = await makeUser('ana@x.com');
+      const orgA = await makeOrg('A', [ana]);
+      const orgB = await makeOrg('B', [ana]);
+      const hub = await makeHub(olivia);
+      await link(hub, orgA.id);
+      const revoked = (await as({ userId: olivia }, () =>
+        links.find(hub.id, orgA.id),
+      ))!;
+      revoked.revoke();
+      await as({ userId: olivia }, () => links.upsert(revoked));
+
+      const locked = gate();
+      const hold = gate();
+      // Desregistro: trava o Hub FOR UPDATE, grava a lápide e segura a transação.
+      const deregistering = as({ userId: olivia }, async () => {
+        const h = (await hubs.lockForUpdate(hub.id))!;
+        h.deregister(later(1));
+        await hubs.save(h);
+        locked.release();
+        await hold.promise;
+      });
+      await locked.promise;
+      const attempt = (orgId: string) => {
+        const l = HubOrganizationLink.ownerLinks({
+          hubId: hub.id,
+          organizationId: orgId,
+          userId: olivia,
+          policy: 'any_member_hub',
+          now,
+        });
+        let settled = false;
+        const p = as({ userId: olivia }, () => links.upsert(l)).finally(() => {
+          settled = true;
+        });
+        return { p, settled: () => settled };
+      };
+      const revive = attempt(orgA.id); // caminho do UPDATE (reviver o revogado)
+      const insert = attempt(orgB.id); // caminho do INSERT (organização nova)
+      // Prende as rejeições já (o expect abaixo as confere): sem isso, rejeição não tratada.
+      void revive.p.catch(() => undefined);
+      void insert.p.catch(() => undefined);
+      // Solta o desregistro mesmo se a checagem falhar (senão o teste fica preso no lock).
+      let blocked: boolean[];
+      try {
+        await new Promise((r) => setTimeout(r, 300));
+        blocked = [!revive.settled(), !insert.settled()];
+      } finally {
+        hold.release();
+        await deregistering;
+      }
+      expect(blocked).toEqual([true, true]);
+      for (const a of [revive, insert]) {
+        await expect(a.p).rejects.toMatchObject({
+          constructor: NotFoundError,
+          code: 'hub-not-found',
+        });
+      }
+      const rows: { organization_id: string; status: string }[] =
+        await admin.query(
+          `SELECT organization_id, status FROM hub_organization WHERE hub_id = $1`,
+          [hub.id],
+        );
+      expect(rows).toEqual([{ organization_id: orgA.id, status: 'revoked' }]);
+    });
+
     it('upsert refuses a deregistered hub on both paths (update and insert)', async () => {
       const olivia = await makeUser('olivia@x.com');
       const ana = await makeUser('ana@x.com');
@@ -648,10 +721,8 @@ describe('hubs repositories (e2e, app role)', () => {
           `UPDATE role_assignments SET ${set} WHERE scope_type = 'hub' AND hub_id = $1 AND user_id = $2 RETURNING id`,
           [hub.id, userId],
         );
-      // Reviver a lápide de Bob: recusado.
-      await expect(sql('deleted_at = NULL', bob)).rejects.toMatchObject({
-        code: '42501',
-      });
+      // Reviver a lápide de Bob: a lápide nem é alcançável pelo Hub (USING só pega linha viva).
+      expect(await sql('deleted_at = NULL', bob)).toEqual([[], 0]);
       // Trocar o papel de Ana (sem lápide), nem para hub_owner: recusado.
       await expect(sql(`role_id = '${ownerRole}'`, ana)).rejects.toMatchObject({
         code: '42501',
@@ -665,8 +736,10 @@ describe('hubs repositories (e2e, app role)', () => {
       ).rejects.toMatchObject({ code: '42501' });
       // A linha de sistema (hub_owner da dona) nem é alcançável.
       expect(await sql('deleted_at = now()', olivia)).toEqual([[], 0]);
-      // Lápide de papel atribuível: permitida.
+      // Lápide de papel atribuível: permitida, uma vez; uma lápide não é mais alcançável pelo Hub.
       expect((await sql('deleted_at = now()', ana))[1]).toBe(1);
+      expect(await sql('deleted_at = now()', ana)).toEqual([[], 0]);
+      expect(await sql('deleted_at = now()', bob)).toEqual([[], 0]);
       // A dona revive normalmente; um sistema já ocupado dá 409 estável.
       await as({ userId: olivia }, () =>
         hubRoles.assign({
