@@ -40,3 +40,25 @@ export function hubSignedBytes(
     Buffer.from(canonicalJson(fields), 'utf8'),
   ]);
 }
+
+/** Tolerance between the timestamp a Hub signs and the server clock (both directions). */
+export const HUB_SIGNATURE_WINDOW_MS = 5 * 60 * 1000;
+
+const ISO_UTC = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,3})?Z$/;
+
+/** True for an ISO 8601 UTC timestamp (`...Z`) that names a real instant. */
+export function isIsoUtcTimestamp(value: unknown): value is string {
+  return (
+    typeof value === 'string' &&
+    ISO_UTC.test(value) &&
+    !Number.isNaN(Date.parse(value))
+  );
+}
+
+/** True when `timestamp` is a valid ISO UTC instant within ±5 minutes of `now`. */
+export function isFreshHubTimestamp(timestamp: unknown, now: Date): boolean {
+  return (
+    isIsoUtcTimestamp(timestamp) &&
+    Math.abs(Date.parse(timestamp) - now.getTime()) <= HUB_SIGNATURE_WINDOW_MS
+  );
+}

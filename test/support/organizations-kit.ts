@@ -95,6 +95,7 @@ export function makeKit() {
     create: vi.fn(),
     save: vi.fn(),
     findById: vi.fn(),
+    findPersonalOf: vi.fn(),
     listForUser: vi.fn(),
   };
   const memberships = {

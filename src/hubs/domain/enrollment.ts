@@ -1,7 +1,4 @@
-import {
-  ConflictError,
-  DomainValidationError,
-} from '../../shared/domain/errors.js';
+import { DomainValidationError } from '../../shared/domain/errors.js';
 import { Entity } from '../../shared/domain/entity.js';
 import {
   assertEncryptionPublicKey,
@@ -9,6 +6,19 @@ import {
 } from './hub-keys.js';
 
 export const ENROLLMENT_TTL_MS = 10 * 60 * 1000;
+
+/** The claim code is 8 decimal digits. */
+export const CLAIM_CODE_PATTERN = /^[0-9]{8}$/;
+
+/**
+ * The single error for a wrong, unknown, expired or already used claim code (422): the caller never learns which.
+ */
+export function claimCodeInvalid(): DomainValidationError {
+  return new DomainValidationError(
+    'claim-code-invalid',
+    'The claim code is invalid or expired.',
+  );
+}
 
 export type EnrollmentStatus = 'pending' | 'claimed' | 'expired';
 
@@ -85,10 +95,7 @@ export class Enrollment extends Entity<EnrollmentProps> {
       this.props.status !== 'pending' ||
       now.getTime() >= this.props.expiresAt.getTime()
     ) {
-      throw new ConflictError(
-        'claim-code-invalid',
-        'The claim code is invalid or expired.',
-      );
+      throw claimCodeInvalid();
     }
   }
 

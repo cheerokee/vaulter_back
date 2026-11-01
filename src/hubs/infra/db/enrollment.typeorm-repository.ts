@@ -1,9 +1,16 @@
 import { Injectable } from '@nestjs/common';
 import { validate } from 'uuid';
-import { DataSource, LessThanOrEqual, MoreThan } from 'typeorm';
+import {
+  DataSource,
+  LessThanOrEqual,
+  MoreThan,
+  QueryFailedError,
+} from 'typeorm';
+import { ConflictError } from '../../../shared/domain/errors.js';
 import { currentManager } from '../../../shared/infra/db/unit-of-work.js';
 import type { Enrollment } from '../../domain/enrollment.js';
 import { EnrollmentRepository } from '../../domain/enrollment.repository.js';
+import { requireUnitOfWork } from './db-helpers.js';
 import { EnrollmentMapper } from './enrollment.mapper.js';
 import { HubEnrollmentTypeormEntity } from './hub-enrollment.entity.js';
 
@@ -21,7 +28,29 @@ export class EnrollmentTypeormRepository extends EnrollmentRepository {
   }
 
   async create(enrollment: Enrollment): Promise<void> {
-    await this.repo.insert(EnrollmentMapper.toPersistence(enrollment));
+    try {
+      await this.repo.insert(EnrollmentMapper.toPersistence(enrollment));
+    } catch (error) {
+      const driver =
+        error instanceof QueryFailedError
+          ? (error.driverError as { code?: string; constraint?: string })
+          : undefined;
+      if (driver?.code === '23505') {
+        if (driver.constraint === 'uq_hub_enrollments_key_nonce') {
+          throw new ConflictError(
+            'nonce-reused',
+            'This nonce was already used.',
+          );
+        }
+        if (driver.constraint === 'uq_hub_enrollments_claim_code_hash') {
+          throw new ConflictError(
+            'claim-code-collision',
+            'Another pending enrollment holds this claim code.',
+          );
+        }
+      }
+      throw error;
+    }
   }
 
   async findById(enrollmentId: string): Promise<Enrollment | null> {
@@ -34,6 +63,18 @@ export class EnrollmentTypeormRepository extends EnrollmentRepository {
   async findPendingByCodeHash(codeHash: string): Promise<Enrollment | null> {
     const row = await this.repo.findOne({
       where: { claimCodeHash: codeHash, status: 'pending' },
+    });
+    return row ? EnrollmentMapper.toDomain(row) : null;
+  }
+
+  async lockPendingByCodeHash(codeHash: string): Promise<Enrollment | null> {
+    requireUnitOfWork(
+      this.dataSource,
+      'EnrollmentRepository.lockPendingByCodeHash',
+    );
+    const row = await this.repo.findOne({
+      where: { claimCodeHash: codeHash, status: 'pending' },
+      lock: { mode: 'pessimistic_write' },
     });
     return row ? EnrollmentMapper.toDomain(row) : null;
   }

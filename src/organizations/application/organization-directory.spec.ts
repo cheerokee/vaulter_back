@@ -114,4 +114,23 @@ describe('OrganizationDirectory', () => {
     await expect(directory().allowRoomSpaces('nope')).resolves.toBe(false);
     expect(kit.mocks.orgs.findById).not.toHaveBeenCalled();
   });
+
+  it('personalOrganizationIdOf: the personal org id, null for none or a malformed id (no query)', async () => {
+    kit.mocks.orgs.findPersonalOf.mockResolvedValueOnce(
+      makeOrganization({ isPersonal: true, personalOwnerUserId: MEMBER }),
+    );
+    await expect(directory().personalOrganizationIdOf(MEMBER)).resolves.toBe(
+      ORG_ID,
+    );
+    expect(kit.mocks.orgs.findPersonalOf).toHaveBeenCalledWith(MEMBER);
+    kit.mocks.orgs.findPersonalOf.mockResolvedValueOnce(null);
+    await expect(
+      directory().personalOrganizationIdOf(STRANGER),
+    ).resolves.toBeNull();
+    kit.mocks.orgs.findPersonalOf.mockClear();
+    await expect(
+      directory().personalOrganizationIdOf('nope'),
+    ).resolves.toBeNull();
+    expect(kit.mocks.orgs.findPersonalOf).not.toHaveBeenCalled();
+  });
 });

@@ -1,5 +1,14 @@
 import { Module } from '@nestjs/common';
+import { APP_GUARD } from '@nestjs/core';
 import { TypeOrmModule } from '@nestjs/typeorm';
+import { IdentityModule } from '../identity/identity.module.js';
+import { OrganizationsModule } from '../organizations/organizations.module.js';
+import { AuthenticateHubTokenUseCase } from './application/authenticate-hub-token.use-case.js';
+import { ClaimHubUseCase } from './application/claim-hub.use-case.js';
+import { EnrollHubUseCase } from './application/enroll-hub.use-case.js';
+import { EnrollmentStatusUseCase } from './application/enrollment-status.use-case.js';
+import { IssueHubChallengeUseCase } from './application/issue-hub-challenge.use-case.js';
+import { IssueHubTokenUseCase } from './application/issue-hub-token.use-case.js';
 import { HubCodeHasher } from './application/ports/hub-code-hasher.js';
 import { HubSignatureVerifier } from './application/ports/hub-signature-verifier.js';
 import { AuthChallengeRepository } from './domain/auth-challenge.repository.js';
@@ -23,10 +32,14 @@ import { HubSpaceTypeormEntity } from './infra/db/hub-space.entity.js';
 import { HubSpaceTypeormRepository } from './infra/db/hub-space.typeorm-repository.js';
 import { HubTypeormEntity } from './infra/db/hub.entity.js';
 import { HubTypeormRepository } from './infra/db/hub.typeorm-repository.js';
+import { HubTokenGuard } from './infra/http/hub-token.guard.js';
 import { LinkCodeTypeormRepository } from './infra/db/link-code.typeorm-repository.js';
 
 @Module({
   imports: [
+    // Uma direção só: hubs usa o que identity e organizations exportam; nenhum dos dois importa hubs.
+    IdentityModule,
+    OrganizationsModule,
     TypeOrmModule.forFeature([
       HubTypeormEntity,
       HubEnrollmentTypeormEntity,
@@ -37,6 +50,9 @@ import { LinkCodeTypeormRepository } from './infra/db/link-code.typeorm-reposito
     ]),
   ],
   providers: [
+    // Guard global de rotas @HubAuth(). O HubsModule vem antes do ThrottlingModule no AppModule: o token de Hub é
+    // conferido antes do rate limit (que, por Hub, lê `request.hub`).
+    { provide: APP_GUARD, useClass: HubTokenGuard },
     { provide: HubRepository, useClass: HubTypeormRepository },
     { provide: EnrollmentRepository, useClass: EnrollmentTypeormRepository },
     { provide: LinkCodeRepository, useClass: LinkCodeTypeormRepository },
@@ -52,6 +68,12 @@ import { LinkCodeTypeormRepository } from './infra/db/link-code.typeorm-reposito
     { provide: HubRoleRepository, useClass: HubRoleTypeormRepository },
     { provide: HubSignatureVerifier, useClass: SodiumHubSignatureVerifier },
     { provide: HubCodeHasher, useClass: SodiumHubCodeHasher },
+    EnrollHubUseCase,
+    EnrollmentStatusUseCase,
+    ClaimHubUseCase,
+    IssueHubChallengeUseCase,
+    IssueHubTokenUseCase,
+    AuthenticateHubTokenUseCase,
   ],
 })
 export class HubsModule {}

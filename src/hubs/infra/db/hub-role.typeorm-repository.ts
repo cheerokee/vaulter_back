@@ -47,6 +47,32 @@ export class HubRoleTypeormRepository extends HubRoleRepository {
     return map;
   }
 
+  // Só na reivindicação (Hub recém-criado, sem linha nenhuma): hub_owner para o dono e hub_room para a Sala do
+  // próprio Hub (room_hub_id = hub_id). A policy hub_scope_insert exige o contexto do dono.
+  async grantSystemRoles(hubId: string, ownerUserId: string): Promise<void> {
+    const result: { n: number }[] = await this.manager.query(
+      `WITH r AS (
+         SELECT id, key FROM roles
+          WHERE organization_id IS NULL AND scope_type = 'hub' AND key IN ('hub_owner', 'hub_room')
+            AND deleted_at IS NULL),
+       ins AS (
+         INSERT INTO role_assignments (role_id, user_id, room_hub_id, scope_type, hub_id)
+         SELECT r.id,
+                CASE WHEN r.key = 'hub_owner' THEN $2::uuid END,
+                CASE WHEN r.key = 'hub_room' THEN $1::uuid END,
+                'hub', $1::uuid
+           FROM r
+         RETURNING 1)
+       SELECT count(*)::int AS n FROM ins`,
+      [hubId, ownerUserId],
+    );
+    if (result[0]?.n !== 2) {
+      throw new Error(
+        'Factory roles hub_owner/hub_room are missing from the catalog.',
+      );
+    }
+  }
+
   // Uma linha por (Hub, pessoa) para sempre: revive a lápide (ou troca o papel da ativa); sem linha, insere. O
   // ON CONFLICT cobre a corrida; o WHERE do DO UPDATE nunca rebaixa um papel de sistema (hub_owner).
   async assign(assignment: HubRoleAssignment): Promise<void> {

@@ -1,4 +1,10 @@
-import { Enrollment, ENROLLMENT_TTL_MS } from './enrollment.js';
+import { DomainValidationError } from '../../shared/domain/errors.js';
+import {
+  CLAIM_CODE_PATTERN,
+  claimCodeInvalid,
+  Enrollment,
+  ENROLLMENT_TTL_MS,
+} from './enrollment.js';
 import { Hub } from './hub.js';
 
 const keys = {
@@ -60,6 +66,20 @@ describe('Enrollment', () => {
     expect(() => claimed.assertClaimable(now)).toThrow(
       expect.objectContaining({ code: 'claim-code-invalid' }),
     );
+  });
+});
+
+describe('claim code', () => {
+  it('is 8 digits and its single error is a 422 claim-code-invalid', () => {
+    expect(CLAIM_CODE_PATTERN.test('01234567')).toBe(true);
+    expect(CLAIM_CODE_PATTERN.test('0123456')).toBe(false);
+    expect(CLAIM_CODE_PATTERN.test('0123456a')).toBe(false);
+    const error = claimCodeInvalid();
+    expect(error).toBeInstanceOf(DomainValidationError);
+    expect(error.code).toBe('claim-code-invalid');
+    expect(() =>
+      issue().assertClaimable(new Date(now.getTime() + ENROLLMENT_TTL_MS)),
+    ).toThrow(DomainValidationError);
   });
 });
 

@@ -25,6 +25,7 @@ export type AuditAction =
   | 'space.recovery_copies_read'
   | 'space.manager_promoted'
   | 'space.pending_grant_declined'
+  | 'hub.claimed'
   | 'hub.room.granted'
   | 'hub.room.revoked';
 

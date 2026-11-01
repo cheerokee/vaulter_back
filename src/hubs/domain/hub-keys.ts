@@ -26,3 +26,14 @@ export function assertEncryptionPublicKey(value: string): string {
     'The encryption public key is invalid.',
   );
 }
+
+/** Enrollment nonce: 16 random bytes, strict base64url without padding (22 characters). */
+export function assertEnrollmentNonce(value: string): string {
+  if (typeof value === 'string' && /^[A-Za-z0-9_-]{22}$/.test(value)) {
+    const bytes = Buffer.from(value, 'base64url');
+    if (bytes.length === 16 && bytes.toString('base64url') === value) {
+      return value;
+    }
+  }
+  throw new DomainValidationError('nonce-invalid', 'The nonce is invalid.');
+}

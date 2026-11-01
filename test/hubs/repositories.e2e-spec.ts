@@ -358,7 +358,10 @@ describe('hubs repositories (e2e, app role)', () => {
       expect(await hubs.findBySigningKey(b64(32))).toBeNull();
       await expect(
         makeHub(olivia, 'Outro', hub.signingPublicKey),
-      ).rejects.toMatchObject({ driverError: { code: '23505' } });
+      ).rejects.toMatchObject({
+        constructor: ConflictError,
+        code: 'signing-key-in-use',
+      });
       // O contexto da busca por chave não vaza para fora dela.
       expect(await asApp({}, `SELECT id FROM hubs`)).toEqual([]);
     });
@@ -854,7 +857,15 @@ describe('hubs repositories (e2e, app role)', () => {
         newId(),
       );
       await expect(enrollments.create(replay)).rejects.toMatchObject({
-        driverError: { code: '23505' },
+        constructor: ConflictError,
+        code: 'nonce-reused',
+      });
+      // Outra apresentação pendente com o mesmo hash de código: colisão (o caso de uso sorteia outro código).
+      await expect(
+        enrollments.create(await enrollment('c1')),
+      ).rejects.toMatchObject({
+        constructor: ConflictError,
+        code: 'claim-code-collision',
       });
 
       const results = await Promise.all([

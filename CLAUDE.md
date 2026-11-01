@@ -259,7 +259,7 @@ src/organizations/
   `spaces` (até 20, sem `spaceId` repetido -> 422 `duplicate-space`).
 - **`OrganizationDirectory`** (exportado, junto com `OrganizationAccess` e `AuditLog`): `isActiveMember(orgId, userId)`,
   `recoveryPublicKey(orgId)` (`null` se não houver), `organizationIdsOf(userId)` (organizações ativas da pessoa),
-  `hubLinkPolicy(orgId)` (`null` se desconhecida) e `allowRoomSpaces(orgId)` (`false` se desconhecida), sem lançar
+  `personalOrganizationIdOf(userId)` (a organização pessoal, ou `null`), `hubLinkPolicy(orgId)` (`null` se desconhecida) e `allowRoomSpaces(orgId)` (`false` se desconhecida), sem lançar
   para org/usuário inexistente. Não é checagem de autorização. `allowRoomSpaces` (padrão `true`, no `PATCH`) bloqueia
   só **novas** liberações na Sala dos Hubs.
 - **`OrganizationAccess` é o padrão para os próximos módulos (spaces, hubs):** `requireMember(orgId, userId)` ->
@@ -392,6 +392,22 @@ exportam); nenhum dos dois importa `spaces`.
 - **e2e com a cripto real do cliente:** os helpers de espaço ficam em `test/support/identity-client.ts`
   (`c.spaces`: criar com kit, pôr membro selando todas as versões, trocar a chave, retrancar, abrir as cópias) e
   as invariantes de banco em `test/support/spaces-db.ts`. Não duplicar nos specs.
+
+## Módulo `hubs` (em construção)
+`src/hubs/`. Spec: `docs/superpowers/specs/2026-11-01-hubs-design.md`; formato das assinaturas do Hub em
+`docs/crypto/hub-identity.md`. Depende de `identity` (`HubTokenService`) e `organizations` (`OrganizationDirectory`,
+`AuditLog`), só pelo que eles exportam.
+- **Rotas de Hub:** `@HubAuth()` (`src/hubs/infra/http/hub-auth.decorators.ts`) marca a rota como `@Public()` para o
+  guard de usuário e o `HubTokenGuard` (APP_GUARD do `HubsModule`, que vem **antes** do `ThrottlingModule`) exige o
+  token de Hub (`typ: hub+jwt`) de um Hub existente e não desregistrado; `@CurrentHub()` lê `{ hubId }`. Token de
+  usuário em rota de Hub e token de Hub em rota de usuário: 401.
+- **Sem oráculo:** reivindicação com código errado, desconhecido, vencido ou já usado = o mesmo 422
+  `claim-code-invalid` (o nome é conferido antes do código); consulta de status com assinatura inválida ou
+  apresentação inexistente = o mesmo 404 `enrollment-not-found`; desafio de Hub inexistente ou desregistrado = um
+  desafio falso igual (`hub_id` nulo, nunca valida); toda falha do token = o mesmo 401 `hub-auth-failed`.
+- **Reivindicação** (`ClaimHubUseCase`, um `uow.run`): trava a apresentação (`FOR UPDATE`), cria o Hub, consome a
+  apresentação, dá `hub_owner` ao dono e `hub_room` à Sala, vincula a organização pessoal (`ownerLinks`) e audita
+  `hub.claimed` na organização pessoal.
 
 ## Banco de dados (TypeORM + migrations)
 - **TypeORM 1.x** + `@nestjs/typeorm`, driver `pg`. Config de conexão em `src/database/typeorm.options.ts`,

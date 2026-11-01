@@ -5,6 +5,7 @@ import type {
 import type { Hub } from './hub.js';
 
 export abstract class HubRepository {
+  /** Throws ConflictError('signing-key-in-use') when a hub (even a deregistered one) already has the key. */
   abstract create(hub: Hub): Promise<void>;
   abstract save(hub: Hub): Promise<void>;
   /** Includes deregistered hubs (check `isDeregistered`). */

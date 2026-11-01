@@ -14,7 +14,8 @@ export type HubProps = {
   updatedAt?: Date;
 };
 
-function assertName(raw: string): string {
+/** Trimmed name, 1 to 255 characters (422 `hub-name-invalid`). */
+export function assertHubName(raw: string): string {
   const name = typeof raw === 'string' ? raw.trim() : '';
   if (name.length < 1 || name.length > 255) {
     throw new DomainValidationError(
@@ -39,7 +40,7 @@ export class Hub extends Entity<HubProps> {
     input.enrollment.assertClaimable(input.now);
     return new Hub({
       ownerUserId: input.ownerUserId,
-      name: assertName(input.name),
+      name: assertHubName(input.name),
       signingPublicKey: input.enrollment.signingPublicKey,
       encryptionPublicKey: input.enrollment.encryptionPublicKey,
       lastSeenAt: null,
@@ -78,7 +79,7 @@ export class Hub extends Entity<HubProps> {
   }
 
   rename(name: string): void {
-    this.props = { ...this.props, name: assertName(name) };
+    this.props = { ...this.props, name: assertHubName(name) };
   }
 
   deregister(now: Date): void {

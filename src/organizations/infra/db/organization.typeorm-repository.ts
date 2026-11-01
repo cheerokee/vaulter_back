@@ -57,6 +57,16 @@ export class OrganizationTypeormRepository extends OrganizationRepository {
     return row ? OrganizationMapper.toDomain(row) : null;
   }
 
+  // Só com `app.user_id`: a organização pessoal aparece pela policy de membro (o dono nunca sai dela).
+  async findPersonalOf(userId: string): Promise<Organization | null> {
+    const row = await runWithContext(this.dataSource, { userId }, (m) =>
+      m.getRepository(OrganizationTypeormEntity).findOne({
+        where: { personalOwnerUserId: userId },
+      }),
+    );
+    return row ? OrganizationMapper.toDomain(row) : null;
+  }
+
   // Atravessa organizações só com `app.user_id`: organizations pela policy de membro (EXISTS em
   // user_organization), user_organization e role_assignments pela policy de leitura própria. Ordem por id
   // (v7 = ordem de criação).

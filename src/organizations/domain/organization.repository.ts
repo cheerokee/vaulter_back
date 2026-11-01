@@ -14,6 +14,8 @@ export abstract class OrganizationRepository {
   abstract create(organization: Organization): Promise<void>;
   abstract save(organization: Organization): Promise<void>;
   abstract findById(orgId: string): Promise<Organization | null>;
+  /** The user's personal organization (they are its owner), or null. */
+  abstract findPersonalOf(userId: string): Promise<Organization | null>;
   abstract listForUser(
     userId: string,
     page: CursorPageRequest,

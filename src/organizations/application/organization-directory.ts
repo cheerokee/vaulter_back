@@ -51,6 +51,16 @@ export class OrganizationDirectory {
     return ids;
   }
 
+  /**
+   * Id of the user's personal organization (the one created at registration, where they are the owner), or null
+   * for an unknown user or a malformed id (no query).
+   */
+  async personalOrganizationIdOf(userId: string): Promise<string | null> {
+    if (!validate(userId)) return null;
+    const org = await this.orgs.findPersonalOf(userId);
+    return org?.id ?? null;
+  }
+
   /** The organization's recovery-kit public key, or null when none is registered (or the org is unknown). */
   async recoveryPublicKey(orgId: string): Promise<string | null> {
     if (!validate(orgId)) return null;

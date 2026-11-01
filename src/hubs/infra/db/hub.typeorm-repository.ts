@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { validate } from 'uuid';
-import { DataSource } from 'typeorm';
+import { DataSource, QueryFailedError } from 'typeorm';
+import { ConflictError } from '../../../shared/domain/errors.js';
 import {
   decodeCursor,
   encodeCursor,
@@ -30,8 +31,26 @@ export class HubTypeormRepository extends HubRepository {
     return currentManager(this.dataSource).getRepository(HubTypeormEntity);
   }
 
+  // A chave é única para sempre: a corrida entre duas reivindicações da mesma chave cai aqui (23505).
   async create(hub: Hub): Promise<void> {
-    await this.repo.insert(HubMapper.toPersistence(hub));
+    try {
+      await this.repo.insert(HubMapper.toPersistence(hub));
+    } catch (error) {
+      const driver =
+        error instanceof QueryFailedError
+          ? (error.driverError as { code?: string; constraint?: string })
+          : undefined;
+      if (
+        driver?.code === '23505' &&
+        driver.constraint === 'uq_hubs_signing_public_key'
+      ) {
+        throw new ConflictError(
+          'signing-key-in-use',
+          'This signing key already belongs to a hub.',
+        );
+      }
+      throw error;
+    }
   }
 
   // Sem linha alterada = Hub inexistente ou invisível no contexto: falha alto, nunca grava em silêncio.
