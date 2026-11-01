@@ -17,10 +17,12 @@ import { PreLoginUseCase } from './application/pre-login.use-case.js';
 import { RegisterUserUseCase } from './application/register-user.use-case.js';
 import { CurrentAuthProofVerifier } from './application/current-auth-proof-verifier.js';
 import { UserDirectory } from './application/user-directory.js';
+import { HubTokenService } from './application/hub-token-service.js';
 import { SessionIssuer } from './application/session-issuer.js';
 import { SessionRepository } from './domain/session.repository.js';
 import { UserRepository } from './domain/user.repository.js';
 import { JoseAccessTokenService } from './infra/crypto/jose-access-token-service.js';
+import { JoseHubTokenService } from './infra/crypto/jose-hub-token-service.js';
 import { SodiumAuthProofHasher } from './infra/crypto/sodium-auth-proof-hasher.js';
 import { SodiumDecoySaltFactory } from './infra/crypto/sodium-decoy-salt-factory.js';
 import { SodiumRefreshTokenCodec } from './infra/crypto/sodium-refresh-token-codec.js';
@@ -44,6 +46,7 @@ import { SessionsController } from './infra/http/sessions.controller.js';
     { provide: SessionRepository, useClass: UserSessionTypeormRepository },
     { provide: AuthProofHasher, useClass: SodiumAuthProofHasher },
     { provide: AccessTokenService, useClass: JoseAccessTokenService },
+    { provide: HubTokenService, useClass: JoseHubTokenService },
     { provide: RefreshTokenCodec, useClass: SodiumRefreshTokenCodec },
     { provide: DecoySaltFactory, useClass: SodiumDecoySaltFactory },
     SessionIssuer,
@@ -60,6 +63,7 @@ import { SessionsController } from './infra/http/sessions.controller.js';
     UserDirectory,
     CurrentAuthProofVerifier,
   ],
-  exports: [UserDirectory, CurrentAuthProofVerifier],
+  // HubTokenService: para o módulo `hubs` (token de Hub com as mesmas chaves do token de usuário).
+  exports: [UserDirectory, CurrentAuthProofVerifier, HubTokenService],
 })
 export class IdentityModule {}

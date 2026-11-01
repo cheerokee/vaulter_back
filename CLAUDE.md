@@ -117,6 +117,10 @@ couber (spec de contas, §12).
   - **reuso do refresh token** (ou corrida entre dois refreshes com o mesmo token) **revoga a sessão**; a revogação
     é atômica, vence o primeiro motivo; **trocar a senha revoga as outras sessões** do usuário;
   - o refresh token vai **no corpo**, sem cookie (não há front web na v1);
+  - **token de Hub** (`HubTokenService`, exportado da `application/` do identity, implementação `JoseHubTokenService`):
+    mesmas chaves/`kid`/rotação (`JwtKeyRing`, `identity/infra/crypto`), mesmo `iss`/`aud`, `sub` = id do Hub,
+    `typ: 'hub+jwt'`, 15 min fixos; o verificador de usuário fixa `at+jwt` e o de Hub `hub+jwt` (um nunca passa
+    no lugar do outro; falha = 401 `invalid-hub-token`);
   - trade-off conhecido: quem souber o id de uma sessão pode forçar a revogação dela apresentando um refresh
     token forjado (não ganha acesso nenhum); os clientes devem **serializar** as chamadas de refresh.
   - Formato v1 das chaves do usuário (Argon2id, normalização NFC da senha, vetor de teste):

@@ -1,81 +1,29 @@
 import { Injectable, type OnModuleInit } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import {
-  importJWK,
-  jwtVerify,
-  SignJWT,
-  type CryptoKey,
-  type JWTHeaderParameters,
-} from 'jose';
+import { SignJWT } from 'jose';
 import { UnauthenticatedError } from '../../../shared/domain/errors.js';
 import { isUuidV7 } from '../../../shared/domain/id.js';
-import { getSodium } from '../../../shared/infra/crypto/sodium.js';
 import {
   AccessTokenClaims,
   AccessTokenService,
 } from '../../application/ports/access-token-service.js';
+import { JwtKeyRing } from './jwt-key-ring.js';
 
 @Injectable()
 export class JoseAccessTokenService
   extends AccessTokenService
   implements OnModuleInit
 {
-  private privateKey?: CryptoKey | Uint8Array;
-  private readonly publicKeys = new Map<string, CryptoKey | Uint8Array>();
+  private readonly keys: JwtKeyRing;
 
   constructor(private readonly config: ConfigService) {
     super();
+    this.keys = new JwtKeyRing(config);
   }
 
   /** Derives every key at boot: a bad seed fails startup instead of every request. */
   async onModuleInit(): Promise<void> {
-    const sodium = await getSodium();
-    const B64 = sodium.base64_variants.URLSAFE_NO_PADDING;
-    const derive = async (seedText: string, withPrivate: boolean) => {
-      const { publicKey } = sodium.crypto_sign_seed_keypair(
-        sodium.from_base64(seedText, B64),
-      );
-      const jwk = {
-        kty: 'OKP',
-        crv: 'Ed25519',
-        x: sodium.to_base64(publicKey, B64),
-      };
-      return {
-        privateKey: withPrivate
-          ? await importJWK({ ...jwk, d: seedText }, 'EdDSA')
-          : undefined,
-        publicKey: await importJWK(jwk, 'EdDSA'),
-      };
-    };
-    const current = await derive(
-      this.config.getOrThrow<string>('AUTH_JWT_SIGNING_SEED'),
-      true,
-    );
-    this.privateKey = current.privateKey;
-    this.publicKeys.clear();
-    this.publicKeys.set(
-      this.config.getOrThrow<string>('AUTH_JWT_KEY_ID'),
-      current.publicKey,
-    );
-    const previous = this.config.get<string>('AUTH_JWT_PREVIOUS_KEYS');
-    for (const item of previous ? previous.split(',') : []) {
-      const sep = item.indexOf(':');
-      const kid = item.slice(0, sep);
-      if (sep <= 0 || this.publicKeys.has(kid)) {
-        throw new Error('Invalid AUTH_JWT_PREVIOUS_KEYS');
-      }
-      this.publicKeys.set(
-        kid,
-        (await derive(item.slice(sep + 1), false)).publicKey,
-      );
-    }
-  }
-
-  private loadPrivateKey(): CryptoKey | Uint8Array {
-    if (!this.privateKey) {
-      throw new Error('JoseAccessTokenService not initialised');
-    }
-    return this.privateKey;
+    await this.keys.load();
   }
 
   async issue(
@@ -89,33 +37,22 @@ export class JoseAccessTokenService
     const token = await new SignJWT({ sid: claims.sessionId })
       .setProtectedHeader({
         alg: 'EdDSA',
-        kid: this.config.getOrThrow<string>('AUTH_JWT_KEY_ID'),
+        kid: this.keys.keyId,
         typ: 'at+jwt',
       })
-      .setAudience(this.config.getOrThrow<string>('AUTH_JWT_AUDIENCE'))
-      .setIssuer(this.config.getOrThrow<string>('AUTH_JWT_ISSUER'))
+      .setAudience(this.keys.audience)
+      .setIssuer(this.keys.issuer)
       .setSubject(claims.userId)
       .setIssuedAt(iat)
       .setExpirationTime(iat + ttl)
-      .sign(this.loadPrivateKey());
+      .sign(this.keys.signingKey());
     return { token, expiresAt: new Date((iat + ttl) * 1000) };
   }
 
+  // `typ` fixo em at+jwt: um token de Hub (hub+jwt), assinado com as mesmas chaves, nunca passa aqui.
   async verify(token: string, now: Date): Promise<AccessTokenClaims> {
     try {
-      const getKey = (header: JWTHeaderParameters) => {
-        const key = header.kid ? this.publicKeys.get(header.kid) : undefined;
-        if (!key) throw new Error('unknown kid');
-        return key;
-      };
-      const { payload } = await jwtVerify(token, getKey, {
-        algorithms: ['EdDSA'],
-        issuer: this.config.getOrThrow<string>('AUTH_JWT_ISSUER'),
-        audience: this.config.getOrThrow<string>('AUTH_JWT_AUDIENCE'),
-        typ: 'at+jwt',
-        currentDate: now,
-      });
-      const { sub, sid } = payload;
+      const { sub, sid } = await this.keys.verify(token, 'at+jwt', now);
       if (
         typeof sub !== 'string' ||
         typeof sid !== 'string' ||
