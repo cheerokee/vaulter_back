@@ -204,7 +204,7 @@ describe('Hub Room in a space (e2e)', () => {
       .expect(200);
     await expect(
       grant(owner, spaceId, kit.publicKey, hub, keys),
-    ).rejects.toMatchObject({ code: 'room-spaces-disabled' });
+    ).rejects.toMatchObject({ code: 'room-not-allowed' });
     expect(await hubRoom(spaceId, hub.hubId)).toEqual({
       roleKey: null,
       versions: [],
@@ -225,6 +225,12 @@ describe('Hub Room in a space (e2e)', () => {
       .send({ allowRoomSpaces: false })
       .expect(200);
     expect((await hubRoom(spaceId, hub.hubId)).roleKey).toBe('space_reader');
+    // and a re-grant / role change of that hub is not a new grant: still allowed
+    await grant(owner, spaceId, kit.publicKey, hub, keys, 'space_editor');
+    expect((await hubRoom(spaceId, hub.hubId)).roleKey).toBe('space_editor');
+    await expect(
+      grant(owner, spaceId, kit.publicKey, await newHub(), keys),
+    ).rejects.toMatchObject({ code: 'room-not-allowed' });
   });
 
   it('rotation needs a copy for each Room hub (409 key-rotation-mismatch); with it, the hub opens the new version', async () => {

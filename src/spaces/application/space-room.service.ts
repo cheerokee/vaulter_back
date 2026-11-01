@@ -4,8 +4,8 @@ import type { Actor } from '../../identity/application/dto/actor.js';
 import { AuditLog } from '../../organizations/application/audit-log.js';
 import { OrganizationDirectory } from '../../organizations/application/organization-directory.js';
 import {
+  DomainValidationError,
   NotFoundError,
-  PermissionDeniedError,
 } from '../../shared/domain/errors.js';
 import { UnitOfWork } from '../../shared/infra/db/unit-of-work.js';
 import { KeyRotationRules } from '../domain/key-rotation.js';
@@ -110,16 +110,19 @@ export class SpaceRoomService {
         (orgId) => input.confirmHubLink(orgId),
       );
       const orgId = space.organizationId;
-      if (!(await this.directory.allowRoomSpaces(orgId))) {
-        throw new PermissionDeniedError(
-          'room-spaces-disabled',
-          'The organization does not allow spaces in a hub room.',
+      // Lido com o espaço travado: pôr membro e liberar na Sala passam pelo mesmo lock.
+      const roomHubs = await this.room.roomHubIds(orgId, space.id);
+      const isNewGrant = !roomHubs.includes(input.hubId);
+      // A política vale só para liberações NOVAS (spec hubs §6): liberar de novo ou trocar o papel de um Hub que
+      // já está na Sala continua permitido com a política desligada.
+      if (isNewGrant && !(await this.directory.allowRoomSpaces(orgId))) {
+        throw new DomainValidationError(
+          'room-not-allowed',
+          'The organization does not allow new spaces in a hub room.',
         );
       }
       await this.kit.assertCurrent(orgId, input.recoveryPublicKey);
-      // Contado com o espaço travado: pôr membro e liberar na Sala passam pelo mesmo lock.
-      const roomHubs = await this.room.roomHubIds(orgId, space.id);
-      if (!roomHubs.includes(input.hubId)) {
+      if (isNewGrant) {
         const people = await this.roles.activeMemberIds(orgId, space.id);
         SpaceMembershipRules.assertCanAddMember(
           people.length + roomHubs.length,
@@ -221,6 +224,13 @@ export class SpaceRoomService {
       const affected = new Set<string>();
       let toLock = await this.room.roomSpaceIdsOfHub(orgId, hubId);
       if (toLock.length === 0) return [];
+      // A segunda volta trava, depois do UPDATE das lápides e fora da ordem global de id, um espaço que só a lápide
+      // alcançou (uma liberação que confirmou entre a leitura e o UPDATE). Não dá deadlock na prática: quem chama
+      // (desvincular / desregistrar, no `hubs`) já segura o lock da linha do vínculo `hub_organization` (FOR
+      // UPDATE), e `grantRoom` passa pelo `confirmHubLink` (FOR SHARE nessa linha) antes de travar o espaço. Então
+      // nenhuma liberação nova para este Hub e organização corre em paralelo, a segunda volta fica vazia, e as
+      // outras escritas em cópias de Hub (troca de chave) só tocam espaços que já estavam na Sala, travados na
+      // primeira volta. O laço fica como defesa, igual ao do gancho de saída da organização.
       for (;;) {
         for (const id of [...toLock].sort()) {
           if (!locked.has(id)) {

@@ -199,15 +199,29 @@ describe('SpaceRoomService.grantRoom', () => {
     expect(m.room.assignRoom).not.toHaveBeenCalled();
   });
 
-  it('the organization policy must allow room spaces (403 room-spaces-disabled)', async () => {
+  it('the organization policy must allow NEW room grants (422 room-not-allowed)', async () => {
     kit.roomPolicy.set(ORG_ID, false);
     await expect(
       service().grantRoom(actor(MANAGER), input()),
     ).rejects.toMatchObject({
-      constructor: PermissionDeniedError,
-      code: 'room-spaces-disabled',
+      constructor: DomainValidationError,
+      code: 'room-not-allowed',
     });
     expect(m.room.assignRoom).not.toHaveBeenCalled();
+    expect(m.room.upsertHubGrant).not.toHaveBeenCalled();
+  });
+
+  it('policy off: a hub ALREADY in the Room may be granted again or change role (not a new grant)', async () => {
+    kit.roomPolicy.set(ORG_ID, false);
+    kit.roomBySpace.get(SPACE_ID)!.set(HUB_ID, 'space_reader');
+    await expect(
+      service().grantRoom(actor(MANAGER), input({ roleKey: 'space_editor' })),
+    ).resolves.toMatchObject({ roleKey: 'space_editor' });
+    expect(kit.roomBySpace.get(SPACE_ID)!.get(HUB_ID)).toBe('space_editor');
+    // another hub is still a new grant: refused
+    await expect(
+      service().grantRoom(actor(MANAGER), input({ hubId: OTHER_HUB })),
+    ).rejects.toMatchObject({ code: 'room-not-allowed' });
   });
 
   it('SPACE_MAX_MEMBERS counts people and Room hubs together (409 space-member-limit); a re-grant does not count twice', async () => {

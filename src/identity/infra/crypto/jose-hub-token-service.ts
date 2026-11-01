@@ -33,6 +33,8 @@ export class JoseHubTokenService
     hubId: string,
     now: Date = new Date(),
   ): Promise<{ token: string; expiresAt: Date }> {
+    // O mesmo critério do `verify`: um token que nunca validaria não é emitido (erro de programação de quem chama).
+    if (!isUuidV7(hubId)) throw new Error('hubId must be a UUID v7');
     const iat = Math.floor(now.getTime() / 1000);
     const exp = iat + HUB_TOKEN_TTL_SECONDS;
     const token = await new SignJWT({})

@@ -524,6 +524,9 @@ CREATE TABLE role_permission (
 -- hub_*). Por isso o RLS ganha uma policy própria: o dono do Hub lê e grava, o próprio Hub (app.hub_id) lê e cada
 -- usuário lê a própria linha (self_read).
 -- Sala (room_hub_id): o "quem" é a Sala do Hub, com escopo de espaço (papel da Sala no espaço liberado) ou de Hub.
+-- No Postgres: índice único parcial uq_role_assignments_space_room_hub (space_id, room_hub_id) WHERE
+-- scope_type = 'space' AND room_hub_id IS NOT NULL AND deleted_at IS NULL — no máximo uma liberação ativa na Sala
+-- de cada Hub por espaço (o índice de pessoa não cobre: user_id nulo nunca colide).
 CREATE TABLE role_assignments (
   id CHAR(36) NOT NULL,
   created_at DATETIME NOT NULL,
@@ -552,6 +555,7 @@ CREATE TABLE role_assignments (
   INDEX fk_role_assignments_granted_by_idx (granted_by_user_id),
   INDEX fk_role_assignments_app_installations_idx (app_installation_id),
   INDEX fk_role_assignments_approved_by_idx (approved_by_user_id),
+  UNIQUE INDEX uq_role_assignments_space_room_hub (space_id, room_hub_id) COMMENT 'Postgres: parcial WHERE scope_type = space AND room_hub_id IS NOT NULL AND deleted_at IS NULL',
   CONSTRAINT fk_role_assignments_roles FOREIGN KEY (role_id) REFERENCES roles (id),
   CONSTRAINT fk_role_assignments_users FOREIGN KEY (user_id) REFERENCES users (id),
   CONSTRAINT fk_role_assignments_room_hub FOREIGN KEY (room_hub_id) REFERENCES hubs (id),

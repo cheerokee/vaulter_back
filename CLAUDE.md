@@ -333,7 +333,8 @@ exportam); nenhum dos dois importa `spaces`.
   `room_hub_id` (escopo espaço, papel `space_reader`/`space_editor`, `uq_role_assignments_space_room_hub`) mais a
   cópia de cada versão em `space_key_grants.hub_id`. O `spaces` não conhece a tabela `hubs`: `grantRoom` recebe o
   `hubId` e um `confirmHubLink(orgId)` do chamador (roda antes do lock do espaço: vínculo, depois espaço), exige
-  Gestor, `allowRoomSpaces` (403 `room-spaces-disabled`), kit atual e as cópias de **todas** as versões; o assento
+  Gestor, `allowRoomSpaces` só para liberação nova (422 `room-not-allowed`; liberar de novo ou trocar o papel de um
+  Hub já na Sala continua permitido), kit atual e as cópias de **todas** as versões; o assento
   conta no `SPACE_MAX_MEMBERS` (pessoas + Hubs). `revokeRoom` (Gestor, ou `trusted` quando o chamador já autorizou),
   `revokeRoomForOrganization` e `revokeAllRoomForHub` gravam lápide no papel e nas cópias e marcam
   `keyRotationRequired`; auditoria `hub.room.granted|revoked`. A troca de chave exige `hubGrants` com exatamente os

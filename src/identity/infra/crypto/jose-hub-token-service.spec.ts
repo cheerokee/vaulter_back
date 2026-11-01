@@ -106,9 +106,16 @@ describe('JoseHubTokenService', () => {
     await expect(
       svc.verify(`${head}.${forged}.${sig}`, now),
     ).rejects.toMatchObject(INVALID);
-    await expect(
-      svc.verify((await svc.issue('not-a-uuid', now)).token, now),
-    ).rejects.toMatchObject(INVALID);
+  });
+
+  it('issue refuses a hub id that is not a UUID v7 (the same check as verify)', async () => {
+    for (const bad of [
+      'not-a-uuid',
+      '',
+      '6f1c2a34-5b6d-4e7f-8a9b-0c1d2e3f4a5b', // v4
+    ]) {
+      await expect(svc.issue(bad, now)).rejects.toThrow(/UUID v7/);
+    }
   });
 
   it('refuses another issuer or audience', async () => {
