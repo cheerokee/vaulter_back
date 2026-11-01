@@ -34,4 +34,18 @@ export class LinkCodeTypeormRepository extends LinkCodeRepository {
     const row = rows[0];
     return row ? LinkCodeMapper.fromRow(row) : null;
   }
+
+  // Lápide (o runtime não tem DELETE) nos vencidos não usados: o único parcial ignora lápides, então o hash fica
+  // livre para um código novo. Usados ficam como histórico.
+  async expireStale(now: Date): Promise<number> {
+    const rows = updatedRows<{ id: string }>(
+      await currentManager(this.dataSource).query(
+        `UPDATE hub_link_codes SET deleted_at = $1, updated_at = now()
+          WHERE used_at IS NULL AND deleted_at IS NULL AND expires_at <= $1
+         RETURNING id`,
+        [now],
+      ),
+    );
+    return rows.length;
+  }
 }

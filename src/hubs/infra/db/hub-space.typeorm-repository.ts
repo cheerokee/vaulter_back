@@ -7,12 +7,13 @@ import {
   HubSpaceRepository,
   type HubSpaceRef,
 } from '../../domain/hub-space.repository.js';
-import { spaceNotFound } from './db-helpers.js';
+import { hubNotFound, spaceNotFound } from './db-helpers.js';
 import { HubSpaceTypeormEntity } from './hub-space.entity.js';
 
 // Escrita sempre no escopo da organização do espaço (org_isolation é a única policy de escrita; a FK composta
-// (space_id, organization_id) garante que o espaço é dessa organização). Leitura no contexto ambiente:
-// org_isolation, membro ativo da organização, dono do Hub ou o próprio Hub. Linhas com lápide ficam fora.
+// (space_id, organization_id) garante que o espaço é dessa organização, e a (hub_id, organization_id) que há
+// vínculo). Leitura no contexto ambiente: org_isolation, dono do Hub ou o próprio Hub (só com vínculo aprovado).
+// Um Gestor que não é dono age com o escopo da organização (`app.organization_id`). Linhas com lápide ficam fora.
 @Injectable()
 export class HubSpaceTypeormRepository extends HubSpaceRepository {
   constructor(private readonly dataSource: DataSource) {
@@ -30,6 +31,12 @@ export class HubSpaceTypeormRepository extends HubSpaceRepository {
           [ref.spaceId, ref.organizationId],
         );
         if (space.length === 0) throw spaceNotFound();
+        const link: unknown[] = await m.query(
+          `SELECT 1 FROM hub_organization
+            WHERE hub_id = $1 AND organization_id = $2 AND status = 'approved' AND deleted_at IS NULL`,
+          [ref.hubId, ref.organizationId],
+        );
+        if (link.length === 0) throw hubNotFound();
         await m.query(
           `INSERT INTO hub_space (hub_id, space_id, organization_id, added_by_user_id)
            VALUES ($1, $2, $3, $4)

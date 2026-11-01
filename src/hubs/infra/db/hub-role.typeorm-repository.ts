@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { validate } from 'uuid';
 import { DataSource, type EntityManager } from 'typeorm';
 import { runInOrganizationScope } from '../../../shared/infra/db/organization-scope.js';
+import { ConflictError } from '../../../shared/domain/errors.js';
 import { currentManager } from '../../../shared/infra/db/unit-of-work.js';
 import {
   HubRoleRepository,
@@ -15,7 +16,8 @@ import { updatedRows } from './db-helpers.js';
 
 // Papéis de Hub atribuíveis em role_assignments (scope_type = 'hub', hub_id, organization_id nulo). Contexto
 // ambiente: o dono do Hub (`app.user_id`) lê e grava; o próprio Hub (`app.hub_id`, também usado pelas cascatas
-// que agem sobre um Hub) lê e atualiza. hub_owner e hub_room (sistema) nunca passam por aqui.
+// que agem sobre um Hub) lê e só grava lápide em papel atribuível. hub_owner e hub_room (sistema) nunca passam
+// por aqui.
 const ACTIVE = `ra.scope_type = 'hub' AND ra.hub_id = $1 AND ra.user_id IS NOT NULL AND ra.deleted_at IS NULL`;
 
 @Injectable()
@@ -74,8 +76,9 @@ export class HubRoleTypeormRepository extends HubRoleRepository {
       [assignment.hubId, assignment.userId, roleId, assignable],
     );
     if (inserted.length === 0) {
-      throw new Error(
-        'HubRoleRepository.assign: the user holds a system hub role on this hub.',
+      throw new ConflictError(
+        'hub-system-role',
+        'The user holds a system role on this hub.',
       );
     }
   }

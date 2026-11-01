@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { validate } from 'uuid';
-import { DataSource, LessThanOrEqual } from 'typeorm';
+import { DataSource, LessThanOrEqual, MoreThan } from 'typeorm';
 import { currentManager } from '../../../shared/infra/db/unit-of-work.js';
 import type { Enrollment } from '../../domain/enrollment.js';
 import { EnrollmentRepository } from '../../domain/enrollment.repository.js';
@@ -38,11 +38,15 @@ export class EnrollmentTypeormRepository extends EnrollmentRepository {
     return row ? EnrollmentMapper.toDomain(row) : null;
   }
 
-  // Um UPDATE condicional (`status = 'pending'`): entre chamadas concorrentes, só uma altera a linha.
-  async markClaimed(enrollmentId: string, hubId: string): Promise<boolean> {
+  // Um UPDATE condicional (pendente e dentro da validade): entre chamadas concorrentes, só uma altera a linha.
+  async markClaimed(
+    enrollmentId: string,
+    hubId: string,
+    now: Date,
+  ): Promise<boolean> {
     if (!validate(enrollmentId)) return false;
     const result = await this.repo.update(
-      { id: enrollmentId, status: 'pending' },
+      { id: enrollmentId, status: 'pending', expiresAt: MoreThan(now) },
       { status: 'claimed', claimedHubId: hubId },
     );
     return result.affected === 1;

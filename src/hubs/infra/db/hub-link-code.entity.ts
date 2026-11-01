@@ -4,10 +4,10 @@ import { HubTypeormEntity } from './hub.entity.js';
 
 // Código de vínculo pedido pelo Hub (só o hash). Só do backend: sem RLS e sem sync_version. Uso único.
 @Entity('hub_link_codes')
-// Único entre os vigentes (ainda não usados).
+// Único entre os vigentes: nem usado nem com lápide (expireStale grava lápide nos vencidos e libera o hash).
 @Index('uq_hub_link_codes_code_hash', ['codeHash'], {
   unique: true,
-  where: '"used_at" IS NULL',
+  where: '"used_at" IS NULL AND "deleted_at" IS NULL',
 })
 @Index('fk_hub_link_codes_hubs_idx', ['hubId'])
 export class HubLinkCodeTypeormEntity extends BaseTypeormEntity {

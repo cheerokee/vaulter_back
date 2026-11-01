@@ -19,7 +19,10 @@ import type { OrgRoleKey } from '../../src/organizations/domain/membership.js';
 import { Organization } from '../../src/organizations/domain/organization.js';
 import { OrganizationRepository } from '../../src/organizations/domain/organization.repository.js';
 import { RoleAssignmentRepository } from '../../src/organizations/domain/role-assignment.repository.js';
-import { NotFoundError } from '../../src/shared/domain/errors.js';
+import {
+  ConflictError,
+  NotFoundError,
+} from '../../src/shared/domain/errors.js';
 import { newId } from '../../src/shared/domain/id.js';
 import {
   UnitOfWork,
@@ -280,6 +283,18 @@ describe('hubs repositories (e2e, app role)', () => {
       const saved = await as({ userId: olivia }, () => hubs.findById(hub.id));
       expect(saved?.name).toBe('Sala de reunião');
       expect(saved?.lastSeenAt?.toISOString()).toBe(later(1000).toISOString());
+      // Dono e chaves são imutáveis para o runtime (GRANT UPDATE só em name, last_seen_at, deleted_at, updated_at).
+      for (const set of [
+        `owner_user_id = '${ana}'`,
+        `signing_public_key = 'x'`,
+        `encryption_public_key = 'x'`,
+      ]) {
+        await expect(
+          asApp({ userId: olivia }, `UPDATE hubs SET ${set} WHERE id = $1`, [
+            hub.id,
+          ]),
+        ).rejects.toMatchObject({ code: '42501' });
+      }
       // Sem contexto, save falha alto em vez de não gravar em silêncio.
       await expect(hubs.save(hub)).rejects.toMatchObject({
         constructor: NotFoundError,
@@ -362,10 +377,11 @@ describe('hubs repositories (e2e, app role)', () => {
       expect(await orgIdsSeenBy({ userId: olivia })).toEqual(
         [orgA.id, orgB.id].sort(),
       );
-      expect(await orgIdsSeenBy({ hubId: hub.id })).toEqual(
-        [orgA.id, orgB.id].sort(),
-      );
+      // O Hub só vê vínculos aprovados (e revogados, que a sincronização manda como lápide); pendente não.
+      expect(await orgIdsSeenBy({ hubId: hub.id })).toEqual([orgA.id]);
       expect(await orgIdsSeenBy({ userId: ana })).toEqual([orgA.id]);
+      // Membro só lê vínculo aprovado da própria organização: Bob (admin da B, pedido pendente) não vê o da B.
+      expect(await orgIdsSeenBy({ userId: bob })).toEqual([]);
       expect(await orgIdsSeenBy({ organizationId: orgB.id })).toEqual([
         orgB.id,
       ]);
@@ -400,6 +416,13 @@ describe('hubs repositories (e2e, app role)', () => {
       ))!;
       current.revoke();
       await as({ userId: ana }, () => links.upsert(current));
+      expect(
+        (await as({ hubId: hub.id }, () => links.list(hub.id))).map((l) => [
+          l.organizationId,
+          l.status,
+        ]),
+      ).toEqual([[orgA.id, 'revoked']]);
+      expect(await orgIdsSeenBy({ userId: ana })).toEqual([]);
       await admin.query(
         `UPDATE hub_organization SET deleted_at = now() WHERE hub_id = $1 AND organization_id = $2`,
         [hub.id, orgA.id],
@@ -454,6 +477,47 @@ describe('hubs repositories (e2e, app role)', () => {
         constructor: NotFoundError,
         code: 'hub-not-found',
       });
+    });
+
+    it('upsert refuses a deregistered hub on both paths (update and insert)', async () => {
+      const olivia = await makeUser('olivia@x.com');
+      const ana = await makeUser('ana@x.com');
+      const orgA = await makeOrg('A', [ana]);
+      const orgB = await makeOrg('B', [ana]);
+      const hub = await makeHub(olivia);
+      await link(hub, orgA.id);
+      hub.deregister(later(1));
+      await as({ userId: olivia }, () => hubs.save(hub));
+      for (const orgId of [orgA.id, orgB.id]) {
+        const l = HubOrganizationLink.ownerLinks({
+          hubId: hub.id,
+          organizationId: orgId,
+          userId: olivia,
+          policy: 'any_member_hub',
+          now,
+        });
+        await expect(
+          as({ userId: olivia }, () => links.upsert(l)),
+        ).rejects.toMatchObject({
+          constructor: NotFoundError,
+          code: 'hub-not-found',
+        });
+      }
+    });
+
+    it('only the hub owner can be recorded as the owner consent (CHECK)', async () => {
+      const olivia = await makeUser('olivia@x.com');
+      const ana = await makeUser('ana@x.com');
+      const orgA = await makeOrg('A', [ana]);
+      const hub = await makeHub(olivia);
+      await expect(
+        admin.query(
+          `INSERT INTO hub_organization (hub_id, organization_id, hub_owner_user_id, requested_by_user_id,
+             owner_approved_by_user_id, owner_approved_at)
+           VALUES ($1, $2, $3, $4, $4, now())`,
+          [hub.id, orgA.id, olivia, ana],
+        ),
+      ).rejects.toMatchObject({ code: '23514' });
     });
 
     it('the denormalized hub owner cannot be forged (composite FK to hubs)', async () => {
@@ -554,6 +618,77 @@ describe('hubs repositories (e2e, app role)', () => {
       expect(rows[0]!.n).toBe(1);
     });
 
+    it('the hub context only tombstones assignable roles: no revive, no role change, no system rows', async () => {
+      const olivia = await makeUser('olivia@x.com');
+      const ana = await makeUser('ana@x.com');
+      const bob = await makeUser('bob@x.com');
+      const orgA = await makeOrg('A', [olivia], [ana, bob]);
+      const hub = await makeHub(olivia);
+      await link(hub, orgA.id);
+      const [{ id: ownerRole }] = (await admin.query(
+        `SELECT id FROM roles WHERE key = 'hub_owner' AND organization_id IS NULL`,
+      )) as { id: string }[];
+      await admin.query(
+        `INSERT INTO role_assignments (role_id, user_id, scope_type, hub_id) VALUES ($1, $2, 'hub', $3)`,
+        [ownerRole, olivia, hub.id],
+      );
+      for (const [u, role] of [
+        [ana, 'hub_user'],
+        [bob, 'hub_user'],
+      ] as const) {
+        await as({ userId: olivia }, () =>
+          hubRoles.assign({ hubId: hub.id, userId: u, roleKey: role }),
+        );
+      }
+      await as({ userId: olivia }, () => hubRoles.remove(hub.id, bob));
+      const ctx = { hubId: hub.id };
+      const sql = (set: string, userId: string) =>
+        asApp(
+          ctx,
+          `UPDATE role_assignments SET ${set} WHERE scope_type = 'hub' AND hub_id = $1 AND user_id = $2 RETURNING id`,
+          [hub.id, userId],
+        );
+      // Reviver a lápide de Bob: recusado.
+      await expect(sql('deleted_at = NULL', bob)).rejects.toMatchObject({
+        code: '42501',
+      });
+      // Trocar o papel de Ana (sem lápide), nem para hub_owner: recusado.
+      await expect(sql(`role_id = '${ownerRole}'`, ana)).rejects.toMatchObject({
+        code: '42501',
+      });
+      await expect(
+        sql(`role_id = role_id, updated_at = now()`, ana),
+      ).rejects.toMatchObject({ code: '42501' });
+      // Nem lápide virando hub_owner.
+      await expect(
+        sql(`deleted_at = now(), role_id = '${ownerRole}'`, ana),
+      ).rejects.toMatchObject({ code: '42501' });
+      // A linha de sistema (hub_owner da dona) nem é alcançável.
+      expect(await sql('deleted_at = now()', olivia)).toEqual([[], 0]);
+      // Lápide de papel atribuível: permitida.
+      expect((await sql('deleted_at = now()', ana))[1]).toBe(1);
+      // A dona revive normalmente; um sistema já ocupado dá 409 estável.
+      await as({ userId: olivia }, () =>
+        hubRoles.assign({
+          hubId: hub.id,
+          userId: ana,
+          roleKey: 'hub_operator',
+        }),
+      );
+      await expect(
+        as({ userId: olivia }, () =>
+          hubRoles.assign({
+            hubId: hub.id,
+            userId: olivia,
+            roleKey: 'hub_user',
+          }),
+        ),
+      ).rejects.toMatchObject({
+        constructor: ConflictError,
+        code: 'hub-system-role',
+      });
+    });
+
     it('removeUsersWithoutLinkedOrg tombstones only people without any approved linked organization', async () => {
       const olivia = await makeUser('olivia@x.com');
       const ana = await makeUser('ana@x.com');
@@ -650,8 +785,8 @@ describe('hubs repositories (e2e, app role)', () => {
       });
 
       const results = await Promise.all([
-        enrollments.markClaimed(e.id, hub.id),
-        enrollments.markClaimed(e.id, hub.id),
+        enrollments.markClaimed(e.id, hub.id, later(1)),
+        enrollments.markClaimed(e.id, hub.id, later(1)),
       ]);
       expect(results.filter(Boolean)).toHaveLength(1);
       const claimed = await enrollments.findById(e.id);
@@ -660,6 +795,17 @@ describe('hubs repositories (e2e, app role)', () => {
         hub.id,
       ]);
       expect(await enrollments.findPendingByCodeHash(hex('c1'))).toBeNull();
+
+      // Vencida não é reivindicada, mesmo pendente.
+      const late = await enrollment('c4');
+      await enrollments.create(late);
+      expect(
+        await enrollments.markClaimed(late.id, hub.id, late.expiresAt),
+      ).toBe(false);
+      await admin.query(
+        `UPDATE hub_enrollments SET status = 'expired' WHERE id = $1`,
+        [late.id],
+      );
 
       const stale = await enrollment('c2');
       const fresh = await enrollment('c3');
@@ -697,6 +843,22 @@ describe('hubs repositories (e2e, app role)', () => {
       expect(await linkCodes.consume(hex('l2'), later(1))).not.toBeNull();
       await linkCodes.create(
         LinkCode.issue({ hubId: hub.id, codeHash: hex('l2'), now }),
+      );
+
+      // Vencido e não usado segura o hash até expireStale; depois o hash fica livre.
+      const stale = LinkCode.issue({ hubId: hub.id, codeHash: hex('l3'), now });
+      await linkCodes.create(stale);
+      await expect(
+        linkCodes.create(
+          LinkCode.issue({ hubId: hub.id, codeHash: hex('l3'), now }),
+        ),
+      ).rejects.toMatchObject({ driverError: { code: '23505' } });
+      // l2 (novo, vigente até now + 10 min) e l3 vencem; os usados não contam.
+      expect(await linkCodes.expireStale(stale.expiresAt)).toBe(2);
+      expect(await linkCodes.expireStale(stale.expiresAt)).toBe(0);
+      expect(await linkCodes.consume(hex('l3'), later(1))).toBeNull();
+      await linkCodes.create(
+        LinkCode.issue({ hubId: hub.id, codeHash: hex('l3'), now: later(1) }),
       );
     });
 
@@ -747,6 +909,27 @@ describe('hubs repositories (e2e, app role)', () => {
       const orgB = await makeOrg('B', [bob]);
       const spaceA = await makeSpace(orgA.id);
       const hub = await makeHub(olivia);
+      const ref0 = {
+        hubId: hub.id,
+        spaceId: spaceA.id,
+        organizationId: orgA.id,
+        addedByUserId: olivia,
+      };
+      // Sem vínculo do Hub com a A, o espaço não entra (guarda do repositório e FK composta para o vínculo).
+      await expect(
+        as({ userId: olivia }, () => hubSpaces.add(ref0)),
+      ).rejects.toMatchObject({
+        constructor: NotFoundError,
+        code: 'hub-not-found',
+      });
+      await expect(
+        asApp(
+          { organizationId: orgA.id },
+          `INSERT INTO hub_space (hub_id, space_id, organization_id, added_by_user_id) VALUES ($1, $2, $3, $4)`,
+          [hub.id, spaceA.id, orgA.id, olivia],
+        ),
+      ).rejects.toMatchObject({ code: '23503' });
+      await link(hub, orgA.id);
 
       // B tenta apontar para o espaço da A (FK ignora o RLS, por isso é composta).
       await expect(
@@ -784,9 +967,15 @@ describe('hubs repositories (e2e, app role)', () => {
       expect(await as({ hubId: hub.id }, () => hubSpaces.list(hub.id))).toEqual(
         [ref],
       );
-      expect(await as({ userId: ana }, () => hubSpaces.list(hub.id))).toEqual([
-        ref,
-      ]);
+      // Membro sem o escopo da organização não lê hub_space (sem policy de membro); com o escopo, lê.
+      expect(await as({ userId: ana }, () => hubSpaces.list(hub.id))).toEqual(
+        [],
+      );
+      expect(
+        await as({ userId: ana, organizationId: orgA.id }, () =>
+          hubSpaces.list(hub.id),
+        ),
+      ).toEqual([ref]);
       expect(await as({ userId: bob }, () => hubSpaces.list(hub.id))).toEqual(
         [],
       );
@@ -797,7 +986,9 @@ describe('hubs repositories (e2e, app role)', () => {
         ),
       ).toEqual([]);
 
-      await as({ userId: ana }, () => hubSpaces.remove(hub.id, spaceA.id));
+      await as({ userId: ana, organizationId: orgA.id }, () =>
+        hubSpaces.remove(hub.id, spaceA.id),
+      );
       expect(
         await as({ userId: olivia }, () => hubSpaces.list(hub.id)),
       ).toEqual([]);
@@ -812,6 +1003,23 @@ describe('hubs repositories (e2e, app role)', () => {
         [hub.id],
       );
       expect(rows[0]!.n).toBe(1);
+
+      // Vínculo revogado ou pendente: o Hub deixa de ver o hub_space (a dona ainda vê).
+      const a = (await as({ userId: olivia }, () =>
+        links.find(hub.id, orgA.id),
+      ))!;
+      a.revoke();
+      await as({ userId: olivia }, () => links.upsert(a));
+      expect(await as({ hubId: hub.id }, () => hubSpaces.list(hub.id))).toEqual(
+        [],
+      );
+      await link(hub, orgA.id, 'pending');
+      expect(await as({ hubId: hub.id }, () => hubSpaces.list(hub.id))).toEqual(
+        [],
+      );
+      expect(
+        await as({ userId: olivia }, () => hubSpaces.list(hub.id)),
+      ).toHaveLength(1);
     });
   });
 

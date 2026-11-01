@@ -2,7 +2,10 @@ import { Injectable } from '@nestjs/common';
 import { validate } from 'uuid';
 import { DataSource } from 'typeorm';
 import { runInOrganizationScope } from '../../../shared/infra/db/organization-scope.js';
-import { currentManager } from '../../../shared/infra/db/unit-of-work.js';
+import {
+  currentManager,
+  runWithContext,
+} from '../../../shared/infra/db/unit-of-work.js';
 import type { HubOrganizationLink } from '../../domain/hub-organization-link.js';
 import { HubOrganizationRepository } from '../../domain/hub-organization.repository.js';
 import { hubNotFound, requireUnitOfWork, updatedRows } from './db-helpers.js';
@@ -33,10 +36,13 @@ export class HubOrganizationTypeormRepository extends HubOrganizationRepository 
     return row ? HubOrganizationMapper.toDomain(row) : null;
   }
 
-  // 1) Atualiza a linha de (Hub, organização), limpando a lápide. 2) Sem linha, insere com o dono do Hub lido de
-  // hubs (precisa ver o Hub no contexto: dono, o próprio Hub ou membro de organização vinculada); o ON CONFLICT
-  // cobre a corrida com outro insert. Sem Hub visível (ou desregistrado) -> hub-not-found.
+  // Confere o Hub (existe e não está desregistrado) com o contexto do próprio Hub, só dentro deste trecho: um admin
+  // aprovando um pedido pendente não vê o Hub pelas policies dele. Depois, 1) atualiza a linha de (Hub,
+  // organização), limpando a lápide, ou 2) insere com o dono do Hub; o ON CONFLICT cobre a corrida com outro
+  // insert. Hub inexistente ou desregistrado -> hub-not-found nos dois caminhos. A corrida com um desregistro
+  // concorrente fica com quem desregistra (trava os vínculos FOR UPDATE antes de gravar as lápides).
   async upsert(link: HubOrganizationLink): Promise<void> {
+    if (!validate(link.hubId)) throw hubNotFound();
     const params = [
       link.hubId,
       link.organizationId,
@@ -47,10 +53,15 @@ export class HubOrganizationTypeormRepository extends HubOrganizationRepository 
       link.orgApprovedByUserId,
       link.orgApprovedAt,
     ];
-    await runInOrganizationScope(
+    await runWithContext(
       this.dataSource,
-      link.organizationId,
+      { organizationId: link.organizationId, hubId: link.hubId },
       async (m) => {
+        const hub: { owner_user_id: string }[] = await m.query(
+          `SELECT owner_user_id FROM hubs WHERE id = $1 AND deleted_at IS NULL`,
+          [link.hubId],
+        );
+        if (hub.length === 0) throw hubNotFound();
         const updated = updatedRows(
           await m.query(
             `UPDATE hub_organization
@@ -68,9 +79,7 @@ export class HubOrganizationTypeormRepository extends HubOrganizationRepository 
           `INSERT INTO hub_organization (
              hub_id, organization_id, hub_owner_user_id, status, requested_by_user_id,
              owner_approved_by_user_id, owner_approved_at, org_approved_by_user_id, org_approved_at, created_at)
-           SELECT h.id, $2, h.owner_user_id, $3, $4, $5, $6, $7, $8, COALESCE($9::timestamptz, now())
-             FROM hubs h
-            WHERE h.id = $1 AND h.deleted_at IS NULL
+           VALUES ($1, $2, $10, $3, $4, $5, $6, $7, $8, COALESCE($9::timestamptz, now()))
            ON CONFLICT (hub_id, organization_id) DO UPDATE
              SET status = EXCLUDED.status,
                  requested_by_user_id = EXCLUDED.requested_by_user_id,
@@ -80,7 +89,7 @@ export class HubOrganizationTypeormRepository extends HubOrganizationRepository 
                  org_approved_at = EXCLUDED.org_approved_at,
                  deleted_at = NULL, updated_at = now()
            RETURNING hub_id`,
-          [...params, link.createdAt ?? null],
+          [...params, link.createdAt ?? null, hub[0]!.owner_user_id],
         );
         if (inserted.length === 0) throw hubNotFound();
       },

@@ -14,9 +14,9 @@ import type { HubLinkStatus } from '../../domain/hub-organization-link.js';
 import { HubTypeormEntity } from './hub.entity.js';
 
 // Vínculo Hub x organização (dois consentimentos). Tabela de ligação sincronizável: desvincular é status/lápide e
-// voltar reaproveita a linha. RLS (migration CreateHubs): org_isolation (única via de escrita), leitura pelo
-// membro ativo da organização, pelo dono do Hub (`hub_owner_user_id`, desnormalizado para a policy não consultar
-// hubs, que consulta esta tabela: sem recursão) e pelo próprio Hub.
+// voltar reaproveita a linha. RLS (CreateHubs + HardenHubsRls): org_isolation (única via de escrita), leitura pelo
+// membro ativo da organização (só vínculo aprovado), pelo dono do Hub (`hub_owner_user_id`, desnormalizado para a
+// policy não consultar hubs, que consulta esta tabela: sem recursão) e pelo próprio Hub (aprovado ou revogado).
 @Entity('hub_organization')
 @Check(
   'ck_hub_organization_status',
@@ -29,6 +29,11 @@ import { HubTypeormEntity } from './hub.entity.js';
 @Check(
   'ck_hub_organization_org_consent',
   `("org_approved_at" IS NULL) = ("org_approved_by_user_id" IS NULL)`,
+)
+// Quem consente como dono é sempre o dono do Hub.
+@Check(
+  'ck_hub_organization_owner_approver',
+  `"owner_approved_by_user_id" IS NULL OR "owner_approved_by_user_id" = "hub_owner_user_id"`,
 )
 @Check(
   'ck_hub_organization_approved',

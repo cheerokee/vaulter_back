@@ -53,6 +53,8 @@ export class HubTypeormRepository extends HubRepository {
     return row ? HubMapper.toDomain(row) : null;
   }
 
+  // Só para responder "chave já em uso" (inclusive por Hub desregistrado) na apresentação: o Hub achado nunca é
+  // devolvido a quem chamou a rota (a policy hubs_by_signing_key abre a linha sem nenhum outro contexto).
   async findBySigningKey(signingPublicKey: string): Promise<Hub | null> {
     const row = await runWithContext(
       this.dataSource,
