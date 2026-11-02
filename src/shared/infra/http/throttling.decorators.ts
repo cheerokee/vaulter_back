@@ -10,6 +10,22 @@ import { userIdTracker } from './user-id.tracker.js';
 
 export const THROTTLE_BY_EMAIL_KEY = 'throttleByEmail';
 export const THROTTLE_REAUTH_KEY = 'throttleReauth';
+export const THROTTLE_GROUP_KEY = 'throttleGroup';
+
+/**
+ * Own `default` limit shared by every route marked with the same `group`: the guard keys the counter by the group
+ * and the tracker, without the route (e.g. the hub challenge and token routes: one budget per IP for both).
+ * `getTracker` omitted = the default tracker (`req.ip`).
+ */
+export const ThrottleGroup = (
+  group: string,
+  limit: { limit: number; ttl: number },
+  getTracker?: ThrottlerGetTrackerFunction,
+): MethodDecorator =>
+  applyDecorators(
+    SetMetadata(THROTTLE_GROUP_KEY, group),
+    Throttle({ default: { ...limit, ...(getTracker ? { getTracker } : {}) } }),
+  );
 
 /**
  * Adds the per-e-mail counter to a route (the `email` throttler is skipped everywhere else).

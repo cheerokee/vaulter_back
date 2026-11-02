@@ -25,6 +25,23 @@ export const RATE_LIMITS = {
   /** Prévia pública e aceite de convite: por IP. */
   invitationPreview: { limit: 30, ttl: MINUTE },
   invitationAccept: { limit: 10, ttl: MINUTE },
+  /** Apresentação do Hub (`POST /hub-enrollments`, pública): por IP. */
+  hubEnroll: { limit: 20, ttl: HOUR },
+  /** Consulta do status da apresentação (`GET /hub-enrollments/:id/status`, pública): por IP. */
+  hubStatus: { limit: 120, ttl: HOUR },
+  /**
+   * Autenticação do Hub (`POST /hub-auth/challenge` e `POST /hub-auth/token`, públicas): por IP, UM orçamento para
+   * as duas rotas (grupo `hub-auth`, veja `ThrottleGroup`). Um Hub faz um par a cada 15 min (8 de 60 por hora).
+   */
+  hubAuth: { limit: 60, ttl: HOUR },
+  /** Reivindicação de Hub (`POST /hubs/claim`): por usuário (o código de 8 dígitos não pode ser adivinhado). */
+  hubClaim: { limit: 10, ttl: HOUR },
+  /** Pedido de vínculo por código (`POST /hubs/link-requests`): por usuário. */
+  hubLinkRequest: { limit: 10, ttl: HOUR },
+  /** Código de vínculo pedido pelo Hub (`POST /hub/link-codes`): por Hub. */
+  hubLinkCode: { limit: 30, ttl: HOUR },
+  /** Sincronização do Hub (`GET /hub/sync`): por Hub. */
+  hubSync: { limit: 120, ttl: HOUR },
 } as const;
 
 /** Nome do throttler extra, cobrado só nas rotas marcadas com @ThrottleByEmail(). */

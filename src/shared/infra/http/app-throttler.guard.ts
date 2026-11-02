@@ -4,6 +4,7 @@ import { ThrottlerGuard } from '@nestjs/throttler';
 import { createHash } from 'node:crypto';
 import type { ThrottlerLimitDetail } from '@nestjs/throttler';
 import { REAUTH_THROTTLER } from './rate-limits.js';
+import { THROTTLE_GROUP_KEY } from './throttling.decorators.js';
 
 const DEFAULT_LIMIT_METADATA = 'THROTTLER:LIMITdefault';
 
@@ -15,6 +16,7 @@ const DEFAULT_LIMIT_METADATA = 'THROTTLER:LIMITdefault';
  * The `default` throttler is one budget per IP in total: unless the route sets its own `@Throttle`
  * limit, its key is the tracker alone (the library default also mixes in class and handler).
  * The `reauth` throttler is one budget per user across all its routes: key = tracker alone, always.
+ * A route marked with @ThrottleGroup(group, ...) shares its `default` counter with the other routes of the group.
  */
 @Injectable()
 export class AppThrottlerGuard extends ThrottlerGuard {
@@ -25,6 +27,15 @@ export class AppThrottlerGuard extends ThrottlerGuard {
   ): string {
     if (name === REAUTH_THROTTLER) {
       return createHash('sha256').update(`reauth-${suffix}`).digest('hex');
+    }
+    const group = this.reflector.get<string | undefined>(
+      THROTTLE_GROUP_KEY,
+      context.getHandler(),
+    );
+    if (name === 'default' && group) {
+      return createHash('sha256')
+        .update(`group-${group}-${suffix}`)
+        .digest('hex');
     }
     if (name === 'default' && !this.hasOwnDefaultLimit(context)) {
       return createHash('sha256').update(`global-${suffix}`).digest('hex');
