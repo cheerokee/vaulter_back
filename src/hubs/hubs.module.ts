@@ -26,6 +26,8 @@ import { RenameHubUseCase } from './application/rename-hub.use-case.js';
 import { RequestHubLinkUseCase } from './application/request-hub-link.use-case.js';
 import { RevokeRoomUseCase } from './application/revoke-room.use-case.js';
 import { UnlinkHubOrganizationUseCase } from './application/unlink-hub-organization.use-case.js';
+import { SyncHubUseCase } from './application/sync-hub.use-case.js';
+import { HubSyncReader } from './application/ports/hub-sync-reader.js';
 import { AuthenticateHubTokenUseCase } from './application/authenticate-hub-token.use-case.js';
 import { ClaimHubUseCase } from './application/claim-hub.use-case.js';
 import { EnrollHubUseCase } from './application/enroll-hub.use-case.js';
@@ -55,6 +57,8 @@ import { HubSpaceTypeormEntity } from './infra/db/hub-space.entity.js';
 import { HubSpaceTypeormRepository } from './infra/db/hub-space.typeorm-repository.js';
 import { HubTypeormEntity } from './infra/db/hub.entity.js';
 import { HubTypeormRepository } from './infra/db/hub.typeorm-repository.js';
+import { HubSyncSqlReader } from './infra/db/hub-sync.sql-reader.js';
+import { HubSyncController } from './infra/http/hub-sync.controller.js';
 import { HubTokenGuard } from './infra/http/hub-token.guard.js';
 import { LinkCodeTypeormRepository } from './infra/db/link-code.typeorm-repository.js';
 
@@ -73,6 +77,7 @@ import { LinkCodeTypeormRepository } from './infra/db/link-code.typeorm-reposito
       HubSpaceTypeormEntity,
     ]),
   ],
+  controllers: [HubSyncController],
   providers: [
     // Guard global de rotas @HubAuth(). O HubsModule vem antes do ThrottlingModule no AppModule: o token de Hub é
     // conferido antes do rate limit (que, por Hub, lê `request.hub`).
@@ -92,6 +97,8 @@ import { LinkCodeTypeormRepository } from './infra/db/link-code.typeorm-reposito
     { provide: HubRoleRepository, useClass: HubRoleTypeormRepository },
     { provide: HubSignatureVerifier, useClass: SodiumHubSignatureVerifier },
     { provide: HubCodeHasher, useClass: SodiumHubCodeHasher },
+    // Leitura da sincronização: projeção só de leitura sobre tabelas de outros módulos (veja o cabeçalho do arquivo).
+    { provide: HubSyncReader, useClass: HubSyncSqlReader },
     EnrollHubUseCase,
     EnrollmentStatusUseCase,
     ClaimHubUseCase,
@@ -120,6 +127,7 @@ import { LinkCodeTypeormRepository } from './infra/db/link-code.typeorm-reposito
     RequestHubLinkUseCase,
     RevokeRoomUseCase,
     UnlinkHubOrganizationUseCase,
+    SyncHubUseCase,
   ],
   // Para as próximas tarefas (sincronização, controllers) e módulos: checagem de acesso ao Hub.
   exports: [HubAccess],

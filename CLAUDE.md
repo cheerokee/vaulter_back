@@ -445,6 +445,16 @@ nenhum deles importa `hubs`.
   apresentação, dá `hub_owner` ao dono e `hub_room` à Sala, vincula a organização pessoal (sempre aprovada) e audita
   `hub.claimed` na organização pessoal. Hub ou apresentação inexistente é verificado contra a chave falsa única
   (`HubSignatureVerifier.decoyPublicKey()`: um par Ed25519 aleatório por instância, ponto válido).
+- **Sincronização** (`GET /hub/sync?since=&limit=`, `SyncHubUseCase` + `HubSyncSqlReader`; contrato completo no
+  comentário do caso de uso): `{ items: [{ type, syncVersion, deleted, data }], nextSince }`, `limit` 1..500 (padrão
+  500). O leitor é uma **exceção documentada** à fronteira entre módulos: projeção só de leitura, em SQL, sobre as
+  tabelas de identity/organizations/spaces (mudou coluna lá, atualize as consultas). Transação `REPEATABLE READ, READ
+  ONLY` (um snapshot só); organizações aprovadas lidas de `hub_organization` no contexto do Hub e cada uma lida em
+  sequência com `{ organizationId, hubId }`. `member` é por (organização, pessoa), versão = maior `sync_version` entre
+  vínculo, usuário e papéis embutidos — um mesmo valor pode estar em vários itens; a página nunca parte esse grupo.
+  Lápide leva só as chaves. **Cascata local do Hub:** vínculo revogado (lápide de `hub_organization`) ou `hub_space`
+  com lápide = o Hub apaga localmente o que dependia dele; **entrada no escopo** (vínculo aprovado ou `hub_space` vivo
+  que o Hub não tinha) = o Hub refaz a sincronização desde `since=0` (as linhas mantêm o `sync_version` antigo).
 
 ## Banco de dados (TypeORM + migrations)
 - **TypeORM 1.x** + `@nestjs/typeorm`, driver `pg`. Config de conexão em `src/database/typeorm.options.ts`,
