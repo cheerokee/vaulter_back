@@ -1,5 +1,4 @@
 import type { INestApplication } from '@nestjs/common';
-import { randomBytes } from 'node:crypto';
 import { AddHubSpaceUseCase } from '../../src/hubs/application/add-hub-space.use-case.js';
 import { ApproveHubLinkUseCase } from '../../src/hubs/application/approve-hub-link.use-case.js';
 import { AssignHubRoleUseCase } from '../../src/hubs/application/assign-hub-role.use-case.js';
@@ -18,10 +17,11 @@ import { RevokeRoomUseCase } from '../../src/hubs/application/revoke-room.use-ca
 import { UnlinkHubOrganizationUseCase } from '../../src/hubs/application/unlink-hub-organization.use-case.js';
 import { newId } from '../../src/shared/domain/id.js';
 import { adminDataSource } from '../setup/test-app.js';
-import { openSpaceKey, sealSpaceKey } from './client-crypto.js';
+import { openSpaceKey } from './client-crypto.js';
+import { enrollBody } from './hub-client.js';
 import {
   createHubIdentity,
-  signEnrollment,
+  sealRoomGrants,
   type HubIdentity,
 } from './hub-crypto.js';
 
@@ -41,17 +41,9 @@ export function hubsKit(getApp: () => INestApplication) {
   /** Enrolls a fresh device identity and claims it for `owner`. */
   const claim = async (owner: Who, name = 'Sala'): Promise<ClaimedHub> => {
     const identity = await createHubIdentity();
-    const nonce = randomBytes(16).toString('base64url');
-    const timestamp = new Date().toISOString();
     const { claimCode } = await app()
       .get(EnrollHubUseCase)
-      .execute({
-        signingPublicKey: identity.signingPublicKey,
-        encryptionPublicKey: identity.encryptionPublicKey,
-        nonce,
-        timestamp,
-        signature: await signEnrollment(identity, { nonce, timestamp }),
-      });
+      .execute(await enrollBody(identity));
     const view = await app()
       .get(ClaimHubUseCase)
       .execute(actor(owner), { claimCode, name });
@@ -105,15 +97,7 @@ export function hubsKit(getApp: () => INestApplication) {
           spaceId,
           ...(roleKey ? { roleKey } : {}),
           recoveryPublicKey: kitPublicKey,
-          grants: await Promise.all(
-            keys.map(async (key, i) => ({
-              version: i + 1,
-              wrappedKey: await sealSpaceKey(
-                key,
-                hub.identity.encryptionPublicKey,
-              ),
-            })),
-          ),
+          grants: await sealRoomGrants(keys, hub.identity.encryptionPublicKey),
         }),
     revokeRoom: (u: Who, hubId: string, spaceId: string) =>
       app().get(RevokeRoomUseCase).execute(actor(u), { hubId, spaceId }),

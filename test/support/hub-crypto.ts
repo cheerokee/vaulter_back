@@ -1,4 +1,5 @@
 import { getSodium } from '../../src/shared/infra/crypto/sodium.js';
+import { sealSpaceKey } from './client-crypto.js';
 import {
   HUB_LABELS,
   hubSignedBytes,
@@ -74,4 +75,20 @@ export function signAuth(
   fields: { hubId: string; challenge: string },
 ): Promise<string> {
   return signHubMessage(identity, HUB_LABELS.auth, fields);
+}
+
+/**
+ * What the owner's app sends to open a space in the Room: every key version (keys[i] = version i + 1) sealed for the
+ * hub's encryption public key.
+ */
+export function sealRoomGrants(
+  keys: Uint8Array[],
+  hubEncryptionPublicKey: string,
+): Promise<{ version: number; wrappedKey: string }[]> {
+  return Promise.all(
+    keys.map(async (key, i) => ({
+      version: i + 1,
+      wrappedKey: await sealSpaceKey(key, hubEncryptionPublicKey),
+    })),
+  );
 }

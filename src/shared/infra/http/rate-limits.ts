@@ -31,7 +31,7 @@ export const RATE_LIMITS = {
   hubStatus: { limit: 120, ttl: HOUR },
   /**
    * Autenticação do Hub (`POST /hub-auth/challenge` e `POST /hub-auth/token`, públicas): por IP, UM orçamento para
-   * as duas rotas (grupo `hub-auth`, veja `ThrottleGroup`). Um Hub faz um par a cada 15 min (8 de 60 por hora).
+   * as duas rotas (grupo `THROTTLE_GROUPS.hubAuth`, veja `ThrottleGroup`). Um Hub faz um par a cada 15 min (8 de 60 por hora).
    */
   hubAuth: { limit: 60, ttl: HOUR },
   /** Reivindicação de Hub (`POST /hubs/claim`): por usuário (o código de 8 dígitos não pode ser adivinhado). */
@@ -49,3 +49,11 @@ export const EMAIL_THROTTLER = 'email';
 
 /** Nome do throttler de reautenticação, cobrado só nas rotas marcadas com @ThrottleReauth(). */
 export const REAUTH_THROTTLER = 'reauth';
+
+/**
+ * Contadores divididos entre rotas (`@ThrottleGroup`): UMA constante por grupo, com nome e limite, usada em todas as
+ * rotas do grupo (o decorator recusa o mesmo grupo com limites diferentes).
+ */
+export const THROTTLE_GROUPS = {
+  hubAuth: { name: 'hub-auth', ...RATE_LIMITS.hubAuth },
+} as const;

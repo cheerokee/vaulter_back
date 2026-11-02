@@ -52,3 +52,20 @@ export function hubSpaceResponse(v: HubSpaceView) {
     addedByUserId: v.addedByUserId,
   };
 }
+
+/** The Room grant: who (the hub), where (the space) and with which space role. Never the sealed copies. */
+export function roomResponse(v: {
+  hubId: string;
+  spaceId: string;
+  roleKey: string;
+}) {
+  return { hubId: v.hubId, spaceId: v.spaceId, roleKey: v.roleKey };
+}
+
+export function hubRoleResponse(v: {
+  hubId: string;
+  userId: string;
+  roleKey: string;
+}) {
+  return { hubId: v.hubId, userId: v.userId, roleKey: v.roleKey };
+}

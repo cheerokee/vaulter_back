@@ -1,6 +1,6 @@
 import { DomainValidationError } from './errors.js';
 import { newId } from './id.js';
-import { decodeCursor, encodeCursor } from './pagination.js';
+import { decodeCursor, encodeCursor, pageFrom } from './pagination.js';
 
 describe('pagination cursor', () => {
   it('round-trips an id', () => {
@@ -15,5 +15,23 @@ describe('pagination cursor', () => {
   it('rejects a cursor that is not a uuid', () => {
     const cursor = Buffer.from('hello').toString('base64url');
     expect(() => decodeCursor(cursor)).toThrow(DomainValidationError);
+  });
+});
+
+describe('pageFrom', () => {
+  it('cuts limit + 1 rows to limit and points the cursor at the last item', () => {
+    const [a, b, c] = [newId(), newId(), newId()];
+    expect(pageFrom([a, b, c], 2, (x) => x)).toEqual({
+      items: [a, b],
+      nextCursor: encodeCursor(b),
+    });
+    expect(pageFrom([a, b], 2, (x) => x)).toEqual({
+      items: [a, b],
+      nextCursor: null,
+    });
+    expect(pageFrom([], 2, (x: string) => x)).toEqual({
+      items: [],
+      nextCursor: null,
+    });
   });
 });

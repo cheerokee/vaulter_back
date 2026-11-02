@@ -31,6 +31,29 @@ const fail = (what: string, res: request.Response): never => {
   );
 };
 
+/** Body of `POST /hub-enrollments`, signed with `hub-enroll-v1` (any field overridable to forge a request). */
+export async function enrollBody(
+  identity: HubIdentity,
+  over: { nonce?: string; timestamp?: string; signature?: string } = {},
+): Promise<{
+  signingPublicKey: string;
+  encryptionPublicKey: string;
+  nonce: string;
+  timestamp: string;
+  signature: string;
+}> {
+  const nonce = over.nonce ?? randomBytes(16).toString('base64url');
+  const timestamp = over.timestamp ?? new Date().toISOString();
+  return {
+    signingPublicKey: identity.signingPublicKey,
+    encryptionPublicKey: identity.encryptionPublicKey,
+    nonce,
+    timestamp,
+    signature:
+      over.signature ?? (await signEnrollment(identity, { nonce, timestamp })),
+  };
+}
+
 /**
  * The Hub device over HTTP, with the REAL hub crypto (docs/crypto/hub-identity.md): generates its keys, enrolls,
  * polls the enrollment status with signed headers, authenticates (challenge + token), asks for link codes and
@@ -40,23 +63,6 @@ const fail = (what: string, res: request.Response): never => {
 export function hubClient(getApp: () => INestApplication) {
   const http = () => request(getApp().getHttpServer());
   const bearer = (token: string) => ({ Authorization: `Bearer ${token}` });
-
-  const enrollBody = async (
-    identity: HubIdentity,
-    over: { nonce?: string; timestamp?: string; signature?: string } = {},
-  ) => {
-    const nonce = over.nonce ?? randomBytes(16).toString('base64url');
-    const timestamp = over.timestamp ?? new Date().toISOString();
-    return {
-      signingPublicKey: identity.signingPublicKey,
-      encryptionPublicKey: identity.encryptionPublicKey,
-      nonce,
-      timestamp,
-      signature:
-        over.signature ??
-        (await signEnrollment(identity, { nonce, timestamp })),
-    };
-  };
 
   const enroll = async (
     identity: HubIdentity,

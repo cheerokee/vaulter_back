@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { validate } from 'uuid';
-import { DataSource } from 'typeorm';
+import { DataSource, MoreThan } from 'typeorm';
+import type { KeysetSlice } from '../../../shared/domain/pagination.js';
 import { runInOrganizationScope } from '../../../shared/infra/db/organization-scope.js';
 import { currentManager } from '../../../shared/infra/db/unit-of-work.js';
 import {
@@ -27,6 +28,9 @@ function toRef(r: HubSpaceTypeormEntity): HubSpaceRef {
     addedByUserId: r.addedByUserId,
   };
 }
+
+const spaceAfter = (slice?: KeysetSlice) =>
+  slice?.after ? { spaceId: MoreThan(slice.after) } : {};
 
 @Injectable()
 export class HubSpaceTypeormRepository extends HubSpaceRepository {
@@ -160,6 +164,7 @@ export class HubSpaceTypeormRepository extends HubSpaceRepository {
   async listInOrganization(
     hubId: string,
     organizationId: string,
+    slice?: KeysetSlice,
   ): Promise<HubSpaceRef[]> {
     if (!validate(hubId) || !validate(organizationId)) return [];
     const rows = await runInOrganizationScope(
@@ -167,18 +172,23 @@ export class HubSpaceTypeormRepository extends HubSpaceRepository {
       organizationId,
       (m) =>
         m.getRepository(HubSpaceTypeormEntity).find({
-          where: { hubId, organizationId },
+          where: { hubId, organizationId, ...spaceAfter(slice) },
           order: { spaceId: 'ASC' },
+          ...(slice ? { take: slice.limit } : {}),
         }),
     );
     return rows.map(toRef);
   }
 
-  async list(hubId: string): Promise<HubSpaceRef[]> {
+  async list(hubId: string, slice?: KeysetSlice): Promise<HubSpaceRef[]> {
     if (!validate(hubId)) return [];
     const rows = await currentManager(this.dataSource)
       .getRepository(HubSpaceTypeormEntity)
-      .find({ where: { hubId }, order: { spaceId: 'ASC' } });
+      .find({
+        where: { hubId, ...spaceAfter(slice) },
+        order: { spaceId: 'ASC' },
+        ...(slice ? { take: slice.limit } : {}),
+      });
     return rows.map(toRef);
   }
 }

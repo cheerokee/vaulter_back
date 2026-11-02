@@ -7,12 +7,17 @@ import {
   Param,
   Post,
   Put,
+  Query,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import {
   type AuthContext,
   CurrentAuth,
 } from '../../../shared/infra/http/auth.decorators.js';
+import {
+  CursorPaginationQuery,
+  pageResponse,
+} from '../../../shared/infra/http/cursor-pagination.query.js';
 import { uuidPipe } from '../../../shared/infra/http/uuid-pipe.js';
 import { AddHubSpaceUseCase } from '../../application/add-hub-space.use-case.js';
 import { GrantRoomUseCase } from '../../application/grant-room.use-case.js';
@@ -20,7 +25,7 @@ import { ListHubSpacesUseCase } from '../../application/list-hub-spaces.use-case
 import { RemoveHubSpaceUseCase } from '../../application/remove-hub-space.use-case.js';
 import { RevokeRoomUseCase } from '../../application/revoke-room.use-case.js';
 import { AddHubSpaceDto, GrantRoomDto } from './dto/hub.dto.js';
-import { hubSpaceResponse } from './dto/responses.js';
+import { hubSpaceResponse, roomResponse } from './dto/responses.js';
 
 // Espaços no Hub e a Sala. Só cópias trancadas passam por aqui: o backend nunca vê a chave do espaço em claro.
 // Rotas internas do app (sem a tag `public`), só token de usuário.
@@ -41,10 +46,15 @@ export class HubSpacesController {
   async doList(
     @CurrentAuth() auth: AuthContext,
     @Param('id', uuidPipe('id')) id: string,
+    @Query() query: CursorPaginationQuery,
   ) {
-    return {
-      items: (await this.list.execute(auth, id)).map(hubSpaceResponse),
-    };
+    return pageResponse(
+      await this.list.execute(auth, id, {
+        cursor: query.cursor,
+        limit: query.limit,
+      }),
+      hubSpaceResponse,
+    );
   }
 
   /** Owner (member of the space) or a Gestor of the space in a linked organization. */
@@ -81,7 +91,7 @@ export class HubSpacesController {
     @Param('spaceId', uuidPipe('spaceId')) spaceId: string,
     @Body() dto: GrantRoomDto,
   ) {
-    return this.grantRoom.execute(auth, {
+    const granted = await this.grantRoom.execute(auth, {
       hubId: id,
       spaceId,
       ...(dto.roleKey !== undefined ? { roleKey: dto.roleKey } : {}),
@@ -91,6 +101,7 @@ export class HubSpacesController {
         wrappedKey: g.wrappedKey,
       })),
     });
+    return roomResponse(granted);
   }
 
   /** Owner or Gestor takes the space out of the Room: tombstones the copies and the role, rotation pending. */

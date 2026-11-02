@@ -442,7 +442,10 @@ nenhum deles importa `hubs`.
   ausente/inválida e apresentação inexistente = o mesmo 404; só o timestamp dá 422). O status lê `X-Hub-Signature` e
   `X-Hub-Timestamp`. O token de Hub sai como `{ accessToken, expiresAt }`. O código de reivindicação só aparece na
   resposta da apresentação; a chave de assinatura do Hub não sai em nenhuma resposta. `DELETE /hubs/:id/roles/:userId`
-  é 204 com ou sem papel (idempotente). DTOs: códigos `^[0-9]{8}$`, chaves 43 caracteres base64url, assinatura 86,
+  é 204 com ou sem papel (idempotente). Listas (`GET /hubs`, `GET /hubs/:id/organizations`, `GET /hubs/:id/spaces`)
+  são por cursor (`pageResponse`; vínculos em ordem de id da organização, espaços em ordem de id do espaço, fundindo
+  as organizações de quem não é dono; helper `pageFrom` em `shared/domain/pagination.ts`). Toda resposta passa por um
+  mapper explícito (`dto/responses.ts`). DTOs: códigos `^[0-9]{8}$`, chaves 43 caracteres base64url, assinatura 86,
   nonce 22, desafio 43, cópia trancada 108 (formatos próprios do módulo em `dto/hub.dto.ts`).
 - **Rotas de Hub:** `@HubAuth()` (`src/hubs/infra/http/hub-auth.decorators.ts`) marca a rota como `@Public()` para o
   guard de usuário e o `HubTokenGuard` (APP_GUARD do `HubsModule`, que vem **antes** do `ThrottlingModule`) exige o
@@ -614,8 +617,11 @@ Os valores do `.env.example` para os segredos são **só de desenvolvimento**; p
   | `POST /hubs/link-requests` | 10/h por usuário |
   | `POST /hub/link-codes` | 30/h por Hub (`hubIdTracker`) |
   | `GET /hub/sync` | 120/h por Hub (`hubIdTracker`) |
-  Rota com `@Throttle` próprio tem contador próprio (por rota); `@ThrottleGroup(grupo, limite, tracker?)`
-  (`throttling.decorators.ts`) faz rotas dividirem um contador (chave = grupo + tracker, sem a rota). Limite por Hub usa
+  Rota com `@Throttle` próprio tem contador próprio (por rota); `@ThrottleGroup(THROTTLE_GROUPS.x, tracker?)`
+  (`throttling.decorators.ts`) faz rotas dividirem um contador (chave = grupo + tracker, sem a rota); cada grupo é
+  UMA constante com nome e limite em `THROTTLE_GROUPS` (`rate-limits.ts`), e o decorator recusa o mesmo grupo com
+  limites diferentes. O tracker padrão (da biblioteca) já agrupa IPv6 no /64, como o `ipTracker` (fixado em
+  `app-throttler.guard.spec.ts`). Limite por Hub usa
   `hubIdTracker` (`src/hubs/infra/http/hub-id.tracker.ts`, lê `request.hub`): o `HubTokenGuard` precisa rodar antes do
   throttler (`HubsModule` antes do `ThrottlingModule`; fixado por `test/hubs/rate-limit.e2e-spec.ts`). Os contadores por e-mail não vão em cabeçalho.
   **Reautenticação:** toda rota que confere a prova da senha atual (`currentAuthProof`) leva `@ThrottleReauth()`

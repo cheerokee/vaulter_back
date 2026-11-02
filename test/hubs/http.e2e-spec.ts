@@ -9,9 +9,13 @@ import {
   createTestApp,
   resetDatabase,
 } from '../setup/test-app.js';
-import { generateSpaceKey, sealSpaceKey } from '../support/client-crypto.js';
+import { generateSpaceKey } from '../support/client-crypto.js';
 import { hubClient, type SyncItem } from '../support/hub-client.js';
-import { createHubIdentity, signHubMessage } from '../support/hub-crypto.js';
+import {
+  createHubIdentity,
+  sealRoomGrants,
+  signHubMessage,
+} from '../support/hub-crypto.js';
 import {
   type ClaimedHub,
   hubDeregistered,
@@ -92,12 +96,7 @@ describe('hubs over HTTP (e2e)', () => {
       .set(as(owner))
       .send({
         recoveryPublicKey: kitPublicKey,
-        grants: await Promise.all(
-          keys.map(async (key, i) => ({
-            version: i + 1,
-            wrappedKey: await sealSpaceKey(key, hubKey),
-          })),
-        ),
+        grants: await sealRoomGrants(keys, hubKey),
       });
   };
   /**
@@ -1233,6 +1232,109 @@ describe('hubs over HTTP (e2e)', () => {
         await c.http().get(`/hubs/${x.hub.hubId}`).set(as(ana)),
         404,
         'hub-not-found',
+      );
+    }, 60_000);
+  });
+
+  describe('hub lists are cursor-paginated', () => {
+    it('links and spaces page by cursor, for the owner and for a linked member across organizations', async () => {
+      const hub = await onboard(olivia, 'Pages');
+      const orgs = [
+        await org(olivia, 'Pages 1', [ana]),
+        await org(olivia, 'Pages 2', [ana]),
+      ];
+      const spaceIds: string[] = [];
+      for (const o of orgs) {
+        await expectStatus(
+          c
+            .http()
+            .post(`/hubs/${hub.hubId}/organizations`)
+            .set(as(olivia))
+            .send({ organizationId: o.orgId }),
+          201,
+        );
+      }
+      for (const o of [orgs[0]!, orgs[1]!, orgs[1]!]) {
+        const sp = await s.create(
+          olivia,
+          o.orgId,
+          o.kit.publicKey,
+          `P-${spaceIds.length}`,
+        );
+        expect(sp.res.status).toBe(201);
+        await expectStatus(
+          s.addMember(olivia.token, sp.spaceId, recipientOf(ana), [sp.key]),
+          201,
+        );
+        await expectStatus(
+          c
+            .http()
+            .post(`/hubs/${hub.hubId}/spaces`)
+            .set(as(olivia))
+            .send({ spaceId: sp.spaceId }),
+          201,
+        );
+        spaceIds.push(sp.spaceId);
+      }
+      /** Follows nextCursor with limit=1; every page has one item and the cursor ends as null. */
+      const pages = async (u: KeyedUser, path: string, key: string) => {
+        const seen: string[] = [];
+        let cursor: string | null = null;
+        for (let i = 0; i < 10; i++) {
+          const res = await expectStatus(
+            c
+              .http()
+              .get(path)
+              .query(cursor ? { limit: 1, cursor } : { limit: 1 })
+              .set(as(u)),
+            200,
+          );
+          const body = res.body as {
+            items: Record<string, string>[];
+            nextCursor: string | null;
+          };
+          seen.push(...body.items.map((x) => x[key]!));
+          if (!body.nextCursor) return seen;
+          expect(body.items).toHaveLength(1);
+          cursor = body.nextCursor;
+        }
+        throw new Error('too many pages');
+      };
+      // dono: a organização pessoal e as duas vinculadas, em ordem de id
+      const links = await pages(
+        olivia,
+        `/hubs/${hub.hubId}/organizations`,
+        'organizationId',
+      );
+      expect(links).toHaveLength(3);
+      expect(links).toEqual([...links].sort());
+      expect(links).toEqual(expect.arrayContaining(orgs.map((o) => o.orgId)));
+      // dono e Ana (membro das duas organizações): os três espaços, em ordem de id, cruzando as organizações
+      const sorted = [...spaceIds].sort();
+      expect(
+        await pages(olivia, `/hubs/${hub.hubId}/spaces`, 'spaceId'),
+      ).toEqual(sorted);
+      expect(await pages(ana, `/hubs/${hub.hubId}/spaces`, 'spaceId')).toEqual(
+        sorted,
+      );
+      // cursor inválido
+      expectProblem(
+        await c
+          .http()
+          .get(`/hubs/${hub.hubId}/spaces`)
+          .query({ cursor: 'nope' })
+          .set(as(olivia)),
+        422,
+        'invalid-cursor',
+      );
+      expectProblem(
+        await c
+          .http()
+          .get(`/hubs/${hub.hubId}/organizations`)
+          .query({ limit: 101 })
+          .set(as(olivia)),
+        422,
+        'validation-failed',
       );
     }, 60_000);
   });

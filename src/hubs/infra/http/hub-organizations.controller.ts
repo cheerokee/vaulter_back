@@ -6,6 +6,7 @@ import {
   HttpCode,
   Param,
   Post,
+  Query,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { Throttle } from '@nestjs/throttler';
@@ -13,6 +14,10 @@ import {
   type AuthContext,
   CurrentAuth,
 } from '../../../shared/infra/http/auth.decorators.js';
+import {
+  CursorPaginationQuery,
+  pageResponse,
+} from '../../../shared/infra/http/cursor-pagination.query.js';
 import { RATE_LIMITS } from '../../../shared/infra/http/rate-limits.js';
 import { userIdTracker } from '../../../shared/infra/http/user-id.tracker.js';
 import { uuidPipe } from '../../../shared/infra/http/uuid-pipe.js';
@@ -73,10 +78,15 @@ export class HubOrganizationsController {
   async doList(
     @CurrentAuth() auth: AuthContext,
     @Param('id', uuidPipe('id')) id: string,
+    @Query() query: CursorPaginationQuery,
   ) {
-    return {
-      items: (await this.list.execute(auth, id)).map(hubLinkResponse),
-    };
+    return pageResponse(
+      await this.list.execute(auth, id, {
+        cursor: query.cursor,
+        limit: query.limit,
+      }),
+      hubLinkResponse,
+    );
   }
 
   /** The owner links an organization they belong to (owner consent given; the org policy decides the rest). */

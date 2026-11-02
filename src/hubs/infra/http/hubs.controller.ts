@@ -31,7 +31,11 @@ import { ListHubsUseCase } from '../../application/list-hubs.use-case.js';
 import { RemoveHubRoleUseCase } from '../../application/remove-hub-role.use-case.js';
 import { RenameHubUseCase } from '../../application/rename-hub.use-case.js';
 import { AssignHubRoleDto, ClaimHubDto, RenameHubDto } from './dto/hub.dto.js';
-import { hubResponse, hubWithRoleResponse } from './dto/responses.js';
+import {
+  hubResponse,
+  hubRoleResponse,
+  hubWithRoleResponse,
+} from './dto/responses.js';
 
 // Rotas internas do app (sem a tag `public`). Só token de usuário: o de Hub é recusado pelo guard de usuário.
 // Hub que a pessoa não vê: 404 `hub-not-found`; ação sem permissão num Hub que ela vê: 403.
@@ -118,11 +122,13 @@ export class HubsController {
     @Param('userId', uuidPipe('userId')) userId: string,
     @Body() dto: AssignHubRoleDto,
   ) {
-    return this.assignRole.execute(auth, {
-      hubId: id,
-      userId,
-      roleKey: dto.roleKey,
-    });
+    return hubRoleResponse(
+      await this.assignRole.execute(auth, {
+        hubId: id,
+        userId,
+        roleKey: dto.roleKey,
+      }),
+    );
   }
 
   /**

@@ -13,19 +13,47 @@ export const THROTTLE_REAUTH_KEY = 'throttleReauth';
 export const THROTTLE_GROUP_KEY = 'throttleGroup';
 
 /**
- * Own `default` limit shared by every route marked with the same `group`: the guard keys the counter by the group
+ * A shared counter: its name and its ONE limit. Define each group once, as a constant (see `THROTTLE_GROUPS` in
+ * rate-limits.ts), and mark every route of the group with that same constant.
+ */
+export type ThrottleGroupSpec = {
+  readonly name: string;
+  readonly limit: number;
+  readonly ttl: number;
+};
+
+// Limit of each group seen so far: two routes of one group with different limits would make the shared counter
+// depend on which route was hit last, so it fails at class definition time (i.e. at startup and in any test).
+const groupLimits = new Map<string, string>();
+
+/**
+ * Own `default` limit shared by every route marked with the same group: the guard keys the counter by the group
  * and the tracker, without the route (e.g. the hub challenge and token routes: one budget per IP for both).
- * `getTracker` omitted = the default tracker (`req.ip`).
+ * `getTracker` omitted = the default tracker. Throws if the group was already used with another limit or ttl.
  */
 export const ThrottleGroup = (
-  group: string,
-  limit: { limit: number; ttl: number },
+  group: ThrottleGroupSpec,
   getTracker?: ThrottlerGetTrackerFunction,
-): MethodDecorator =>
-  applyDecorators(
-    SetMetadata(THROTTLE_GROUP_KEY, group),
-    Throttle({ default: { ...limit, ...(getTracker ? { getTracker } : {}) } }),
+): MethodDecorator => {
+  const limits = `${group.limit}/${group.ttl}`;
+  const seen = groupLimits.get(group.name);
+  if (seen !== undefined && seen !== limits) {
+    throw new Error(
+      `ThrottleGroup "${group.name}" used with two limits (${seen} and ${limits}); use one THROTTLE_GROUPS constant`,
+    );
+  }
+  groupLimits.set(group.name, limits);
+  return applyDecorators(
+    SetMetadata(THROTTLE_GROUP_KEY, group.name),
+    Throttle({
+      default: {
+        limit: group.limit,
+        ttl: group.ttl,
+        ...(getTracker ? { getTracker } : {}),
+      },
+    }),
   );
+};
 
 /**
  * Adds the per-e-mail counter to a route (the `email` throttler is skipped everywhere else).

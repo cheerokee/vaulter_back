@@ -1,3 +1,4 @@
+import type { KeysetSlice } from '../../shared/domain/pagination.js';
 export type HubSpaceRef = {
   hubId: string;
   spaceId: string;
@@ -35,10 +36,12 @@ export abstract class HubSpaceRepository {
     hubId: string,
     organizationId: string,
   ): Promise<string[]>;
-  abstract list(hubId: string): Promise<HubSpaceRef[]>;
-  /** Live rows of the hub in `organizationId`, read in the organization scope. */
+  /** Live rows of the hub in the ambient context, by space id; `slice` = only ids after `after`, at most `limit`. */
+  abstract list(hubId: string, slice?: KeysetSlice): Promise<HubSpaceRef[]>;
+  /** Live rows of the hub in `organizationId`, read in the organization scope, by space id (`slice` as in `list`). */
   abstract listInOrganization(
     hubId: string,
     organizationId: string,
+    slice?: KeysetSlice,
   ): Promise<HubSpaceRef[]>;
 }

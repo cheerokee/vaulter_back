@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { validate } from 'uuid';
-import { DataSource } from 'typeorm';
+import { DataSource, MoreThan } from 'typeorm';
+import type { KeysetSlice } from '../../../shared/domain/pagination.js';
 import { runInOrganizationScope } from '../../../shared/infra/db/organization-scope.js';
 import {
   currentManager,
@@ -101,11 +102,18 @@ export class HubOrganizationTypeormRepository extends HubOrganizationRepository 
     );
   }
 
-  async list(hubId: string): Promise<HubOrganizationLink[]> {
+  async list(
+    hubId: string,
+    slice?: KeysetSlice,
+  ): Promise<HubOrganizationLink[]> {
     if (!validate(hubId)) return [];
     const rows = await this.repo.find({
-      where: { hubId },
+      where: {
+        hubId,
+        ...(slice?.after ? { organizationId: MoreThan(slice.after) } : {}),
+      },
       order: { organizationId: 'ASC' },
+      ...(slice ? { take: slice.limit } : {}),
     });
     return rows.map((r) => HubOrganizationMapper.toDomain(r));
   }

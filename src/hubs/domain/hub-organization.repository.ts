@@ -1,3 +1,4 @@
+import type { KeysetSlice } from '../../shared/domain/pagination.js';
 import type { HubOrganizationLink } from './hub-organization-link.js';
 
 export abstract class HubOrganizationRepository {
@@ -10,7 +11,11 @@ export abstract class HubOrganizationRepository {
    * (lock order: hub -> link -> space) and refuses a missing or deregistered hub (`hub-not-found`).
    */
   abstract upsert(link: HubOrganizationLink): Promise<void>;
-  abstract list(hubId: string): Promise<HubOrganizationLink[]>;
+  /** Live links of the hub, by organization id; `slice` = only ids after `after`, at most `limit`. */
+  abstract list(
+    hubId: string,
+    slice?: KeysetSlice,
+  ): Promise<HubOrganizationLink[]>;
   /** Organizations with an approved link. */
   abstract listActiveOrgIds(hubId: string): Promise<string[]>;
   /** SELECT ... FOR UPDATE on the (hub, organization) row. REQUIRES an active unit of work. */
