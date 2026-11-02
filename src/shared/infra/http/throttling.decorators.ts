@@ -5,11 +5,13 @@ import {
   EMAIL_THROTTLER,
   RATE_LIMITS,
   REAUTH_THROTTLER,
+  USER_THROTTLER,
 } from './rate-limits.js';
 import { userIdTracker } from './user-id.tracker.js';
 
 export const THROTTLE_BY_EMAIL_KEY = 'throttleByEmail';
 export const THROTTLE_REAUTH_KEY = 'throttleReauth';
+export const THROTTLE_BY_USER_KEY = 'throttleByUser';
 export const THROTTLE_GROUP_KEY = 'throttleGroup';
 
 /**
@@ -84,5 +86,27 @@ export const ThrottleReauth = (): MethodDecorator =>
     SetMetadata(THROTTLE_REAUTH_KEY, true),
     Throttle({
       [REAUTH_THROTTLER]: { ...RATE_LIMITS.reauth, getTracker: userIdTracker },
+    }),
+  );
+
+/**
+ * Adds a per-user counter to a route, on top of its `default` one (e.g. claim: per IP in `default`, per user here).
+ * The `user` throttler is skipped everywhere else; its key is the user and the route (each route has its own
+ * counter). Needs `request.auth` (the access token guard runs before the throttler).
+ *
+ * Methods only, like ThrottleByEmail (the `skipIf` reads handler metadata).
+ */
+export const ThrottleByUser = (limit: {
+  readonly limit: number;
+  readonly ttl: number;
+}): MethodDecorator =>
+  applyDecorators(
+    SetMetadata(THROTTLE_BY_USER_KEY, true),
+    Throttle({
+      [USER_THROTTLER]: {
+        limit: limit.limit,
+        ttl: limit.ttl,
+        getTracker: userIdTracker,
+      },
     }),
   );

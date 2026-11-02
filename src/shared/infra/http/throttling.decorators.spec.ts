@@ -1,6 +1,9 @@
+import { USER_THROTTLER } from './rate-limits.js';
 import {
+  THROTTLE_BY_USER_KEY,
   THROTTLE_GROUP_KEY,
   ThrottleByEmail,
+  ThrottleByUser,
   ThrottleGroup,
   ThrottleReauth,
 } from './throttling.decorators.js';
@@ -43,5 +46,26 @@ describe('ThrottleGroup', () => {
     expect(() => ThrottleGroup({ ...g })).not.toThrow();
     expect(() => ThrottleGroup({ ...g, limit: 6 })).toThrow(/two limits/);
     expect(() => ThrottleGroup({ ...g, ttl: 1 })).toThrow(/two limits/);
+  });
+});
+
+describe('ThrottleByUser', () => {
+  it('marks the handler and sets the `user` throttler limit, leaving `default` to the route', () => {
+    class Probe {
+      @ThrottleByUser({ limit: 4, ttl: 2000 })
+      a(): void {}
+    }
+    const handler = Object.getOwnPropertyDescriptor(Probe.prototype, 'a')!
+      .value as () => void;
+    expect(Reflect.getMetadata(THROTTLE_BY_USER_KEY, handler)).toBe(true);
+    expect(
+      Reflect.getMetadata(`THROTTLER:LIMIT${USER_THROTTLER}`, handler),
+    ).toBe(4);
+    expect(Reflect.getMetadata(`THROTTLER:TTL${USER_THROTTLER}`, handler)).toBe(
+      2000,
+    );
+    expect(
+      Reflect.getMetadata('THROTTLER:LIMITdefault', handler),
+    ).toBeUndefined();
   });
 });

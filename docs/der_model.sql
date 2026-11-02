@@ -207,8 +207,9 @@ CREATE TABLE hubs (
 -- Apresentação de um Hub que ainda não tem dono (assinada com a chave do Hub, rótulo hub-enroll-v1).
 -- Só do backend (não sincroniza com hub/app). Fora do RLS de organização: ainda não pertence a ninguém; só o
 -- caso de uso de reivindicação a acessa, pelo hash do código. Não é dado de cliente.
--- Postgres: UNIQUE (signing_public_key, nonce) (nonce de uso único) e índice único parcial em claim_code_hash
--- WHERE status = 'pending'. Limpeza das expiradas por rotina.
+-- Postgres: UNIQUE (signing_public_key, nonce) (nonce de uso único) e índices únicos parciais em claim_code_hash
+-- e em signing_public_key WHERE status = 'pending' (uma pendente por chave: a apresentação nova expira a anterior).
+-- Limpeza das expiradas por rotina.
 CREATE TABLE hub_enrollments (
   id CHAR(36) NOT NULL,
   created_at DATETIME NOT NULL,
@@ -224,13 +225,15 @@ CREATE TABLE hub_enrollments (
   PRIMARY KEY (id),
   UNIQUE INDEX uq_hub_enrollments_key_nonce (signing_public_key, nonce),
   UNIQUE INDEX uq_hub_enrollments_claim_code_hash (claim_code_hash) COMMENT 'Postgres: parcial WHERE status = pending',
+  UNIQUE INDEX uq_hub_enrollments_pending_signing_key (signing_public_key) COMMENT 'Postgres: parcial WHERE status = pending (uma pendente por chave)',
   INDEX fk_hub_enrollments_hubs_idx (claimed_hub_id),
   CONSTRAINT fk_hub_enrollments_hubs FOREIGN KEY (claimed_hub_id) REFERENCES hubs (id)
 );
 
--- Código de vínculo pedido pelo Hub (o dono o usa para vincular o Hub a uma organização). Uso único, só hash.
+-- Código de vínculo pedido pelo Hub: outro membro (não o dono), diante do aparelho, o usa para pedir o vínculo de
+-- uma organização sua sem conhecer o hub_id (o dono vincula direto). Uso único, vale 10 min, só hash.
 -- Só do backend (não sincroniza). Fora do RLS de organização. Postgres: índice único parcial em code_hash
--- WHERE used_at IS NULL (vigentes). As três tabelas só do backend não têm DELETE para o runtime: apresentação
+-- WHERE used_at IS NULL AND deleted_at IS NULL (vigentes; o vencido não usado ganha lápide e libera o hash). As três tabelas só do backend não têm DELETE para o runtime: apresentação
 -- vencida vira status = expired; código vencido não usado ganha lápide (libera o hash); desafios usados/vencidos
 -- ficam; a remoção física é pendência.
 CREATE TABLE hub_link_codes (

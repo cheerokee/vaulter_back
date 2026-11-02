@@ -4,9 +4,15 @@ export abstract class EnrollmentRepository {
   /**
    * Throws ConflictError('nonce-reused') when the (signing key, nonce) pair was already presented, and
    * ConflictError('claim-code-collision') when another PENDING enrollment holds the same code hash (the caller
-   * draws a new code and retries).
+   * draws a new code and retries), and ConflictError('enrollment-pending-for-key') when another PENDING enrollment
+   * has the same signing key (a concurrent enrollment won the race: the caller expires it and retries).
    */
   abstract create(enrollment: Enrollment): Promise<void>;
+  /**
+   * Flags every PENDING enrollment of the signing key as expired (one pending per key: the newest presentation
+   * wins). Conditional on `status = 'pending'`: an enrollment being claimed is left alone. Returns how many.
+   */
+  abstract expirePendingOfKey(signingPublicKey: string): Promise<number>;
   abstract findById(enrollmentId: string): Promise<Enrollment | null>;
   abstract findPendingByCodeHash(codeHash: string): Promise<Enrollment | null>;
   /**

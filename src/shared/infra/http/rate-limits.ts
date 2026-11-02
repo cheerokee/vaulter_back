@@ -34,8 +34,13 @@ export const RATE_LIMITS = {
    * as duas rotas (grupo `THROTTLE_GROUPS.hubAuth`, veja `ThrottleGroup`). Um Hub faz um par a cada 15 min (8 de 60 por hora).
    */
   hubAuth: { limit: 60, ttl: HOUR },
-  /** Reivindicação de Hub (`POST /hubs/claim`): por usuário (o código de 8 dígitos não pode ser adivinhado). */
-  hubClaim: { limit: 10, ttl: HOUR },
+  /**
+   * Reivindicação de Hub (`POST /hubs/claim`): dois contadores, como o login. Por IP (`default`, `hubClaimIp`), contra
+   * quem cria várias contas para somar tentativas, e por usuário (throttler `user`, `hubClaimUser`, via
+   * `@ThrottleByUser`), forte: o código de 8 dígitos não pode ser adivinhado.
+   */
+  hubClaimIp: { limit: 30, ttl: HOUR },
+  hubClaimUser: { limit: 10, ttl: HOUR },
   /** Pedido de vínculo por código (`POST /hubs/link-requests`): por usuário. */
   hubLinkRequest: { limit: 10, ttl: HOUR },
   /** Código de vínculo pedido pelo Hub (`POST /hub/link-codes`): por Hub. */
@@ -46,6 +51,12 @@ export const RATE_LIMITS = {
 
 /** Nome do throttler extra, cobrado só nas rotas marcadas com @ThrottleByEmail(). */
 export const EMAIL_THROTTLER = 'email';
+
+/**
+ * Nome do throttler por usuário, cobrado só nas rotas marcadas com @ThrottleByUser() (contador próprio por rota,
+ * chaveado pelo usuário autenticado). Para rotas que já usam o `default` para outro contador (ex.: por IP).
+ */
+export const USER_THROTTLER = 'user';
 
 /** Nome do throttler de reautenticação, cobrado só nas rotas marcadas com @ThrottleReauth(). */
 export const REAUTH_THROTTLER = 'reauth';

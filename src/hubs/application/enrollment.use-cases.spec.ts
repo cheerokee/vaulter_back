@@ -18,6 +18,7 @@ import type { HubRepository } from '../domain/hub.repository.js';
 import { EnrollHubUseCase } from './enroll-hub.use-case.js';
 import { EnrollmentStatusUseCase } from './enrollment-status.use-case.js';
 import type { HubCodeHasher } from './ports/hub-code-hasher.js';
+import type { UnitOfWork } from '../../shared/infra/db/unit-of-work.js';
 
 const NOW = new Date('2026-11-01T12:00:00.000Z');
 const NONCE = Buffer.alloc(16, 7).toString('base64url');
@@ -31,7 +32,9 @@ const enrollments = {
   lockPendingByCodeHash: vi.fn(),
   markClaimed: vi.fn(),
   expireStale: vi.fn(),
+  expirePendingOfKey: vi.fn(),
 };
+const uow = { run: vi.fn((work: () => Promise<unknown>) => work()) };
 const hubs = { findBySigningKey: vi.fn() };
 let codeSeq = 0;
 const codes = {
@@ -52,6 +55,7 @@ beforeEach(() => {
   hubs.findBySigningKey.mockResolvedValue(null);
   enrollments.create.mockResolvedValue(undefined);
   enrollments.expireStale.mockResolvedValue(0);
+  enrollments.expirePendingOfKey.mockResolvedValue(0);
   vi.useFakeTimers({ toFake: ['Date'] });
   vi.setSystemTime(NOW);
 });
@@ -64,6 +68,7 @@ describe('EnrollHubUseCase', () => {
       hubs as unknown as HubRepository,
       verifier,
       codes as unknown as HubCodeHasher,
+      uow as unknown as UnitOfWork,
     );
   const input = async (
     over: Partial<{
@@ -192,6 +197,68 @@ describe('EnrollHubUseCase', () => {
       code: 'claim-code-collision',
     });
     expect(enrollments.create).toHaveBeenCalledTimes(5);
+  });
+});
+
+describe('EnrollHubUseCase: one pending enrollment per signing key', () => {
+  const useCase = () =>
+    new EnrollHubUseCase(
+      enrollments as unknown as EnrollmentRepository,
+      hubs as unknown as HubRepository,
+      verifier,
+      codes as unknown as HubCodeHasher,
+      uow as unknown as UnitOfWork,
+    );
+  const input = async (nonce = NONCE) => ({
+    signingPublicKey: hub.signingPublicKey,
+    encryptionPublicKey: hub.encryptionPublicKey,
+    nonce,
+    timestamp: iso(0),
+    signature: await signEnrollment(hub, { nonce, timestamp: iso(0) }),
+  });
+
+  it('expires the previous pending enrollment of the key before inserting, in the same transaction', async () => {
+    const order: string[] = [];
+    let inTx = false;
+    uow.run.mockImplementationOnce(async (work: () => Promise<unknown>) => {
+      inTx = true;
+      try {
+        return await work();
+      } finally {
+        inTx = false;
+      }
+    });
+    enrollments.expirePendingOfKey.mockImplementation(async (key: string) => {
+      order.push(`expire:${key === hub.signingPublicKey}:${inTx}`);
+      return 1;
+    });
+    enrollments.create.mockImplementation(async () => {
+      order.push(`create:${inTx}`);
+    });
+    await useCase().execute(await input());
+    expect(order).toEqual(['expire:true:true', 'create:true']);
+  });
+
+  it('a concurrent enrollment of the same key that won the race: expires it and retries', async () => {
+    enrollments.create.mockRejectedValueOnce(
+      new ConflictError('enrollment-pending-for-key', 'p'),
+    );
+    await useCase().execute(await input());
+    expect(enrollments.expirePendingOfKey).toHaveBeenCalledTimes(2);
+    expect(enrollments.create).toHaveBeenCalledTimes(2);
+  });
+
+  it('a replayed nonce rolls back the expiry (the error leaves the transaction)', async () => {
+    enrollments.create.mockRejectedValue(
+      new ConflictError('nonce-reused', 'used'),
+    );
+    await expect(useCase().execute(await input())).rejects.toMatchObject({
+      code: 'nonce-reused',
+    });
+    expect(uow.run).toHaveBeenCalledTimes(1);
+    await expect(uow.run.mock.results[0]!.value).rejects.toMatchObject({
+      code: 'nonce-reused',
+    });
   });
 });
 

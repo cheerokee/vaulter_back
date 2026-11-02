@@ -143,10 +143,14 @@ describe('hub enrollment, claim and authentication (e2e)', () => {
     it('refuses a replayed nonce (409 nonce-reused) and a stale timestamp', async () => {
       const identity = await createHubIdentity();
       const n = nonce();
-      await enroll(identity, n);
+      const first = await enroll(identity, n);
       await expect(enroll(identity, n)).rejects.toMatchObject({
         constructor: ConflictError,
         code: 'nonce-reused',
+      });
+      // the replay is rolled back with its expiry: the legitimate pending enrollment survives
+      await expect(status(identity, first.enrollmentId)).resolves.toEqual({
+        status: 'pending',
       });
       const timestamp = new Date(Date.now() - 6 * 60_000).toISOString();
       const fresh = nonce();
@@ -334,18 +338,22 @@ describe('hub enrollment, claim and authentication (e2e)', () => {
       expect(hubs).toHaveLength(1);
     }, 30_000);
 
-    it('two enrollments of the same key claimed at once: one hub, the loser gets claim-code-invalid and nothing of it remains', async () => {
+    it('a new enrollment of the same key expires the previous pending one: its code dies, one hub at most', async () => {
       const identity = await createHubIdentity();
       const first = await enroll(identity);
       const second = await enroll(identity);
+      await expect(status(identity, first.enrollmentId)).resolves.toEqual({
+        status: 'expired',
+      });
       const results = await Promise.allSettled([
         claim(owner, first.claimCode, 'A'),
         claim(rival, second.claimCode, 'B'),
       ]);
-      expect(results.filter((r) => r.status === 'fulfilled')).toHaveLength(1);
-      const lost = results.find((r) => r.status === 'rejected') as
-        PromiseRejectedResult | undefined;
-      expect(lost?.reason).toMatchObject(INVALID_CODE);
+      expect(results[0]).toMatchObject({
+        status: 'rejected',
+        reason: INVALID_CODE,
+      });
+      expect(results[1]).toMatchObject({ status: 'fulfilled' });
       const hubs: { id: string }[] = await admin.query(
         `SELECT id FROM hubs WHERE signing_public_key = $1`,
         [identity.signingPublicKey],
@@ -355,11 +363,44 @@ describe('hub enrollment, claim and authentication (e2e)', () => {
         `SELECT 1 FROM hub_organization ho WHERE NOT EXISTS (SELECT 1 FROM hubs h WHERE h.id = ho.hub_id)`,
       );
       expect(orphanLinks).toHaveLength(0);
-      const claimed: { status: string }[] = await admin.query(
-        `SELECT status FROM hub_enrollments WHERE id = ANY($1) ORDER BY status`,
+      const rows: { id: string; status: string }[] = await admin.query(
+        `SELECT id, status FROM hub_enrollments WHERE id = ANY($1)`,
         [[first.enrollmentId, second.enrollmentId]],
       );
-      expect(claimed.map((r) => r.status)).toEqual(['claimed', 'pending']);
+      expect(Object.fromEntries(rows.map((r) => [r.id, r.status]))).toEqual({
+        [first.enrollmentId]: 'expired',
+        [second.enrollmentId]: 'claimed',
+      });
+    }, 30_000);
+
+    it('concurrent enrollments of one key all succeed and leave exactly one pending (unique among pending rows)', async () => {
+      const identity = await createHubIdentity();
+      const results = await Promise.all(
+        Array.from({ length: 4 }, () => enroll(identity)),
+      );
+      const rows: { id: string; status: string }[] = await admin.query(
+        `SELECT id, status FROM hub_enrollments WHERE signing_public_key = $1`,
+        [identity.signingPublicKey],
+      );
+      expect(rows).toHaveLength(4);
+      const pending = rows.filter((r) => r.status === 'pending');
+      expect(pending).toHaveLength(1);
+      expect(results.map((r) => r.enrollmentId)).toContain(pending[0]!.id);
+      // the database refuses a second pending row for the key, whatever the code
+      const [one] = rows;
+      await expect(
+        admin.query(
+          `INSERT INTO hub_enrollments (signing_public_key, encryption_public_key, nonce, claim_code_hash, expires_at)
+           SELECT signing_public_key, encryption_public_key, 'n-dup', repeat('0', 64), now() + interval '10 minutes'
+             FROM hub_enrollments WHERE id = $1`,
+          [one!.id],
+        ),
+      ).rejects.toMatchObject({
+        driverError: {
+          code: '23505',
+          constraint: 'uq_hub_enrollments_pending_signing_key',
+        },
+      });
     }, 30_000);
   });
 

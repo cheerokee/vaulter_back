@@ -10,9 +10,11 @@ import {
   EMAIL_THROTTLER,
   RATE_LIMITS,
   REAUTH_THROTTLER,
+  USER_THROTTLER,
 } from './rate-limits.js';
 import {
   THROTTLE_BY_EMAIL_KEY,
+  THROTTLE_BY_USER_KEY,
   THROTTLE_REAUTH_KEY,
 } from './throttling.decorators.js';
 import { userIdTracker } from './user-id.tracker.js';
@@ -63,6 +65,18 @@ function isEnabled(value: unknown): boolean {
               skipIf: (context: ExecutionContext) =>
                 !enabled() ||
                 !Reflect.getMetadata(THROTTLE_REAUTH_KEY, context.getHandler()),
+            },
+            {
+              // Per user and route; the limit always comes from @ThrottleByUser (this one is only a placeholder).
+              name: USER_THROTTLER,
+              ...RATE_LIMITS.default,
+              getTracker: userIdTracker,
+              skipIf: (context: ExecutionContext) =>
+                !enabled() ||
+                !Reflect.getMetadata(
+                  THROTTLE_BY_USER_KEY,
+                  context.getHandler(),
+                ),
             },
           ],
         };

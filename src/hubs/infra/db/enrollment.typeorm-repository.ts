@@ -42,6 +42,12 @@ export class EnrollmentTypeormRepository extends EnrollmentRepository {
             'This nonce was already used.',
           );
         }
+        if (driver.constraint === 'uq_hub_enrollments_pending_signing_key') {
+          throw new ConflictError(
+            'enrollment-pending-for-key',
+            'Another pending enrollment has this signing key.',
+          );
+        }
         if (driver.constraint === 'uq_hub_enrollments_claim_code_hash') {
           throw new ConflictError(
             'claim-code-collision',
@@ -91,6 +97,16 @@ export class EnrollmentTypeormRepository extends EnrollmentRepository {
       { status: 'claimed', claimedHubId: hubId },
     );
     return result.affected === 1;
+  }
+
+  // Um UPDATE condicional: uma reivindicação em andamento trava a linha (FOR UPDATE); esta espera e, se a linha já
+  // virou `claimed`, não a toca.
+  async expirePendingOfKey(signingPublicKey: string): Promise<number> {
+    const result = await this.repo.update(
+      { signingPublicKey, status: 'pending' },
+      { status: 'expired' },
+    );
+    return result.affected ?? 0;
   }
 
   // Lápide não: vencida vira `expired` (o runtime não tem DELETE; a limpeza física é pendência).

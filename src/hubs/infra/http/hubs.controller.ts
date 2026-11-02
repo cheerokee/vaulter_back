@@ -21,7 +21,7 @@ import {
   pageResponse,
 } from '../../../shared/infra/http/cursor-pagination.query.js';
 import { RATE_LIMITS } from '../../../shared/infra/http/rate-limits.js';
-import { userIdTracker } from '../../../shared/infra/http/user-id.tracker.js';
+import { ThrottleByUser } from '../../../shared/infra/http/throttling.decorators.js';
 import { uuidPipe } from '../../../shared/infra/http/uuid-pipe.js';
 import { AssignHubRoleUseCase } from '../../application/assign-hub-role.use-case.js';
 import { ClaimHubUseCase } from '../../application/claim-hub.use-case.js';
@@ -53,7 +53,8 @@ export class HubsController {
   ) {}
 
   /** The owner claims a device by its 8-digit code. Every code failure is the same 422 `claim-code-invalid`. */
-  @Throttle({ default: { ...RATE_LIMITS.hubClaim, getTracker: userIdTracker } })
+  @Throttle({ default: RATE_LIMITS.hubClaimIp })
+  @ThrottleByUser(RATE_LIMITS.hubClaimUser)
   @ApiBearerAuth()
   @Post('claim')
   async doClaim(@CurrentAuth() auth: AuthContext, @Body() dto: ClaimHubDto) {

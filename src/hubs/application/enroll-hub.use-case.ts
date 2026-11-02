@@ -17,6 +17,7 @@ import {
   isIsoUtcTimestamp,
 } from '../domain/hub-signed-message.js';
 import { HubRepository } from '../domain/hub.repository.js';
+import { UnitOfWork } from '../../shared/infra/db/unit-of-work.js';
 import { HubCodeHasher } from './ports/hub-code-hasher.js';
 import { HubSignatureVerifier } from './ports/hub-signature-verifier.js';
 
@@ -51,7 +52,11 @@ export function hubSignatureInvalid(): UnauthenticatedError {
 // Apresentação de um Hub sem dono (rota pública). Formato (422) antes de tudo; depois a janela do timestamp e a
 // assinatura, que prova a posse da chave privada; chave já usada por um Hub (inclusive desregistrado, a chave é
 // de um Hub só para sempre) é 409 `signing-key-in-use`; o (chave, nonce) repetido é 409 `nonce-reused`. Expira as
-// pendentes vencidas antes de gravar (libera os hashes de código delas).
+// pendentes vencidas antes de gravar (libera os hashes de código delas) e, a cada tentativa, a pendente anterior
+// da mesma chave (spec §5: uma pendente por chave; vale a apresentação mais nova, e o código antigo morre). Duas
+// apresentações simultâneas da mesma chave: o índice único recusa a segunda (`enrollment-pending-for-key`), que
+// expira a primeira e tenta de novo. Expirar e gravar vão numa transação: um replay (nonce repetido) não derruba
+// a pendente legítima.
 @Injectable()
 export class EnrollHubUseCase {
   constructor(
@@ -59,6 +64,7 @@ export class EnrollHubUseCase {
     private readonly hubs: HubRepository,
     private readonly verifier: HubSignatureVerifier,
     private readonly codes: HubCodeHasher,
+    private readonly uow: UnitOfWork,
   ) {}
 
   async execute(input: EnrollHubInput): Promise<EnrollHubResult> {
@@ -105,11 +111,16 @@ export class EnrollHubUseCase {
         now,
       });
       try {
-        await this.enrollments.create(enrollment);
+        // Uma transação: se a gravação falhar (ex.: nonce repetido de um replay), a pendente anterior não expira.
+        await this.uow.run(async () => {
+          await this.enrollments.expirePendingOfKey(keys.signingPublicKey);
+          await this.enrollments.create(enrollment);
+        });
       } catch (error) {
         if (
           error instanceof ConflictError &&
-          error.code === 'claim-code-collision' &&
+          (error.code === 'claim-code-collision' ||
+            error.code === 'enrollment-pending-for-key') &&
           attempt < MAX_CODE_ATTEMPTS
         ) {
           continue;

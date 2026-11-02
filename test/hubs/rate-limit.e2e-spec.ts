@@ -33,6 +33,8 @@ describe('hub rate limits (e2e)', () => {
   const h = hubClient(() => app);
   let olivia: KeyedUser;
   let ana: KeyedUser;
+  let carl: KeyedUser;
+  let dan: KeyedUser;
   let hubA: ClaimedHub;
   let hubB: ClaimedHub;
 
@@ -49,6 +51,8 @@ describe('hub rate limits (e2e)', () => {
     admin = await adminDataSource();
     olivia = await c.spaces.signUpKeyed('olivia@example.com', 'Olivia');
     ana = await c.spaces.signUpKeyed('ana@example.com', 'Ana');
+    carl = await c.spaces.signUpKeyed('carl@example.com', 'Carl');
+    dan = await c.spaces.signUpKeyed('dan@example.com', 'Dan');
     hubA = await h.onboard(olivia.token, 'A');
     hubB = await h.onboard(olivia.token, 'B');
   }, 60_000);
@@ -115,19 +119,35 @@ describe('hub rate limits (e2e)', () => {
     ).toBe(200);
   }, 60_000);
 
+  const claimFrom = (u: KeyedUser, ip: string) =>
+    h
+      .http()
+      .post('/hubs/claim')
+      .set(c.bearer(u.token))
+      .set('X-Forwarded-For', ip)
+      .send({ claimCode: '00000000', name: 'X' });
+
   it('POST /hubs/claim: 10 per hour per user, whatever the IP', async () => {
-    const claim = (u: KeyedUser, ip: string) =>
-      h
-        .http()
-        .post('/hubs/claim')
-        .set(c.bearer(u.token))
-        .set('X-Forwarded-For', ip)
-        .send({ claimCode: '00000000', name: 'X' });
     for (let i = 0; i < 10; i++) {
-      expect((await claim(olivia, `198.51.100.${i + 10}`)).status).toBe(422);
+      expect((await claimFrom(olivia, `198.51.100.${i + 10}`)).status).toBe(
+        422,
+      );
     }
-    expect429(await claim(olivia, '198.51.100.30'));
-    expect((await claim(ana, '198.51.100.30')).status).toBe(422);
+    expect429(await claimFrom(olivia, '198.51.100.30'));
+    expect((await claimFrom(ana, '198.51.100.30')).status).toBe(422);
+  }, 60_000);
+
+  it('POST /hubs/claim: also 30 per hour per IP, whatever the user (accounts do not add up)', async () => {
+    const ip = '198.51.100.31';
+    for (const u of [olivia, ana, carl]) {
+      for (let i = 0; i < 10; i++) {
+        expect((await claimFrom(u, ip)).status).toBe(422);
+      }
+    }
+    // a fourth account, below its own per-user limit, is blocked by the IP counter...
+    expect429(await claimFrom(dan, ip));
+    // ...and on another IP it still gets through
+    expect((await claimFrom(dan, '198.51.100.32')).status).toBe(422);
   }, 60_000);
 
   it('POST /hubs/link-requests: 10 per hour per user, whatever the IP', async () => {

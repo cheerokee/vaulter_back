@@ -23,6 +23,11 @@ import { HubTypeormEntity } from './hub.entity.js';
   unique: true,
   where: `"status" = 'pending'`,
 })
+// Uma pendente por chave (spec §5): a apresentação nova expira a anterior antes de gravar.
+@Index('uq_hub_enrollments_pending_signing_key', ['signingPublicKey'], {
+  unique: true,
+  where: `"status" = 'pending'`,
+})
 @Index('fk_hub_enrollments_hubs_idx', ['claimedHubId'])
 export class HubEnrollmentTypeormEntity extends BaseTypeormEntity {
   @Column({ type: 'varchar', length: 64 })
