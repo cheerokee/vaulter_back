@@ -386,8 +386,11 @@ describe('hubs repositories (e2e, app role)', () => {
       expect(await orgIdsSeenBy({ userId: olivia })).toEqual(
         [orgA.id, orgB.id].sort(),
       );
-      // O Hub só vê vínculos aprovados (e revogados, que a sincronização manda como lápide); pendente não.
-      expect(await orgIdsSeenBy({ hubId: hub.id })).toEqual([orgA.id]);
+      // O Hub vê todos os próprios vínculos, de qualquer status (HubReadsAllOwnLinks): a sincronização manda o que não
+      // é aprovado como lápide, para a saída sempre chegar mesmo quando um novo pedido reaproveita a linha revogada.
+      expect(await orgIdsSeenBy({ hubId: hub.id })).toEqual(
+        [orgA.id, orgB.id].sort(),
+      );
       expect(await orgIdsSeenBy({ userId: ana })).toEqual([orgA.id]);
       // Membro só lê vínculo aprovado da própria organização: Bob (admin da B, pedido pendente) não vê o da B.
       expect(await orgIdsSeenBy({ userId: bob })).toEqual([]);
@@ -430,7 +433,12 @@ describe('hubs repositories (e2e, app role)', () => {
           l.organizationId,
           l.status,
         ]),
-      ).toEqual([[orgA.id, 'revoked']]);
+      ).toEqual(
+        [
+          [orgA.id, 'revoked'],
+          [orgB.id, 'pending'],
+        ].sort((x, y) => x[0]!.localeCompare(y[0]!)),
+      );
       expect(await orgIdsSeenBy({ userId: ana })).toEqual([]);
       await admin.query(
         `UPDATE hub_organization SET deleted_at = now() WHERE hub_id = $1 AND organization_id = $2`,

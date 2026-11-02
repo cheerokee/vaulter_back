@@ -179,7 +179,13 @@ describe('hub sync (e2e)', () => {
         'hub_space',
       ]),
     );
-    expect(items.every((i) => !i.deleted)).toBe(true);
+    // the only tombstone: the pending link of org C (keys only)
+    expect(items.filter((i) => i.deleted)).toEqual([
+      expect.objectContaining({
+        type: 'hub_organization',
+        data: { hubId: hub.hubId, organizationId: orgC },
+      }),
+    ]);
 
     expect(ofType(items, 'hub')).toEqual([
       expect.objectContaining({
@@ -194,6 +200,7 @@ describe('hub sync (e2e)', () => {
     ]);
     expect(
       ofType(items, 'hub_organization')
+        .filter((i) => !i.deleted)
         .map((i) => i.data)
         .sort((a, b) =>
           String(a.organizationId) < String(b.organizationId) ? -1 : 1,
@@ -353,15 +360,20 @@ describe('hub sync (e2e)', () => {
 
   it('an organization without an approved link never appears (pending link, unrelated org, their spaces and members)', async () => {
     const { items } = await sync(hub);
-    const body = JSON.stringify(items);
+    // org C's pending link is only a tombstone with its keys (no requester, no status); nothing else of C or D
+    const linkC = items.filter((i) => i.data.organizationId === orgC);
+    expect(linkC).toEqual([
+      {
+        type: 'hub_organization',
+        syncVersion: expect.any(Number),
+        deleted: true,
+        data: { hubId: hub.hubId, organizationId: orgC },
+      },
+    ]);
+    const body = JSON.stringify(items.filter((i) => !linkC.includes(i)));
     for (const id of [orgC, orgD, cSpace, carl.userId]) {
       expect(body).not.toContain(id);
     }
-    expect(
-      ofType(items, 'hub_organization').some(
-        (i) => i.data.organizationId === orgC,
-      ),
-    ).toBe(false);
   });
 
   it('a space outside hub_space never appears, nor its keys, copies or roles', async () => {
@@ -494,6 +506,108 @@ describe('hub sync (e2e)', () => {
       'space_key_grant',
     ]);
     for (const row of anaRows) expect(Object.keys(row.data)).toEqual(['id']);
+  });
+
+  it('a member who leaves the organization comes back as a tombstone (keys only), with her role and copy tombstones', async () => {
+    const dan = await s.signUpKeyed('sy-dan@example.com', 'Dan', PASSWORD);
+    await s.joinOrg(olivia, orgA.orgId, dan);
+    await expectStatus(
+      s.addMember(olivia.token, s1.spaceId, recipientOf(dan), [s1.key]),
+      201,
+    );
+    const since = await checkpoint(hub);
+    await expectStatus(
+      c
+        .http()
+        .post(`/organizations/${orgA.orgId}/leave`)
+        .set(c.bearer(dan.token)),
+      204,
+    );
+    const { items } = await syncAll(hub, 500, since);
+    expect(
+      ofType(items, 'member').filter((i) => i.data.userId === dan.userId),
+    ).toEqual([
+      expect.objectContaining({
+        deleted: true,
+        data: { organizationId: orgA.orgId, userId: dan.userId },
+      }),
+    ]);
+    const tombs: { id: string }[] = await admin.query(
+      `SELECT ra.id FROM role_assignments ra
+        WHERE ra.user_id = $1 AND ra.deleted_at IS NOT NULL
+       UNION ALL
+       SELECT g.id FROM space_key_grants g WHERE g.user_id = $1 AND g.deleted_at IS NOT NULL`,
+      [dan.userId],
+    );
+    expect(tombs.length).toBeGreaterThanOrEqual(3); // org role, space role, copy v1
+    const byId = new Map(items.map((i) => [String(i.data.id), i]));
+    for (const t of tombs) {
+      expect(byId.get(t.id)).toMatchObject({
+        deleted: true,
+        data: { id: t.id },
+      });
+    }
+    expect(
+      [...byId.values()]
+        .filter((i) => tombs.some((t) => t.id === i.data.id))
+        .map((i) => i.type)
+        .sort(),
+    ).toEqual(['role_assignment', 'role_assignment', 'space_key_grant']);
+  });
+
+  it('an unlink followed by a new request (pending, then rejected) still reaches the hub as a tombstone', async () => {
+    const orgE = await s.orgWithKit(ana, 'Org E');
+    await s.joinOrg(ana, orgE.orgId, olivia);
+    await k.link(olivia, hub.hubId, orgE.orgId);
+    const approved = await checkpoint(hub);
+    const live = await syncAll(hub, 500, 0);
+    expect(
+      ofType(live.items, 'member').some(
+        (i) => i.data.organizationId === orgE.orgId && !i.deleted,
+      ),
+    ).toBe(true);
+
+    // unlink and ask again before the hub syncs: the reused row is now pending
+    await expectStatus(
+      c
+        .http()
+        .patch(`/organizations/${orgE.orgId}`)
+        .set(c.bearer(ana.token))
+        .send({ hubLinkPolicy: 'admin_approved' }),
+      200,
+    );
+    await k.unlink(olivia, hub.hubId, orgE.orgId);
+    await expect(k.link(olivia, hub.hubId, orgE.orgId)).resolves.toMatchObject({
+      status: 'pending',
+    });
+    const exitE = (items: Item[]) =>
+      ofType(items, 'hub_organization').filter(
+        (i) => i.data.organizationId === orgE.orgId,
+      );
+    const pending = await syncAll(hub, 500, approved);
+    expect(exitE(pending.items)).toEqual([
+      expect.objectContaining({
+        deleted: true,
+        data: { hubId: hub.hubId, organizationId: orgE.orgId },
+      }),
+    ]);
+
+    // rejected: one more tombstone, still keys only
+    await k.reject(ana, hub.hubId, orgE.orgId);
+    const rejected = await syncAll(hub, 500, pending.since);
+    expect(exitE(rejected.items)).toEqual([
+      expect.objectContaining({
+        deleted: true,
+        data: { hubId: hub.hubId, organizationId: orgE.orgId },
+      }),
+    ]);
+    // and a full sync serves nothing of org E but that tombstone
+    const full = (await syncAll(hub, 500)).items;
+    expect(
+      full.filter((i) => JSON.stringify(i.data).includes(orgE.orgId)),
+    ).toEqual([
+      expect.objectContaining({ type: 'hub_organization', deleted: true }),
+    ]);
   });
 
   it('unlinking brings the link back as a tombstone, and the organization then disappears from the scope', async () => {

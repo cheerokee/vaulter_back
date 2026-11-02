@@ -77,8 +77,9 @@ export function mergeSyncPage(
  *
  * Scope (derived by the reader from the hub's own `hub_organization` rows, never from the caller):
  * - `hub`: the hub itself;
- * - `hub_organization`: its links; approved ones are live, revoked ones are tombstones (pending/rejected are never
- *   visible to the hub);
+ * - `hub_organization`: all its links; only an approved, live link is live. Every other status (revoked, and also
+ *   pending/rejected: a new request after an unlink reuses the revoked row) is a tombstone, so an exit always reaches
+ *   the hub;
  * - `organization`, `member` (per organization and user: name, email, public key and the LOCKED key material,
  *   never `authHash`; plus the live organization roles and the effective hub role, `hub_user` when there is no
  *   explicit row), `role_assignment` (organization scope, space scope of the hub's spaces, hub scope of this hub,
@@ -94,10 +95,12 @@ export function mergeSyncPage(
  *   Hub-scope roles of people left without any linked organization arrive as their own tombstones;
  * - `hub_space` tombstone (space removed from the hub): delete locally that space, its keys, its grants and its
  *   space-scope roles;
- * - SCOPE ENTRY: rows that enter the scope keep their old `syncVersion` (an organization approved again, or a space
- *   added to the hub, already had its spaces/keys/grants/members). So when a page brings a live `hub_organization`
- *   or a live `hub_space` the hub did not hold live, the hub finishes the current pass and then syncs again from
- *   `since=0` (a full sync, as after 30 days offline).
+ * - FULL SYNC (`since=0`) REPLACES the hub's local state: the hub builds the new state from the full pass and drops
+ *   everything it held that the pass did not bring (rows that left the scope earlier never come back as tombstones);
+ * - SCOPE ENTRY (incremental passes only, `since > 0`): rows that enter the scope keep their old `syncVersion` (an
+ *   organization approved again, or a space added to the hub, already had its spaces/keys/grants/members). So when an
+ *   incremental page brings a live `hub_organization` or a live `hub_space` the hub did not hold live, the hub
+ *   finishes the pass and then runs a full sync. The first `since=0` pass never triggers this rule.
  */
 @Injectable()
 export class SyncHubUseCase {

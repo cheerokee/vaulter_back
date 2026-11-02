@@ -452,9 +452,12 @@ nenhum deles importa `hubs`.
   ONLY` (um snapshot só); organizações aprovadas lidas de `hub_organization` no contexto do Hub e cada uma lida em
   sequência com `{ organizationId, hubId }`. `member` é por (organização, pessoa), versão = maior `sync_version` entre
   vínculo, usuário e papéis embutidos — um mesmo valor pode estar em vários itens; a página nunca parte esse grupo.
-  Lápide leva só as chaves. **Cascata local do Hub:** vínculo revogado (lápide de `hub_organization`) ou `hub_space`
-  com lápide = o Hub apaga localmente o que dependia dele; **entrada no escopo** (vínculo aprovado ou `hub_space` vivo
-  que o Hub não tinha) = o Hub refaz a sincronização desde `since=0` (as linhas mantêm o `sync_version` antigo).
+  Lápide leva só as chaves. O Hub lê **todos** os próprios vínculos (`hub_read`, qualquer status): todo vínculo que
+  não é `approved` vivo (revogado, e também pendente/recusado, porque pedir de novo reaproveita a linha revogada)
+  chega como lápide. **Cascata local do Hub:** lápide de `hub_organization` ou de `hub_space` = o Hub apaga
+  localmente o que dependia dele; **sincronização completa** (`since=0`) **substitui** o estado local; **entrada no
+  escopo** numa passada incremental (vínculo aprovado ou `hub_space` vivo que o Hub não tinha) = o Hub faz uma
+  sincronização completa (as linhas mantêm o `sync_version` antigo).
 
 ## Banco de dados (TypeORM + migrations)
 - **TypeORM 1.x** + `@nestjs/typeorm`, driver `pg`. Config de conexão em `src/database/typeorm.options.ts`,
@@ -558,6 +561,11 @@ Os valores do `.env.example` para os segredos são **só de desenvolvimento**; p
 - JWKS público para o hub validar tokens offline.
 - Hubs: limpeza física das linhas antigas de `hub_enrollments`, `hub_link_codes` e `hub_auth_challenges` (o runtime
   não tem `DELETE`; hoje a apresentação vencida só vira `expired` e códigos/desafios usados ficam).
+- **Ordem de commit × `sync_version`:** a versão é atribuída na escrita, não no COMMIT; uma transação com versão menor
+  que confirma depois de outra com versão maior pode ser pulada para sempre pelo `nextSince` da sincronização do Hub
+  (o `REPEATABLE READ` só deixa cada página coerente). Opções: horizonte seguro (guardar `pg_current_xact_id()` numa
+  coluna xid8 junto da versão e só servir linhas abaixo de `pg_snapshot_xmin(pg_current_snapshot())`) ou carimbo de
+  versão no momento do commit. Mitigação até lá: sincronização completa periódica do Hub.
 - Exclusão de conta (LGPD) precisa revogar as sessões.
 - Organizações: avisar admins por notificação (convite aceito, membro saiu); exclusão de organização; papéis
   próprios (modo avançado: `role_permission` com RLS por organização, hoje o catálogo é só leitura); escopo de

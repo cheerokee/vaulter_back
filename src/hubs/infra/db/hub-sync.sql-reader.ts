@@ -19,8 +19,9 @@ import {
 // update these queries (the sync e2e covers every column read here).
 //
 // RLS, two locks:
-// 1. hub context (`app.hub_id`): the hub row, its links (the hub policy only shows approved/revoked), its `hub_space`
-//    rows (only of approved, live links), its hub-scope roles, and the list of approved organizations;
+// 1. hub context (`app.hub_id`): the hub row, its links, its `hub_space`
+//    rows (only of approved, live links), its hub-scope roles, and the list of approved organizations (the hub reads
+//    all its links, any status; the SQL keeps only approved, live ones as the org scope);
 // 2. for each approved organization, IN SEQUENCE (one connection: never Promise.all), `{ organizationId, hubId }`
 //    through `runWithContext`, which restores the previous context: `org_isolation` opens that organization's rows
 //    and nothing else; the SQL adds the hub filters (live `hub_space` of THIS hub, people or THIS hub's grants/Room).
@@ -127,14 +128,16 @@ export class HubSyncSqlReader extends HubSyncReader {
               ),
           ),
         );
-        // Revoked = tombstone (the hub cascades locally); pending/rejected are invisible to the hub anyway.
+        // Every status: only an approved, live link is live. Any other (revoked, and also pending/rejected, since a
+        // new request after an unlink reuses the revoked row) is a tombstone, so the hub always learns of the exit
+        // and cascades locally. A tombstone carries only (hubId, organizationId): no requester, no status.
         batches.push(
           await batch(
             m,
             `SELECT organization_id, status, (deleted_at IS NOT NULL OR status <> 'approved') AS deleted,
                     sync_version::text AS sv
                FROM hub_organization
-              WHERE hub_id = $1 AND status IN ('approved', 'revoked') AND sync_version > $2::bigint
+              WHERE hub_id = $1 AND sync_version > $2::bigint
               ORDER BY sync_version LIMIT $3`,
             (r) =>
               item(
