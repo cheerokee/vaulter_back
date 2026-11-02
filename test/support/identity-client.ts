@@ -70,6 +70,29 @@ export function identityClient(getApp: () => INestApplication) {
         currentAuthProof: owner.account.authProof,
       });
 
+  /**
+   * The Room hubs as the app finds them: `GET /spaces/:id` -> `roomHubs`, then each hub's encryption key from
+   * `GET /hubs/:id` (every member of the space reads it: the Room needs an approved link of the organization).
+   * A caller who is not a member (the rotation is expected to fail) gets none.
+   */
+  const roomHubRecipients = async (
+    token: string,
+    spaceId: string,
+  ): Promise<HubRecipient[]> => {
+    const space = await http().get(`/spaces/${spaceId}`).set(auth(token));
+    if (space.status !== 200) return [];
+    const roomHubs = space.body.roomHubs as { hubId: string }[];
+    return Promise.all(
+      roomHubs.map(async ({ hubId }) => {
+        const hub = await expectStatus(
+          http().get(`/hubs/${hubId}`).set(auth(token)),
+          200,
+        );
+        return { hubId, publicKey: hub.body.encryptionPublicKey as string };
+      }),
+    );
+  };
+
   const spaces = {
     signUpKeyed: async (
       email: string,
@@ -175,7 +198,11 @@ export function identityClient(getApp: () => INestApplication) {
         publicKey: m.publicKey,
       }));
     },
-    /** New key version sealed for exactly `recipients`, the Room `hubs` (none by default) and the kit. */
+    roomHubRecipients,
+    /**
+     * New key version sealed for exactly `recipients`, the kit and the Room hubs. The Room hubs are discovered from
+     * the API like the app does (`roomHubRecipients`); pass `hubs` only to send a deliberately wrong set.
+     */
     rotate: async (
       token: string,
       spaceId: string,
@@ -186,8 +213,9 @@ export function identityClient(getApp: () => INestApplication) {
         kitPublicKey: string;
         hubs?: HubRecipient[];
       },
-    ) =>
-      http()
+    ) => {
+      const hubs = input.hubs ?? (await roomHubRecipients(token, spaceId));
+      return http()
         .post(`/spaces/${spaceId}/keys`)
         .set(auth(token))
         .send({
@@ -201,12 +229,13 @@ export function identityClient(getApp: () => INestApplication) {
             })),
           ),
           hubGrants: await Promise.all(
-            (input.hubs ?? []).map(async (h) => ({
+            hubs.map(async (h) => ({
               hubId: h.hubId,
               wrappedKey: await sealSpaceKey(input.key, h.publicKey),
             })),
           ),
-        }),
+        });
+    },
     /** Re-seals the given versions (keys[i] = version i + 1) for the kit. */
     rewrapRecovery: async (
       token: string,

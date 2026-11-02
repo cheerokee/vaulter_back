@@ -66,6 +66,7 @@ describe('Swagger documents (e2e)', () => {
       '/hubs/{id}/roles/{userId}',
       '/hub/link-codes',
       '/hub/sync',
+      '/organizations/{orgId}/hub-links',
     ];
     for (const path of hubPaths) expect(internalPaths).toContain(path);
     // the device's public routes carry no lock; the others do

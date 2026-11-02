@@ -3,7 +3,52 @@ import { KeyRotationRules as R } from './key-rotation.js';
 
 const code = (c: string) => expect.objectContaining({ code: c });
 
+const thrown = (f: () => void): ConflictError => {
+  try {
+    f();
+  } catch (e) {
+    return e as ConflictError;
+  }
+  throw new Error('did not throw');
+};
+
 describe('KeyRotationRules', () => {
+  it('the 409 tells the expected, missing, unexpected and duplicated ids (hubs and members) and versions', () => {
+    expect(
+      thrown(() => R.assertHubGrantsMatchRoom(['h3', 'h1', 'h1'], ['h2', 'h1']))
+        .details,
+    ).toEqual({
+      expectedHubIds: ['h1', 'h2'],
+      missingHubIds: ['h2'],
+      unexpectedHubIds: ['h3'],
+      duplicatedHubIds: ['h1'],
+    });
+    expect(
+      thrown(() => R.assertHubGrantsMatchRoom([], ['h1'])).details,
+    ).toEqual({
+      expectedHubIds: ['h1'],
+      missingHubIds: ['h1'],
+      unexpectedHubIds: [],
+      duplicatedHubIds: [],
+    });
+    expect(
+      thrown(() => R.assertGrantsMatchMembers(['b', 'c'], ['a', 'b'])).details,
+    ).toEqual({
+      expectedUserIds: ['a', 'b'],
+      missingUserIds: ['a'],
+      unexpectedUserIds: ['c'],
+      duplicatedUserIds: [],
+    });
+    expect(
+      thrown(() => R.assertGrantsCoverVersions([2, 10, 2], [1, 2, 10])).details,
+    ).toEqual({
+      expectedVersions: [1, 2, 10],
+      missingVersions: [1],
+      unexpectedVersions: [],
+      duplicatedVersions: [2],
+    });
+  });
+
   it('grants must equal the active members (order-insensitive)', () => {
     expect(() =>
       R.assertGrantsMatchMembers(['b', 'a'], ['a', 'b']),

@@ -376,10 +376,17 @@ describe('hubs over HTTP (e2e)', () => {
           key: v2,
           recipients: people,
           kitPublicKey: x.kit.publicKey,
+          hubs: [],
         }),
         409,
       );
-      expectProblem(missing, 409, 'key-rotation-mismatch');
+      expect(
+        expectProblem(missing, 409, 'key-rotation-mismatch'),
+      ).toMatchObject({
+        expectedHubIds: [x.hub.hubId],
+        missingHubIds: [x.hub.hubId],
+        unexpectedHubIds: [],
+      });
       await expectStatus(
         s.rotate(olivia.token, x.spaceId, {
           version: 2,
@@ -455,6 +462,137 @@ describe('hubs over HTTP (e2e)', () => {
         ),
       ).toEqual([]);
       expect(since).toBeGreaterThan(0);
+    }, 60_000);
+
+    it('a member who does not own the hub finds the Room hubs through the API and rotates; the 409s say what is wrong', async () => {
+      // Ana is a Gestor of the space (so she may rotate before a rotation is pending), never the hub owner
+      const x = await hubWithRoom('Rotate Discover', 'space_manager');
+      const token = await h.authenticate(x.hub);
+      // Ana (not the hub owner) sees the Room in the space details...
+      const details = await expectStatus(
+        c.http().get(`/spaces/${x.spaceId}`).set(as(ana)),
+        200,
+      );
+      expect(details.body.roomHubs).toEqual([
+        { hubId: x.hub.hubId, roleKey: 'space_reader' },
+      ]);
+      // ...and reads the hub's encryption key (member of the linked org), never its signing key
+      const hub = await expectStatus(
+        c.http().get(`/hubs/${x.hub.hubId}`).set(as(ana)),
+        200,
+      );
+      expect(hub.body).toMatchObject({
+        encryptionPublicKey: x.hub.identity.encryptionPublicKey,
+        role: 'hub_user',
+      });
+      expect(JSON.stringify(hub.body)).not.toContain(
+        x.hub.identity.signingPublicKey,
+      );
+      expect(await s.roomHubRecipients(ana.token, x.spaceId)).toEqual([
+        {
+          hubId: x.hub.hubId,
+          publicKey: x.hub.identity.encryptionPublicKey,
+        },
+      ]);
+
+      // a stale set and a missing member: the problem lists the ids to fix
+      const v2 = await generateSpaceKey();
+      const stranger = newId();
+      const wrongHubs = expectProblem(
+        await s.rotate(ana.token, x.spaceId, {
+          version: 2,
+          key: v2,
+          recipients: [recipientOf(olivia), recipientOf(ana)],
+          kitPublicKey: x.kit.publicKey,
+          hubs: [
+            {
+              hubId: stranger,
+              publicKey: x.hub.identity.encryptionPublicKey,
+            },
+          ],
+        }),
+        409,
+        'key-rotation-mismatch',
+      );
+      expect(wrongHubs).toMatchObject({
+        expectedHubIds: [x.hub.hubId],
+        missingHubIds: [x.hub.hubId],
+        unexpectedHubIds: [stranger],
+        duplicatedHubIds: [],
+      });
+      const wrongPeople = expectProblem(
+        await s.rotate(ana.token, x.spaceId, {
+          version: 2,
+          key: v2,
+          recipients: [recipientOf(ana)],
+          kitPublicKey: x.kit.publicKey,
+        }),
+        409,
+        'key-rotation-mismatch',
+      );
+      expect(wrongPeople).toMatchObject({
+        missingUserIds: [olivia.userId],
+        unexpectedUserIds: [],
+      });
+      expect(wrongPeople.expectedUserIds).toEqual(
+        [olivia.userId, ana.userId].sort(),
+      );
+      expect(
+        expectProblem(
+          await s.rotate(ana.token, x.spaceId, {
+            version: 3,
+            key: v2,
+            recipients: [recipientOf(olivia), recipientOf(ana)],
+            kitPublicKey: x.kit.publicKey,
+          }),
+          409,
+          'key-rotation-mismatch',
+        ),
+      ).toMatchObject({ expectedVersion: 2 });
+
+      // the owner takes the space out of the Room: rotation is pending, and Ana rotates with the discovered set
+      await c
+        .http()
+        .delete(`/hubs/${x.hub.hubId}/spaces/${x.spaceId}/room`)
+        .set(as(olivia))
+        .expect(204);
+      expect(
+        (
+          await expectStatus(
+            c.http().get(`/spaces/${x.spaceId}`).set(as(ana)),
+            200,
+          )
+        ).body,
+      ).toMatchObject({ keyRotationRequired: true, roomHubs: [] });
+      // back in the Room, so the discovered set is not empty
+      await expectStatus(
+        grantRoom(olivia, x.hub.hubId, x.spaceId, x.kit.publicKey, [x.key]),
+        200,
+      );
+      await expectStatus(
+        s.rotate(ana.token, x.spaceId, {
+          version: 2,
+          key: v2,
+          recipients: await s.memberRecipients(ana.token, x.spaceId),
+          kitPublicKey: x.kit.publicKey,
+        }),
+        201,
+      );
+      const after = await expectStatus(
+        c.http().get(`/spaces/${x.spaceId}`).set(as(ana)),
+        200,
+      );
+      expect(after.body).toMatchObject({
+        currentKeyVersion: 2,
+        keyRotationRequired: false,
+      });
+      const v2Copy = hubCopies(
+        (await h.syncAll(token)).items,
+        x.hub.hubId,
+      ).find((i) => i.data.version === 2);
+      expect(
+        await k.hubOpens(x.hub, v2Copy!.data.wrappedKey as string),
+      ).toEqual(v2);
     }, 60_000);
 
     it('a deregistered hub leaves the Room: rotation passes without it and refuses a copy for it', async () => {
@@ -601,6 +739,172 @@ describe('hubs over HTTP (e2e)', () => {
           )
         ).body.role,
       ).toBe('hub_user');
+    }, 60_000);
+
+    it('an admin under admin_approved finds the pending request in GET /organizations/:orgId/hub-links and approves it with only the returned hubId', async () => {
+      const orgB = await org(dan, 'Discover Org', [ana]);
+      await expectStatus(
+        c
+          .http()
+          .patch(`/organizations/${orgB.orgId}`)
+          .set(as(dan))
+          .send({ hubLinkPolicy: 'admin_approved' }),
+        200,
+      );
+      // two hubs of Olivia; Ana asks for both with the codes they show
+      const hubs = [
+        await onboard(olivia, 'Discover A'),
+        await onboard(olivia, 'Discover B'),
+      ];
+      for (const hub of hubs) {
+        const code = (
+          await expectStatus(h.linkCode(await h.authenticate(hub)), 201)
+        ).body.linkCode as string;
+        await expectStatus(
+          c
+            .http()
+            .post('/hubs/link-requests')
+            .set(as(ana))
+            .send({ linkCode: code, organizationId: orgB.orgId }),
+          201,
+        );
+      }
+      // the owner consents from her own hub list (she knows her hubs)
+      for (const hub of hubs) {
+        await expectStatus(
+          c
+            .http()
+            .post(`/hubs/${hub.hubId}/organizations/${orgB.orgId}/approve`)
+            .set(as(olivia)),
+          200,
+        );
+      }
+
+      // Dan does not see the hubs yet...
+      for (const hub of hubs) {
+        expectProblem(
+          await c.http().get(`/hubs/${hub.hubId}`).set(as(dan)),
+          404,
+          'hub-not-found',
+        );
+      }
+      // ...but lists the organization's pending requests, one page at a time, by hub id
+      const url = `/organizations/${orgB.orgId}/hub-links`;
+      const first = await expectStatus(
+        c.http().get(`${url}?status=pending&limit=1`).set(as(dan)),
+        200,
+      );
+      const second = await expectStatus(
+        c
+          .http()
+          .get(
+            `${url}?status=pending&limit=1&cursor=${first.body.nextCursor as string}`,
+          )
+          .set(as(dan)),
+        200,
+      );
+      expect(second.body.nextCursor).toBeNull();
+      const listed = [...first.body.items, ...second.body.items] as Record<
+        string,
+        unknown
+      >[];
+      const sorted = [...hubs].sort((a, b) => (a.hubId < b.hubId ? -1 : 1));
+      expect(listed.map((i) => i.hubId)).toEqual(sorted.map((x) => x.hubId));
+      expect(Object.keys(listed[0]!).sort()).toEqual([
+        'createdAt',
+        'hubId',
+        'hubName',
+        'orgApprovedAt',
+        'organizationId',
+        'ownerApprovedAt',
+        'requestedByUserId',
+        'status',
+      ]);
+      const target = listed.find((i) => i.hubName === 'Discover A')!;
+      expect(target).toEqual({
+        hubId: hubs[0]!.hubId,
+        hubName: 'Discover A',
+        organizationId: orgB.orgId,
+        status: 'pending',
+        requestedByUserId: ana.userId,
+        ownerApprovedAt: expect.any(String),
+        orgApprovedAt: null,
+        createdAt: expect.any(String),
+      });
+
+      // the second consent with nothing but the listed hubId
+      const approved = await expectStatus(
+        c
+          .http()
+          .post(
+            `/hubs/${target.hubId as string}/organizations/${orgB.orgId}/approve`,
+          )
+          .set(as(dan)),
+        200,
+      );
+      expect(approved.body).toMatchObject({
+        hubId: hubs[0]!.hubId,
+        status: 'approved',
+      });
+      // the filter follows the status
+      const pending = await expectStatus(
+        c.http().get(`${url}?status=pending`).set(as(dan)),
+        200,
+      );
+      expect(pending.body.items.map((i: { hubId: string }) => i.hubId)).toEqual(
+        [hubs[1]!.hubId],
+      );
+      const approvedList = await expectStatus(
+        c.http().get(`${url}?status=approved`).set(as(dan)),
+        200,
+      );
+      expect(approvedList.body.items).toEqual([
+        expect.objectContaining({
+          hubId: hubs[0]!.hubId,
+          hubName: 'Discover A',
+          status: 'approved',
+          orgApprovedAt: expect.any(String),
+        }),
+      ]);
+      const all = await expectStatus(c.http().get(url).set(as(dan)), 200);
+      expect(all.body.items).toHaveLength(2);
+
+      // who may list: a member without org.hubs.approve 403, a stranger 404 (same as an unknown org)
+      expectProblem(
+        await c.http().get(url).set(as(ana)),
+        403,
+        'permission-denied',
+      );
+      const stranger = expectProblem(
+        await c.http().get(url).set(as(carl)),
+        404,
+        'organization-not-found',
+      );
+      expect(
+        expectProblem(
+          await c
+            .http()
+            .get(`/organizations/${UNKNOWN_ID}/hub-links`)
+            .set(as(carl)),
+          404,
+          'organization-not-found',
+        ),
+      ).toEqual(stranger);
+      expectProblem(
+        await c.http().get('/organizations/nope/hub-links').set(as(dan)),
+        422,
+        'validation-failed',
+      );
+      expectProblem(
+        await c.http().get(`${url}?status=bogus`).set(as(dan)),
+        422,
+        'validation-failed',
+      );
+      expectProblem(
+        await c.http().get(`${url}?cursor=bad!`).set(as(dan)),
+        422,
+        'invalid-cursor',
+      );
     }, 60_000);
 
     it('reject: the owner refuses a pending request', async () => {

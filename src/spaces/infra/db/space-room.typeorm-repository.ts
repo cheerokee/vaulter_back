@@ -38,6 +38,22 @@ export class SpaceRoomTypeormRepository extends SpaceRoomRepository {
     return rows.map((r) => r.room_hub_id);
   }
 
+  async roomHubs(
+    orgId: string,
+    spaceId: string,
+  ): Promise<{ hubId: string; roleKey: SpaceRoleKey }[]> {
+    const rows: { room_hub_id: string; role_key: SpaceRoleKey }[] =
+      await runInOrganizationScope(this.dataSource, orgId, (m) =>
+        m.query(
+          `SELECT ra.room_hub_id, r.key AS role_key
+             FROM role_assignments ra JOIN roles r ON r.id = ra.role_id
+            WHERE ${ACTIVE_ROOM} ORDER BY ra.room_hub_id`,
+          [orgId, spaceId],
+        ),
+      );
+    return rows.map((r) => ({ hubId: r.room_hub_id, roleKey: r.role_key }));
+  }
+
   async assignRoom(
     orgId: string,
     spaceId: string,

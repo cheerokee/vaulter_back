@@ -252,7 +252,7 @@ describe('ListSpacesUseCase', () => {
 
 describe('GetSpaceUseCase', () => {
   const useCase = () =>
-    new GetSpaceUseCase(d.access, d.recoveryKit, d.keys, d.pending);
+    new GetSpaceUseCase(d.access, d.recoveryKit, d.keys, d.pending, d.room);
 
   it('returns the details with my role and the computed flags', async () => {
     kit.addSpace(SPACE_ID, ORG_ID, [[READER, 'space_reader']], {
@@ -268,9 +268,28 @@ describe('GetSpaceUseCase', () => {
       currentKeyVersion: 2,
       keyRotationRequired: true,
       recoveryRewrapRequired: true,
+      roomHubs: [],
       createdAt: new Date('2026-10-01T00:00:00Z'),
       updatedAt: null,
     });
+  });
+
+  it('every member gets the Room hubs with their role (what a rotation must cover)', async () => {
+    const HUB_A = '019a0000-0000-7000-8000-0000000000a1';
+    const HUB_B = '019a0000-0000-7000-8000-0000000000a2';
+    kit.roomBySpace.get(SPACE_ID)!.set(HUB_B, 'space_editor');
+    kit.roomBySpace.get(SPACE_ID)!.set(HUB_A, 'space_reader');
+    for (const who of [READER, EDITOR, MANAGER]) {
+      await expect(
+        useCase().execute(actor(who), SPACE_ID),
+      ).resolves.toMatchObject({
+        roomHubs: [
+          { hubId: HUB_A, roleKey: 'space_reader' },
+          { hubId: HUB_B, roleKey: 'space_editor' },
+        ],
+      });
+    }
+    expect(m.room.roomHubs).toHaveBeenCalledWith(ORG_ID, SPACE_ID);
   });
 
   it('a manager also gets the pending grants count; other roles never do', async () => {

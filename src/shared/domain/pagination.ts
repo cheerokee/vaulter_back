@@ -35,6 +35,11 @@ export function encodeCursor(id: string): string {
   return Buffer.from(id, 'utf8').toString('base64url');
 }
 
+/**
+ * The id a cursor points at, always in lowercase: some listings compare ids as strings in JS (merging per
+ * organization slices), where a hand-crafted uppercase cursor would otherwise sort after every lowercase id and
+ * skip or repeat items. Postgres compares uuids case-insensitively, so lowercasing never changes a SQL page.
+ */
 export function decodeCursor(cursor: string): string {
   const id = /^[A-Za-z0-9_-]+$/.test(cursor)
     ? Buffer.from(cursor, 'base64url').toString('utf8')
@@ -45,5 +50,5 @@ export function decodeCursor(cursor: string): string {
       'The pagination cursor is invalid.',
     );
   }
-  return id;
+  return id.toLowerCase();
 }

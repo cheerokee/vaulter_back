@@ -246,6 +246,7 @@ describe('Hub Room in a space (e2e)', () => {
         key: v2,
         recipients: people,
         kitPublicKey: kit.publicKey,
+        hubs: [],
       }),
       409,
     );

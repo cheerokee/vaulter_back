@@ -15,9 +15,11 @@ import { HubCodeHasher } from './ports/hub-code-hasher.js';
 
 // Outro usuário pede o vínculo da organização dele (`POST /hubs/link-requests`, spec §4.6) com o código de vínculo
 // que o Hub mostra: prova que está diante do aparelho, sem conhecer o `hubId` (a resposta também não o traz).
-// Ordem: formato do código (sem tocar o banco) -> membro da organização (404, ANTES de consumir: quem não é
-// membro não gasta o código de ninguém) -> consome o código (uso único, condicional) -> Hub ativo (FOR SHARE) ->
-// vínculo (FOR UPDATE) -> pedido. Código errado, vencido, usado ou de Hub desregistrado: o MESMO 422
+// Ordem: formato do código (sem tocar o banco) -> vínculo de quem pede com a organização (FOR SHARE) e membro da
+// organização (404, ANTES de consumir: quem não é membro não gasta o código de ninguém) -> consome o código (uso
+// único, condicional) -> Hub ativo (FOR SHARE) -> vínculo (FOR UPDATE) -> pedido. Locks na mesma ordem do vínculo
+// pelo dono e do gancho de saída da organização (vínculo de membro -> Hub -> linha do vínculo): se quem pede sair
+// da organização ao mesmo tempo, a saída espera este COMMIT e o pedido nunca fica de alguém que já saiu. Código errado, vencido, usado ou de Hub desregistrado: o MESMO 422
 // `link-code-invalid`. Erro depois do consumo (ex.: `already-linked`) desfaz a transação, e o código continua
 // valendo até vencer. Se quem pede é o próprio dono, vale como o vínculo do dono.
 @Injectable()
@@ -48,6 +50,8 @@ export class RequestHubLinkUseCase {
     const now = new Date();
     return this.uow.run(async () => {
       await this.uow.setContext({ userId: actor.userId });
+      // Trava antes e confere depois: a leitura que vale é a feita com o lock.
+      await this.directory.lockActiveMember(organizationId, actor.userId);
       await this.orgAccess.requireMember(organizationId, actor.userId);
       const code = await this.linkCodes.consume(codeHash, now);
       if (!code) throw linkCodeInvalid();

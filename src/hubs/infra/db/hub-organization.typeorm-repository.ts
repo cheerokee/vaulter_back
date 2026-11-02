@@ -7,7 +7,10 @@ import {
   currentManager,
   runWithContext,
 } from '../../../shared/infra/db/unit-of-work.js';
-import type { HubOrganizationLink } from '../../domain/hub-organization-link.js';
+import type {
+  HubLinkStatus,
+  HubOrganizationLink,
+} from '../../domain/hub-organization-link.js';
 import { HubOrganizationRepository } from '../../domain/hub-organization.repository.js';
 import { hubNotFound, requireUnitOfWork, updatedRows } from './db-helpers.js';
 import { HubOrganizationTypeormEntity } from './hub-organization.entity.js';
@@ -215,6 +218,29 @@ export class HubOrganizationTypeormRepository extends HubOrganizationRepository 
         m.getRepository(HubOrganizationTypeormEntity).find({
           where: { organizationId, hubOwnerUserId: ownerUserId },
           order: { hubId: 'ASC' },
+        }),
+    );
+    return rows.map((r) => HubOrganizationMapper.toDomain(r));
+  }
+
+  // Escopo da organização (org_isolation): pendentes de Hubs que o admin ainda não vê também aparecem.
+  async listOfOrganization(
+    organizationId: string,
+    filter: { status?: HubLinkStatus; after?: string; limit: number },
+  ): Promise<HubOrganizationLink[]> {
+    if (!validate(organizationId)) return [];
+    const rows = await runInOrganizationScope(
+      this.dataSource,
+      organizationId,
+      (m) =>
+        m.getRepository(HubOrganizationTypeormEntity).find({
+          where: {
+            organizationId,
+            ...(filter.status ? { status: filter.status } : {}),
+            ...(filter.after ? { hubId: MoreThan(filter.after) } : {}),
+          },
+          order: { hubId: 'ASC' },
+          take: filter.limit,
         }),
     );
     return rows.map((r) => HubOrganizationMapper.toDomain(r));

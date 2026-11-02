@@ -20,6 +20,14 @@ export function spaceResponse(v: SpaceView | SpaceDetailsView) {
     currentKeyVersion: v.currentKeyVersion,
     keyRotationRequired: v.keyRotationRequired,
     recoveryRewrapRequired: v.recoveryRewrapRequired,
+    ...('roomHubs' in v
+      ? {
+          roomHubs: v.roomHubs.map((h) => ({
+            hubId: h.hubId,
+            roleKey: h.roleKey,
+          })),
+        }
+      : {}),
     ...('pendingGrants' in v && v.pendingGrants !== undefined
       ? { pendingGrants: v.pendingGrants }
       : {}),

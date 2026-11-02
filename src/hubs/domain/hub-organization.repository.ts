@@ -1,5 +1,8 @@
 import type { KeysetSlice } from '../../shared/domain/pagination.js';
-import type { HubOrganizationLink } from './hub-organization-link.js';
+import type {
+  HubLinkStatus,
+  HubOrganizationLink,
+} from './hub-organization-link.js';
 
 export abstract class HubOrganizationRepository {
   abstract find(
@@ -48,6 +51,14 @@ export abstract class HubOrganizationRepository {
   abstract listOwnedInOrganization(
     organizationId: string,
     ownerUserId: string,
+  ): Promise<HubOrganizationLink[]>;
+  /**
+   * Live links and requests of `organizationId` (any hub), read in the organization scope, by hub id; `status`
+   * filters, `after`/`limit` slice. The caller already authorized the reader (`org.hubs.approve`).
+   */
+  abstract listOfOrganization(
+    organizationId: string,
+    filter: { status?: HubLinkStatus; after?: string; limit: number },
   ): Promise<HubOrganizationLink[]>;
   /** Hubs with an approved, live link to `organizationId`, read in the organization scope (no lock). */
   abstract listApprovedHubIdsOfOrganization(

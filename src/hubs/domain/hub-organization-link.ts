@@ -3,7 +3,13 @@ import { Entity } from '../../shared/domain/entity.js';
 
 /** Same string values as organizations' HUB_LINK_POLICIES (declared locally: no cross-module domain import). */
 export type HubLinkPolicy = 'any_member_hub' | 'admin_approved';
-export type HubLinkStatus = 'pending' | 'approved' | 'rejected' | 'revoked';
+export const HUB_LINK_STATUSES = [
+  'pending',
+  'approved',
+  'rejected',
+  'revoked',
+] as const;
+export type HubLinkStatus = (typeof HUB_LINK_STATUSES)[number];
 
 export type HubOrganizationLinkProps = {
   hubId: string;

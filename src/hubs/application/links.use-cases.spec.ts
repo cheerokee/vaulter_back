@@ -299,7 +299,7 @@ describe('RequestHubLinkUseCase', () => {
     code: 'link-code-invalid',
   };
 
-  it('checks membership BEFORE consuming the code, then hub -> link, and never returns the hub id', async () => {
+  it('locks then checks membership BEFORE consuming the code, then hub -> link, and never returns the hub id', async () => {
     link = null;
     linkCodes.consume.mockImplementation(log('consume', code()));
     const view = await useCase().execute(actor(MEMBER), {
@@ -307,7 +307,8 @@ describe('RequestHubLinkUseCase', () => {
       organizationId: ORG,
     });
     expect(view).toEqual({ organizationId: ORG, status: 'pending' });
-    expect(calls.slice(1, 5)).toEqual([
+    expect(calls.slice(1, 6)).toEqual([
+      `lockMember:${ORG}`,
       `requireMember:${ORG}`,
       'consume:h:12345678',
       'lockHub:true',

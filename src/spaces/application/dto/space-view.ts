@@ -17,8 +17,17 @@ export type SpaceView = {
   updatedAt: Date | null;
 };
 
-/** `GET /spaces/:id`: the details plus, for managers only, the open pending grants count. */
-export type SpaceDetailsView = SpaceView & { pendingGrants?: number };
+/** A hub with the space open in its Room (the `hubs` module owns the hub: here it is just an id). */
+export type RoomHubView = { hubId: string; roleKey: SpaceRoleKey };
+
+/**
+ * `GET /spaces/:id`: the details, the Room hubs (every member: rotating the key needs one copy per Room hub) and,
+ * for managers only, the open pending grants count.
+ */
+export type SpaceDetailsView = SpaceView & {
+  roomHubs: RoomHubView[];
+  pendingGrants?: number;
+};
 
 /** An item of "my spaces"; `pendingGrants` only for managers (omitted otherwise). */
 export type SpaceListItemView = Omit<SpaceView, 'updatedAt'> & {

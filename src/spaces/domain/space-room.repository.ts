@@ -8,6 +8,14 @@ import type { SpaceRoleKey } from './space-membership.js';
 export abstract class SpaceRoomRepository {
   /** Hubs with the space open in their Room (active role), sorted. */
   abstract roomHubIds(orgId: string, spaceId: string): Promise<string[]>;
+  /**
+   * The same hubs with the Room's role in the space, sorted by hub id: what a member's app needs to rotate the key
+   * (one copy per Room hub; the hub's encryption key comes from the hubs API).
+   */
+  abstract roomHubs(
+    orgId: string,
+    spaceId: string,
+  ): Promise<{ hubId: string; roleKey: SpaceRoleKey }[]>;
   /** Sets (replaces) the Room's role in the space; clears a tombstone (one row per hub and space). */
   abstract assignRoom(
     orgId: string,

@@ -98,6 +98,34 @@ describe('ProblemDetailsFilter', () => {
     expect(res.body.type).toBe(`${BASE}/${code}`);
   });
 
+  it('adds DomainError.details as extension members, never over a standard member', () => {
+    const res = run(
+      new ConflictError('key-rotation-mismatch', 'mismatch', {
+        expectedHubIds: ['h1'],
+        missingHubIds: ['h1'],
+        type: 'evil',
+        status: 200,
+      }),
+    );
+    expect(res.statusCode).toBe(409);
+    expect(res.body).toEqual({
+      expectedHubIds: ['h1'],
+      missingHubIds: ['h1'],
+      type: `${BASE}/key-rotation-mismatch`,
+      title: 'Conflict',
+      status: 409,
+      detail: 'mismatch',
+      requestId: 'req-1',
+    });
+    expect(Object.keys(run(new ConflictError('c', 'x')).body).sort()).toEqual([
+      'detail',
+      'requestId',
+      'status',
+      'title',
+      'type',
+    ]);
+  });
+
   it('maps Nest HttpException by status code', () => {
     const res = run(new NotFoundException());
     expect(res.statusCode).toBe(404);

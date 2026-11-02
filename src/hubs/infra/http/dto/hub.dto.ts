@@ -3,6 +3,7 @@ import {
   ArrayMaxSize,
   ArrayMinSize,
   IsArray,
+  IsIn,
   IsInt,
   IsOptional,
   IsString,
@@ -12,6 +13,11 @@ import {
   Min,
   ValidateNested,
 } from 'class-validator';
+import { CursorPaginationQuery } from '../../../../shared/infra/http/cursor-pagination.query.js';
+import {
+  HUB_LINK_STATUSES,
+  type HubLinkStatus,
+} from '../../../domain/hub-organization-link.js';
 
 /**
  * Formats of the hubs API (shape only; the domain still checks the keys, the signature, the version byte of the
@@ -153,4 +159,11 @@ export class AssignHubRoleDto {
   @IsString()
   @MaxLength(64)
   roleKey!: string;
+}
+
+/** `GET /organizations/:orgId/hub-links`: cursor page plus an optional status filter. */
+export class OrganizationHubLinksQuery extends CursorPaginationQuery {
+  @IsOptional()
+  @IsIn(HUB_LINK_STATUSES)
+  status?: HubLinkStatus;
 }

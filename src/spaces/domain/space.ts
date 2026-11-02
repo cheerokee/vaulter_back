@@ -72,6 +72,7 @@ export class Space extends Entity<SpaceProps> {
       throw new ConflictError(
         'key-rotation-mismatch',
         'The key version must be the current version plus one.',
+        { expectedVersion: this.props.currentKeyVersion + 1 },
       );
     }
     this.props = {

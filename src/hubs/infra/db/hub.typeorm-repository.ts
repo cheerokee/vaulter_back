@@ -87,6 +87,26 @@ export class HubTypeormRepository extends HubRepository {
     return row ? HubMapper.toDomain(row) : null;
   }
 
+  // Uma leitura por Hub, cada uma no contexto do próprio Hub (`app.hub_id` abre uma linha só); a página tem no máximo
+  // 100 itens. Só o nome sai daqui.
+  async namesOf(hubIds: readonly string[]): Promise<Map<string, string>> {
+    const names = new Map<string, string>();
+    for (const hubId of new Set(hubIds)) {
+      if (!validate(hubId)) continue;
+      const rows: { name: string }[] = await runWithContext(
+        this.dataSource,
+        { hubId },
+        (m) =>
+          m.query(
+            `SELECT name FROM hubs WHERE id = $1 AND deleted_at IS NULL`,
+            [hubId],
+          ),
+      );
+      if (rows[0]) names.set(hubId, rows[0].name);
+    }
+    return names;
+  }
+
   // O filtro explícito (dono ou vínculo aprovado com organização de que a pessoa é membro ativo) é a primeira
   // trava; o RLS do `app.user_id` é a segunda. Ordem por id (v7 = ordem de criação).
   async listForUser(

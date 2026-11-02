@@ -2,6 +2,7 @@ import type {
   HubLinkRequestView,
   HubLinkView,
   HubSpaceView,
+  OrganizationHubLinkView,
 } from '../../../application/dto/hub-link-view.js';
 import type {
   HubView,
@@ -30,6 +31,20 @@ export function hubWithRoleResponse(v: HubWithRoleView) {
 export function hubLinkResponse(v: HubLinkView) {
   return {
     hubId: v.hubId,
+    organizationId: v.organizationId,
+    status: v.status,
+    requestedByUserId: v.requestedByUserId,
+    ownerApprovedAt: iso(v.ownerApprovedAt),
+    orgApprovedAt: iso(v.orgApprovedAt),
+    createdAt: iso(v.createdAt),
+  };
+}
+
+/** A link or request of one organization, as its admin lists it (with the hub name, never the hub's keys). */
+export function organizationHubLinkResponse(v: OrganizationHubLinkView) {
+  return {
+    hubId: v.hubId,
+    hubName: v.hubName,
     organizationId: v.organizationId,
     status: v.status,
     requestedByUserId: v.requestedByUserId,

@@ -17,6 +17,7 @@ import { HubsSpaceMemberLeftHook } from './application/space-member-left.hook.js
 import { IssueLinkCodeUseCase } from './application/issue-link-code.use-case.js';
 import { LinkHubOrganizationUseCase } from './application/link-hub-organization.use-case.js';
 import { ListHubLinksUseCase } from './application/list-hub-links.use-case.js';
+import { ListOrganizationHubLinksUseCase } from './application/list-organization-hub-links.use-case.js';
 import { ListHubSpacesUseCase } from './application/list-hub-spaces.use-case.js';
 import { ListHubsUseCase } from './application/list-hubs.use-case.js';
 import { RejectHubLinkUseCase } from './application/reject-hub-link.use-case.js';
@@ -67,6 +68,7 @@ import {
 import { HubSpacesController } from './infra/http/hub-spaces.controller.js';
 import { HubSyncController } from './infra/http/hub-sync.controller.js';
 import { HubsController } from './infra/http/hubs.controller.js';
+import { OrganizationHubLinksController } from './infra/http/organization-hub-links.controller.js';
 import { HubTokenGuard } from './infra/http/hub-token.guard.js';
 import { LinkCodeTypeormRepository } from './infra/db/link-code.typeorm-repository.js';
 
@@ -93,6 +95,7 @@ import { LinkCodeTypeormRepository } from './infra/db/link-code.typeorm-reposito
     HubLinkCodesController,
     HubSpacesController,
     HubSyncController,
+    OrganizationHubLinksController,
   ],
   providers: [
     // Guard global de rotas @HubAuth(). O HubsModule vem antes do ThrottlingModule no AppModule: o token de Hub é
@@ -134,6 +137,7 @@ import { LinkCodeTypeormRepository } from './infra/db/link-code.typeorm-reposito
     IssueLinkCodeUseCase,
     LinkHubOrganizationUseCase,
     ListHubLinksUseCase,
+    ListOrganizationHubLinksUseCase,
     ListHubSpacesUseCase,
     ListHubsUseCase,
     RejectHubLinkUseCase,

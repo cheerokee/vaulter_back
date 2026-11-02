@@ -60,6 +60,8 @@ interface Problem {
   code: string;
   detail: string;
   errors?: InvalidField[];
+  /** RFC 9457 extension members from `DomainError.details` (4xx domain errors only). */
+  extensions?: Record<string, unknown>;
 }
 
 @Catch()
@@ -79,7 +81,9 @@ export class ProblemDetailsFilter implements ExceptionFilter {
     const requestId = req?.id != null ? String(req.id) : newId();
 
     const problem = this.toProblem(exception, requestId);
+    // Extension members first: they can never overwrite a standard member.
     const body = {
+      ...problem.extensions,
       type: `${this.typeBaseUrl}/${problem.code}`,
       title: TITLES[problem.status] ?? 'Error',
       status: problem.status,
@@ -104,7 +108,12 @@ export class ProblemDetailsFilter implements ExceptionFilter {
     if (exception instanceof DomainError) {
       const status = this.domainStatus(exception);
       if (status !== undefined) {
-        return { status, code: exception.code, detail: exception.message };
+        return {
+          status,
+          code: exception.code,
+          detail: exception.message,
+          ...(exception.details ? { extensions: exception.details } : {}),
+        };
       }
       // DomainError fora do mapeamento: tratado como erro desconhecido (nunca ecoa a mensagem).
     }

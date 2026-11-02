@@ -12,6 +12,12 @@ export abstract class HubRepository {
   abstract findById(hubId: string): Promise<Hub | null>;
   /** Includes deregistered hubs: the key is unique forever. */
   abstract findBySigningKey(signingPublicKey: string): Promise<Hub | null>;
+  /**
+   * Names of ACTIVE hubs, read in each hub's own context (trusted backend read: authorization is the caller's job;
+   * an org admin listing pending requests does not see the hub through the RLS yet). Missing or deregistered ids
+   * are left out of the map.
+   */
+  abstract namesOf(hubIds: readonly string[]): Promise<Map<string, string>>;
   /** Hubs the user owns or reaches through an approved link; active ones only. */
   abstract listForUser(
     userId: string,

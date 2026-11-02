@@ -102,6 +102,20 @@ describe('ListHubLinksUseCase (cursor pagination)', () => {
     ).resolves.toEqual({ items: [], nextCursor: null });
   });
 
+  it('admin with a hand-crafted UPPERCASE cursor: neither repeats nor skips (ids are compared in JS)', async () => {
+    access.find.mockResolvedValue(null);
+    directory.organizationIdsOf.mockResolvedValue([org(1), org(2), org(3)]);
+    orgAccess.hasPermission.mockResolvedValue(true);
+    links.findInOrganization.mockImplementation(
+      async (_h: string, orgId: string) => linkOf(orgId),
+    );
+    const page = await listLinks().execute(actor, HUB, {
+      cursor: encodeCursor(org(1).toUpperCase()),
+      limit: 5,
+    });
+    expect(page.items.map((l) => l.organizationId)).toEqual([org(2), org(3)]);
+  });
+
   it('sees the hub but administers no linked org: 403; does not see it: 404; a bad cursor: 422', async () => {
     directory.organizationIdsOf.mockResolvedValue([org(1)]);
     orgAccess.hasPermission.mockResolvedValue(true);

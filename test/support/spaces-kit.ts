@@ -121,6 +121,7 @@ export function makeSpaceKit() {
   };
   const room = {
     roomHubIds: vi.fn(),
+    roomHubs: vi.fn(),
     assignRoom: vi.fn(),
     upsertHubGrant: vi.fn(),
     removeRoom: vi.fn(),
@@ -385,6 +386,14 @@ export function makeSpaceKit() {
           : [];
       },
     );
+    room.roomHubs.mockImplementation(async (orgId: string, spaceId: string) => {
+      tag('room.roomHubs');
+      return spaceIn(orgId, spaceId)
+        ? [...roomBySpace.get(spaceId)!.entries()]
+            .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+            .map(([hubId, roleKey]) => ({ hubId, roleKey }))
+        : [];
+    });
     room.assignRoom.mockImplementation(
       async (
         orgId: string,

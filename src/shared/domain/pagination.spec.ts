@@ -8,6 +8,12 @@ describe('pagination cursor', () => {
     expect(decodeCursor(encodeCursor(id))).toBe(id);
   });
 
+  it('normalizes an uppercase id to lowercase (JS string comparisons never skip or repeat)', () => {
+    const id = newId();
+    const upper = encodeCursor(id.toUpperCase());
+    expect(decodeCursor(upper)).toBe(id);
+  });
+
   it('rejects garbage', () => {
     expect(() => decodeCursor('%%%')).toThrow(DomainValidationError);
   });
