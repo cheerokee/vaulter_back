@@ -66,6 +66,10 @@ Este módulo dá ao backend o que ele precisa para isso:
 
 ## 4. Fluxo
 
+> Este é o fluxo como foi desenhado. A sequência **como foi implementada** (corpos, respostas, erros, limites,
+> intervalos, contrato de sincronização, desregistro e reset de fábrica) está em
+> [`docs/hubs/hub-lifecycle.md`](../../hubs/hub-lifecycle.md), que vale em caso de divergência.
+
 1. **Primeiro boot (Hub):** o aparelho gera um par **Ed25519** (identidade) e um par **X25519** (cifra). Ficam no
    SSD com LUKS e nunca saem dele.
 2. **Apresentação:**

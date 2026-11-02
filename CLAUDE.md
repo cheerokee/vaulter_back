@@ -398,7 +398,9 @@ exportam); nenhum dos dois importa `spaces`.
 
 ## Módulo `hubs`
 `src/hubs/`. Spec: `docs/superpowers/specs/2026-11-01-hubs-design.md`; formato das assinaturas do Hub em
-`docs/crypto/hub-identity.md`. Depende de `identity` (`HubTokenService`), `organizations` (`OrganizationAccess`,
+`docs/crypto/hub-identity.md`; **ciclo de vida do Hub** (sequência do primeiro boot ao reset de fábrica, para quem
+implementa o aparelho e o app) em `docs/hubs/hub-lifecycle.md` — mudou rota, corpo, erro ou limite de Hub, atualize-o
+no mesmo commit. Depende de `identity` (`HubTokenService`), `organizations` (`OrganizationAccess`,
 `OrganizationDirectory`, `AuditLog`) e `spaces` (`SpaceAccess`, `SpaceRoomService`), só pelo que eles exportam;
 nenhum deles importa `hubs`. Única exceção: a sincronização lê tabelas dos outros módulos por um repositório de
 consulta só de leitura (veja Sincronização).
