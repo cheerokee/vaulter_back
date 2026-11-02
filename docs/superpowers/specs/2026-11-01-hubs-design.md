@@ -237,6 +237,7 @@ Este módulo dá ao backend o que ele precisa para isso:
 | `GET /hubs` | meus Hubs (dono) e Hubs das minhas organizações | usuário |
 | `GET /hubs/:id`, `PATCH /hubs/:id` (nome), `DELETE /hubs/:id` | detalhes, renomear, desregistrar | dono (detalhes também membro de org vinculada) |
 | `GET /hubs/:id/organizations` | vínculos e pedidos | dono, admin da org |
+| `GET /organizations/:orgId/hub-links` | vínculos e pedidos de Hub **da organização** (`?status=`, cursor por id do Hub; `hubId`, nome do Hub, status, `requestedByUserId`, os dois consentimentos, `createdAt`): é como o admin descobre o `hubId` de um pedido pendente sob `admin_approved` | admin com `org.hubs.approve` (404 não membro, 403 sem a permissão) |
 | `POST /hubs/:id/organizations` | dono vincula uma organização sua (`organizationId`) | dono |
 | `POST /hub/link-codes` | Hub pede um código de vínculo (8 dígitos, 10 min) | Hub autenticado |
 | `POST /hubs/link-requests` | outro usuário pede o vínculo da organização dele (`linkCode`, `organizationId`) | membro da org, com rate limit por usuário |
@@ -248,6 +249,9 @@ Este módulo dá ao backend o que ele precisa para isso:
 | `PUT /hubs/:id/roles/:userId` / `DELETE` | papel de Hub de um membro (`hub_operator` / `hub_user`) | dono |
 | `GET /hub/sync` | sincronização do Hub | Hub autenticado |
 
+- **Troca de chave com Sala:** `GET /spaces/:id` (módulo `spaces`) traz `roomHubs: [{ hubId, roleKey }]` para todo
+  membro do espaço; a `encryptionPublicKey` de cada Hub vem de `GET /hubs/:id` (todo membro do espaço é membro da
+  organização vinculada e aprovada). O 409 `key-rotation-mismatch` traz os ids esperados, faltando e a mais.
 - **Hub inexistente:** quem não pode ver o Hub recebe **404**.
 - **Ação sem permissão:** em Hub que a pessoa vê, responde **403**.
 - **Rotas de Hub autenticado:** ficam sob um prefixo próprio (`/hub/...`) e aceitam **só** token de Hub. As de
@@ -273,7 +277,13 @@ Este módulo dá ao backend o que ele precisa para isso:
   - paginada por `sync_version`, com lápides (`withDeleted`);
   - nunca envia `authHash` nem segredos;
   - só dados das organizações vinculadas e aprovadas;
-  - um Hub não vê nada de organização que ele não atende, garantido pelo caso de uso e pelo RLS com `app.hub_id`.
+  - um Hub não vê nada de organização que ele não atende. Garantias reais (depois da decisão de o Hub ler **todos** os
+    próprios vínculos, de qualquer status, para receber as lápides):
+    - a **lista de organizações** da sincronização é filtrada pelo leitor (`status = 'approved'` e sem lápide em
+      `hub_organization`); aqui o RLS com `app.hub_id` não restringe o status, então o filtro é a trava, fixada por
+      e2e;
+    - `hub_space` (e, por ele, espaços, versões e cópias da chave) continua exigindo vínculo **aprovado** também no
+      RLS (`hub_read`), e cada organização é lida com `{ organizationId, hubId }`.
 - **Rate limit:**
   - apresentação, consulta de status e autenticação de Hub, por IP;
   - reivindicação, por usuário (mais forte, contra adivinhar o código de 8 dígitos);

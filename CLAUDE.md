@@ -186,7 +186,10 @@ src/
   | qualquer outro | 500 genérico |
 
   Resposta sempre em **RFC 9457 (`application/problem+json`)**: `type`, `title`, `status`, `detail`,
-  `requestId` (e, em validação, a lista de campos inválidos). Erros 4xx do body-parser (413 corpo grande,
+  `requestId` (e, em validação, a lista de campos inválidos). Um erro de domínio 4xx com `details` leva esses campos
+  como **membros de extensão** do RFC 9457 (nunca sobrepõem os padrão), ex.: `key-rotation-mismatch` com
+  `expectedHubIds`/`missingHubIds`/`unexpectedHubIds`/`duplicatedHubIds` (e o mesmo para `...UserIds`) ou
+  `expectedVersion`. Só ids que quem chamou já pode ver. Erros 4xx do body-parser (413 corpo grande,
   400 JSON malformado) também saem como problem+json. Stack trace, SQL e mensagem crua do banco vão só
   para o log, nunca para a resposta.
 - O modelo de dados e as regras de negócio vêm da spec
@@ -400,8 +403,12 @@ exportam); nenhum dos dois importa `spaces`.
 nenhum deles importa `hubs`. Única exceção: a sincronização lê tabelas dos outros módulos por um repositório de
 consulta só de leitura (veja Sincronização).
 - **Identidade do Hub:** o aparelho gera um par Ed25519 e assina mensagens JSON canônicas com **rótulo** de uso
-  (`hub-enroll-v1`, `hub-status-v1`, `hub-auth-v1`, sem o nome do produto; formato, vetor e regras de
-  canonicalização em `docs/crypto/hub-identity.md`, implementação única em `domain/hub-signed-message.ts`). O código
+  (`hub-enroll-v1`, `hub-status-v1`, `hub-auth-v1`, sem o nome do produto; formato, vetor, regras de
+  canonicalização e a receita em Python (`json.dumps(..., sort_keys=True, separators=(',', ':'),
+  ensure_ascii=False)`, timestamp terminando em `Z`) em `docs/crypto/hub-identity.md`, implementação única em
+  `domain/hub-signed-message.ts`). **Uma apresentação pendente por chave** (índice único parcial
+  `uq_hub_enrollments_pending_signing_key`): a apresentação nova expira a anterior da mesma chave na mesma transação
+  (replay com nonce repetido não derruba a pendente) e, na corrida, quem perde expira a outra e tenta de novo. O código
   de reivindicação (8 dígitos) e o desafio de autenticação ficam no banco só como hash com chave
   (`HUB_CODE_HASH_KEY`, BLAKE2b, domínio próprio por uso); trocar a chave invalida o que está pendente. O token de
   Hub sai de `POST /hub-auth/token` (desafio assinado, uso único); o desafio de Hub inexistente ou desregistrado é
@@ -426,7 +433,13 @@ consulta só de leitura (veja Sincronização).
 - **Vínculos** (casos de uso em `application/`): o dono vincula (`any_member_hub` aprova na hora;
   `admin_approved` espera um admin); outro membro pede com o **código de vínculo** do Hub (8 dígitos, 10 min, uso
   único, só hash com domínio próprio; código inválido/vencido/usado/de Hub desregistrado = o mesmo 422
-  `link-code-invalid`; a resposta não traz o `hubId`); aprovar/recusar/desvincular: dono ou admin. **Aprovar usa
+  `link-code-invalid`; a resposta não traz o `hubId`; trava o vínculo de quem pede com a organização,
+  `lockActiveMember`, antes do Hub, como o vínculo pelo dono); aprovar/recusar/desvincular: dono ou admin. **O admin
+  acha o pedido** em `GET /organizations/:orgId/hub-links` (`OrganizationHubLinksController`, no `hubs`; exige
+  `org.hubs.approve`: 404 não membro, 403 sem a permissão; `?status=` opcional; cursor por id do Hub; devolve
+  `hubId`, `hubName`, status, `requestedByUserId` e os dois consentimentos): é o único jeito de ele saber o `hubId` de
+  um pedido pendente, porque ainda não vê o Hub pelo RLS (o nome vem de uma leitura no contexto de cada Hub,
+  `HubRepository.namesOf`, depois da autorização). **Aprovar usa
   sempre a política ATUAL**, mesmo quando aquele lado já consentiu (resolve o pendente quando a organização relaxa).
   Desvincular (`HubLinkCascade`, um `uow.run`): vínculo `revoked`, espaços da organização fora do Hub, Sala e cópias
   com troca pendente, papéis de Hub de quem ficou sem organização vinculada, auditoria. A organização pessoal do
@@ -443,7 +456,14 @@ consulta só de leitura (veja Sincronização).
   uma organização vinculada estão no Hub (FK composta para o vínculo, lápide ao tirar). Liberar na Sala exige
   espaço já no Hub, `allowRoomSpaces` só para liberação **nova** (422 `room-not-allowed`; liberar de novo ou trocar
   o papel de um Hub já na Sala segue permitido), cópias de **todas** as versões, e o Hub conta no `SPACE_MAX_MEMBERS`.
-  Troca de chave sem `hubGrants` com exatamente os Hubs da Sala dá 409 `key-rotation-mismatch`.
+  Troca de chave sem `hubGrants` com exatamente os Hubs da Sala dá 409 `key-rotation-mismatch` (com
+  `expectedHubIds`/`missingHubIds`/`unexpectedHubIds`). **Como o app descobre a Sala para trocar a chave:**
+  `GET /spaces/:id` traz `roomHubs: [{ hubId, roleKey }]` para todo membro do espaço (lido pelo `spaces` em
+  `role_assignments`, sem importar `hubs`), e a chave de cifra de cada Hub vem de `GET /hubs/:id`: todo membro do
+  espaço é membro ativo da organização, e a Sala só existe com vínculo **aprovado** dela (desvincular e desregistrar
+  derrubam a Sala), então `HubAccess` sempre deixa ele ver o Hub. Escolhido em vez de copiar a chave para o `spaces`
+  (nenhuma porta nova, nenhum dado duplicado). O helper de e2e `c.spaces.rotate` descobre os Hubs assim
+  (`roomHubRecipients`); `hubs` explícito só para mandar um conjunto errado de propósito.
 - **Ganchos:** `SpaceMemberLeftHooks` (o `hubs` tira da Sala o que o dono, ao sair do espaço, havia liberado);
   `MemberRemovedHooks` ganhou `order` (menor roda antes): o `hubs` assina duas vezes, `-10` (só trava) e `+10`
   (cascata). Dono do Hub que sai da organização (removido ou saindo) tem seus Hubs desvinculados dela.
@@ -458,6 +478,7 @@ consulta só de leitura (veja Sincronização).
   chaves, apresenta, consulta o status assinado, autentica, pede código de vínculo, sincroniza; `onboard` faz o fluxo
   inteiro com a reivindicação do dono). e2e pela HTTP em `test/hubs/http.e2e-spec.ts` e `test/hubs/rate-limit.e2e-spec.ts`.
 - **HTTP** (`infra/http/`: `hub-enrollments`, `hub-auth`, `hubs`, `hub-organizations` (+ `HubLinkCodesController`),
+  `organization-hub-links`,
   `hub-spaces` e `hub-sync` controllers; rotas da spec §7, todas internas, tag `hubs`): públicas do aparelho
   (`/hub-enrollments`, `/hub-auth/*`) sem cadeado no Swagger; rotas `/hub/*` só com token de Hub; o resto só com token de
   usuário. Ids de caminho pelo `uuidPipe`, **exceto** `GET /hub-enrollments/:id/status` (id malformado, assinatura
@@ -486,7 +507,10 @@ consulta só de leitura (veja Sincronização).
   500). O leitor é uma **exceção documentada** à fronteira entre módulos: projeção só de leitura, em SQL, sobre as
   tabelas de identity/organizations/spaces (mudou coluna lá, atualize as consultas). Transação `REPEATABLE READ, READ
   ONLY` (um snapshot só); organizações aprovadas lidas de `hub_organization` no contexto do Hub e cada uma lida em
-  sequência com `{ organizationId, hubId }`. `member` é por (organização, pessoa), versão = maior `sync_version` entre
+  sequência com `{ organizationId, hubId }`. **O que garante o escopo:** a lista de organizações é protegida só pelo
+  filtro `status = 'approved'` do leitor (o RLS deixa o Hub ler todos os próprios vínculos; fixado por
+  `test/hubs/sync.e2e-spec.ts`, "an organization without an approved link never appears" e "an unlink followed by a
+  new request"); `hub_space` (e, por ele, espaços, chaves e cópias) continua exigindo vínculo aprovado também no RLS. `member` é por (organização, pessoa), versão = maior `sync_version` entre
   vínculo, usuário e papéis embutidos — um mesmo valor pode estar em vários itens; a página nunca parte esse grupo.
   Lápide leva só as chaves. O Hub lê **todos** os próprios vínculos (`hub_read`, qualquer status): todo vínculo que
   não é `approved` vivo (revogado, e também pendente/recusado, porque pedir de novo reaproveita a linha revogada)
@@ -498,7 +522,10 @@ consulta só de leitura (veja Sincronização).
   cópia do kit nem cópia de outro Hub. Empate de `sync_version`: ver comentário de `mergeSyncPage` (a página só passa
   de `limit` quando um único grupo é maior que ele). **Consulta de status** (`GET /hub-enrollments/:id/status`, 120/h
   por IP, que atrás de NAT é dividido entre aparelhos): recomendar intervalo de **pelo menos 60 s** com jitter e parar
-  no estado final.
+  no estado final. **Intervalo recomendado da sincronização** (`hubSync` = 120/h por Hub, e a completa e cada página
+  também contam): incremental a cada **5 min** com jitter de ±20% (12/h), sempre `limit=500`, e na mesma passada
+  pedir as páginas seguintes enquanto vier página cheia; isso deixa ~100 pedidos/h para páginas extras e
+  sincronizações completas (~50 mil itens). Com 429, esperar o `Retry-After`; nunca repetir em laço apertado.
 - **Testes (helpers):** `test/support/hub-crypto.ts` (cripto do aparelho: chaves, assinaturas), `hub-client.ts` e
   `hubs-kit.ts` (acima). Não duplicar nos specs.
 
@@ -644,14 +671,16 @@ Os valores do `.env.example` para os segredos são **só de desenvolvimento**; p
   | `POST /hub-enrollments` (pública) | 20/h por IP |
   | `GET /hub-enrollments/:id/status` (pública) | 120/h por IP |
   | `POST /hub-auth/challenge` e `POST /hub-auth/token` (públicas) | 60/h por IP, **um orçamento só para as duas** (`THROTTLE_GROUPS.hubAuth`) |
-  | `POST /hubs/claim` | 10/h por usuário |
+  | `POST /hubs/claim` | 30/h por IP **e** 10/h por usuário (`@ThrottleByUser`) |
   | `POST /hubs/link-requests` | 10/h por usuário |
   | `POST /hub/link-codes` | 30/h por Hub (`hubIdTracker`) |
   | `GET /hub/sync` | 120/h por Hub (`hubIdTracker`) |
   Rota com `@Throttle` próprio tem contador próprio (por rota); `@ThrottleGroup(THROTTLE_GROUPS.x, tracker?)`
   (`throttling.decorators.ts`) faz rotas dividirem um contador (chave = grupo + tracker, sem a rota); cada grupo é
   UMA constante com nome e limite em `THROTTLE_GROUPS` (`rate-limits.ts`), e o decorator recusa o mesmo grupo com
-  limites diferentes. O tracker padrão (da biblioteca) já agrupa IPv6 no /64, como o `ipTracker` (fixado em
+  limites diferentes. `@ThrottleByUser(limite)` soma um contador **por usuário e rota** (throttler nomeado `user`,
+  `USER_THROTTLER`) ao `default` da rota, que fica livre para outro contador (ex.: reivindicação, por IP no `default` e
+  por usuário no `user`, como o login faz com IP + e-mail). O tracker padrão (da biblioteca) já agrupa IPv6 no /64, como o `ipTracker` (fixado em
   `app-throttler.guard.spec.ts`). Limite por Hub usa
   `hubIdTracker` (`src/hubs/infra/http/hub-id.tracker.ts`, lê `request.hub`): o `HubTokenGuard` precisa rodar antes do
   throttler (`HubsModule` antes do `ThrottlingModule`; fixado por `test/hubs/rate-limit.e2e-spec.ts`). Os contadores por e-mail não vão em cabeçalho.

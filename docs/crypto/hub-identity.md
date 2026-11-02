@@ -31,6 +31,32 @@ assinatura = crypto_sign_detached(bytes, chavePrivadaDeAssinatura)
   extras (a ordem de entrada não importa). Implementação única: `src/hubs/domain/hub-signed-message.ts`.
 - O **rótulo** separa os usos: uma assinatura de um rótulo não vale em outro. Rótulos **não levam o nome do
   produto**.
+- **Escape (v1):** todos os campos v1 são **strings ASCII que não precisam de escape** (base64url, UUID, dígitos e o
+  timestamp); nenhum campo v1 é número, booleano, `null`, objeto aninhado ou texto livre. Por isso a serialização
+  é exatamente `{"chave":"valor",...}`, sem `\` em lugar nenhum. Texto não ASCII **não é usado no v1**: se um rótulo
+  futuro levar texto livre, ele define as regras de escape (e de normalização Unicode) junto com o novo rótulo.
+- **Timestamp:** ISO 8601 em UTC terminando em **`Z`**, nunca `+00:00` (o servidor recusa com 422
+  `timestamp-invalid`), com **no máximo 3 casas** de fração de segundo (ex.: `2026-11-01T12:00:00.000Z` ou
+  `2026-11-01T12:00:00Z`). O texto assinado é o mesmo texto enviado: o servidor não reformata o timestamp.
+- **Receita do Hub em Python** (gera, para o vetor abaixo, o mesmo JSON canônico do backend; conferido):
+
+  ```python
+  import json
+  from datetime import datetime, timezone
+
+  def canonical_json(fields: dict) -> str:
+      return json.dumps(fields, sort_keys=True, separators=(',', ':'), ensure_ascii=False)
+
+  def hub_timestamp() -> str:
+      # isoformat() sozinho dá microssegundos e '+00:00': os dois são recusados
+      return datetime.now(timezone.utc).isoformat(timespec='milliseconds').replace('+00:00', 'Z')
+
+  signed_bytes = label.encode('utf-8') + b'\x00' + canonical_json(fields).encode('utf-8')
+  ```
+
+  `sort_keys` ordena por ponto de código e o JavaScript por unidades UTF-16: para as chaves ASCII do v1 é a mesma
+  ordem. `ensure_ascii=False` não muda nada no v1 (só ASCII); ele está na receita para o Python nunca produzir
+  `\uXXXX` onde o JavaScript produziria o caractere.
 
 | Rótulo          | Campos assinados                                                | Uso                 |
 | --------------- | --------------------------------------------------------------- | ------------------- |
@@ -38,7 +64,7 @@ assinatura = crypto_sign_detached(bytes, chavePrivadaDeAssinatura)
 | `hub-status-v1` | `enrollmentId`, `timestamp`                                     | consulta de status  |
 | `hub-auth-v1`   | `hubId`, `challenge`                                            | autenticação do Hub |
 
-- `timestamp`: ISO 8601 UTC; o servidor aceita **±5 min** do relógio dele.
+- `timestamp`: ISO 8601 UTC terminando em `Z` (veja acima); o servidor aceita **±5 min** do relógio dele.
 - `nonce`: 16 bytes aleatórios, de uso único por `signingPublicKey`.
 - Assinatura ou chave malformada, ou que não confere: a verificação devolve falso (nunca erro), e a rota
   responde sempre igual.
