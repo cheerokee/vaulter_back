@@ -5,7 +5,9 @@ import { OrganizationDirectory } from '../../organizations/application/organizat
 import { UnitOfWork } from '../../shared/infra/db/unit-of-work.js';
 import { HubRoleRepository } from '../domain/hub-role.repository.js';
 import { HubRoleRules } from '../domain/hub-roles.js';
+import { HubRepository } from '../domain/hub.repository.js';
 import { HubAccess } from './hub-access.js';
+import { hubNotFound } from './hub-errors.js';
 import { ownerAuditOrganization } from './owner-audit.js';
 
 // Tira o papel de Hub explícito de um membro (`DELETE /hubs/:id/roles/:userId`): só o dono (404/403), nunca o dele
@@ -16,6 +18,7 @@ export class RemoveHubRoleUseCase {
   constructor(
     private readonly access: HubAccess,
     private readonly directory: OrganizationDirectory,
+    private readonly hubs: HubRepository,
     private readonly hubRoles: HubRoleRepository,
     private readonly audit: AuditLog,
     private readonly uow: UnitOfWork,
@@ -30,6 +33,8 @@ export class RemoveHubRoleUseCase {
       await this.uow.setContext({ userId: actor.userId });
       const hub = await this.access.requireOwner(hubId, actor.userId);
       HubRoleRules.assertNotOwner(hub.ownerUserId, userId);
+      // Mesma ordem das outras escritas de papel: o Hub primeiro (FOR SHARE).
+      if (!(await this.hubs.lockForShare(hubId))) throw hubNotFound();
       if (!(await this.hubRoles.roleOf(hubId, userId))) return;
       await this.hubRoles.remove(hubId, userId);
       await this.audit.record({

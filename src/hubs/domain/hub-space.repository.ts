@@ -27,6 +27,14 @@ export abstract class HubSpaceRepository {
     spaceId: string,
     organizationId: string,
   ): Promise<HubSpaceRef | null>;
+  /**
+   * SELECT ... FOR UPDATE on every live row of the hub in `organizationId` (space id order), in the organization
+   * scope; returns the space ids. REQUIRES an active unit of work. Taken by the owner-exit hook before any space lock.
+   */
+  abstract lockAllOfOrganization(
+    hubId: string,
+    organizationId: string,
+  ): Promise<string[]>;
   abstract list(hubId: string): Promise<HubSpaceRef[]>;
   /** Live rows of the hub in `organizationId`, read in the organization scope. */
   abstract listInOrganization(

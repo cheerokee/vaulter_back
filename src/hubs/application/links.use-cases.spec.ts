@@ -141,6 +141,81 @@ beforeEach(() => {
 });
 afterEach(() => vi.useRealTimers());
 
+describe('approve, reject and unlink never reveal whether a hub exists to a non-owner', () => {
+  const LINK_404 = { constructor: NotFoundError, code: 'hub-link-not-found' };
+  const cases: [
+    string,
+    () => {
+      execute: (a: ReturnType<typeof actor>, i: typeof ids) => Promise<unknown>;
+    },
+  ][] = [
+    [
+      'approve',
+      () =>
+        new ApproveHubLinkUseCase(
+          as<HubAccess>(access),
+          as<OrganizationAccess>(orgAccess),
+          as<OrganizationDirectory>(directory),
+          as<HubRepository>(hubs),
+          as<HubOrganizationRepository>(links),
+          as<AuditLog>(audit),
+          as<UnitOfWork>(uow),
+        ),
+    ],
+    [
+      'reject',
+      () =>
+        new RejectHubLinkUseCase(
+          as<HubAccess>(access),
+          as<OrganizationAccess>(orgAccess),
+          as<HubRepository>(hubs),
+          as<HubOrganizationRepository>(links),
+          as<AuditLog>(audit),
+          as<UnitOfWork>(uow),
+        ),
+    ],
+    [
+      'unlink',
+      () =>
+        new UnlinkHubOrganizationUseCase(
+          as<HubAccess>(access),
+          as<OrganizationAccess>(orgAccess),
+          as<HubRepository>(hubs),
+          as<HubOrganizationRepository>(links),
+          as<HubLinkCascade>(cascade),
+          as<UnitOfWork>(uow),
+        ),
+    ],
+  ];
+
+  it.each(cases)(
+    '%s: an unknown/deregistered hub and an existing hub without a link give the same 404 to an admin',
+    async (_name, make) => {
+      // admin path (any user is admin of their personal org): unknown hub id
+      hubs.lockForShare.mockResolvedValueOnce(null);
+      const unknown = await make()
+        .execute(actor(ADMIN), ids)
+        .catch((e: unknown) => e);
+      // existing hub, no link with that org
+      link = null;
+      const unlinked = await make()
+        .execute(actor(ADMIN), ids)
+        .catch((e: unknown) => e);
+      expect(unknown).toMatchObject(LINK_404);
+      expect(unlinked).toMatchObject(LINK_404);
+      expect((unknown as Error).constructor).toBe(
+        (unlinked as Error).constructor,
+      );
+      // the owner already knows the hub: a deregistered one is hub-not-found
+      hubs.lockForShare.mockResolvedValueOnce(null);
+      await expect(make().execute(actor(OWNER), ids)).rejects.toMatchObject({
+        code: 'hub-not-found',
+      });
+      expect(links.upsert).not.toHaveBeenCalled();
+    },
+  );
+});
+
 describe('LinkHubOrganizationUseCase', () => {
   const useCase = () =>
     new LinkHubOrganizationUseCase(

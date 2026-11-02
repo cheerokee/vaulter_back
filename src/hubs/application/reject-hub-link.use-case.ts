@@ -38,7 +38,10 @@ export class RejectHubLinkUseCase {
         organizationId,
         actor.userId,
       );
-      if (!(await this.hubs.lockForShare(hubId))) throw hubNotFound();
+      // Quem não é dono não descobre se o Hub existe: Hub inexistente/desregistrado e Hub sem vínculo com a
+      // organização dão o MESMO 404 `hub-link-not-found`.
+      const notFound = isOwner ? hubNotFound : hubLinkNotFound;
+      if (!(await this.hubs.lockForShare(hubId))) throw notFound();
       const link = await this.links.lockForUpdate(hubId, organizationId);
       if (!link) throw hubLinkNotFound();
       link.reject();

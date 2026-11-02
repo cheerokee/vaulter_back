@@ -539,6 +539,29 @@ describe('hub links, hub spaces, Room, roles and deregistration (e2e)', () => {
     });
   });
 
+  describe('hub existence stays hidden', () => {
+    it('a non-owner admin gets the same 404 for an unknown hub id and for an existing hub without a link', async () => {
+      const hub = await k.claim(olivia);
+      const personal: { id: string }[] = await admin.query(
+        `SELECT id FROM organizations WHERE personal_owner_user_id = $1`,
+        [carl.userId],
+      );
+      const carlOrg = personal[0]!.id;
+      for (const call of [k.approve, k.reject, k.unlink]) {
+        const unknown = await call(carl, newId(), carlOrg).catch((e) => e);
+        const existing = await call(carl, hub.hubId, carlOrg).catch((e) => e);
+        expect(unknown).toMatchObject(err(NotFoundError, 'hub-link-not-found'));
+        expect(existing).toMatchObject(
+          err(NotFoundError, 'hub-link-not-found'),
+        );
+      }
+      await k.deregister(olivia, hub.hubId);
+      await expect(k.approve(carl, hub.hubId, carlOrg)).rejects.toMatchObject(
+        err(NotFoundError, 'hub-link-not-found'),
+      );
+    });
+  });
+
   describe('spaces on the hub', () => {
     it('the owner (a member of the space) or a Gestor of a linked org adds; strangers get 404/403; only linked, approved orgs', async () => {
       const hub = await k.claim(olivia);
@@ -693,6 +716,40 @@ describe('hub links, hub spaces, Room, roles and deregistration (e2e)', () => {
   });
 
   describe('hub roles', () => {
+    it('assignment waits for an unlink holding the link FOR UPDATE and is then refused (no orphan role)', async () => {
+      const x = await hubWithSpace('Roles Race', [bia]);
+      const upd = await hold(
+        `SELECT 1 FROM hub_organization WHERE hub_id = $1 AND organization_id = $2 FOR UPDATE`,
+        [x.hub.hubId, x.orgId],
+      );
+      let assigning: Promise<unknown> | undefined;
+      try {
+        assigning = k.assignRole(
+          olivia,
+          x.hub.hubId,
+          bia.userId,
+          'hub_operator',
+        );
+        const done = settledFlag(assigning);
+        await sleep(300);
+        expect(done()).toBe(false);
+        await upd.qr.query(
+          `UPDATE hub_organization SET status = 'revoked' WHERE hub_id = $1 AND organization_id = $2`,
+          [x.hub.hubId, x.orgId],
+        );
+        await upd.commit();
+      } finally {
+        await upd.release();
+      }
+      await expect(assigning).rejects.toMatchObject(
+        err(DomainValidationError, 'user-not-in-linked-organization'),
+      );
+      expect(await liveHubRoles(x.hub.hubId)).not.toContainEqual([
+        'hub_operator',
+        bia.userId,
+      ]);
+    });
+
     it('the owner assigns hub_operator/hub_user to members of linked orgs; owner protected; role and target checked', async () => {
       const x = await hubWithSpace('Roles', [bia]);
       await expect(
@@ -819,6 +876,8 @@ describe('hub links, hub spaces, Room, roles and deregistration (e2e)', () => {
         reason: 'hub_deregistered',
         spaceIds: [sa.spaceId],
       });
+      // B já estava revogado: só ganha a lápide, sem auditoria de revogação enganosa
+      expect(await auditRows(b.orgId, 'hub.organization.revoked')).toEqual([]);
     });
 
     it('is atomic, and takes the hub row FOR UPDATE first (waits for a FOR SHARE holder, like a link upsert)', async () => {
@@ -1002,6 +1061,46 @@ describe('hub links, hub spaces, Room, roles and deregistration (e2e)', () => {
       expect(revoked.map((r) => [r.user_id, r.metadata['reason']])).toEqual([
         [olivia.userId, 'owner_left_organization'],
       ]);
+      // a Sala caiu na rodada de espaços do `spaces` (saída do espaço), não numa segunda rodada da cascata
+      expect(revoked[0]!.metadata['roomSpaceIds']).toEqual([]);
+      expect(
+        (await auditRows(a.orgId, 'hub.room.revoked')).map(
+          (r) => r.metadata['reason'],
+        ),
+      ).toEqual(['owner_left_space']);
+    });
+
+    it('owner exit waits behind a hub_space removal holding its row, then completes (hub_space before space)', async () => {
+      const hub = await k.claim(olivia);
+      const a = await org(ana, 'Owner Leaves Lock', [olivia]);
+      await k.link(olivia, hub.hubId, a.orgId);
+      const sp = await space(ana, a.orgId, a.kit.publicKey, [], [olivia]);
+      await k.addSpace(olivia, hub.hubId, sp.spaceId);
+      const row = await hold(
+        `SELECT 1 FROM hub_space WHERE hub_id = $1 AND space_id = $2 FOR UPDATE`,
+        [hub.hubId, sp.spaceId],
+      );
+      let leaving: Promise<unknown> | undefined;
+      try {
+        leaving = c
+          .http()
+          .post(`/organizations/${a.orgId}/leave`)
+          .set(auth(olivia))
+          .then((r) => r.status);
+        const done = settledFlag(leaving);
+        await sleep(300);
+        expect(done()).toBe(false);
+        // o espaço ainda não foi travado pela saída: outra transação o trava sem esperar
+        const probe = await hold(
+          `SELECT 1 FROM spaces WHERE id = $1 FOR UPDATE NOWAIT`,
+          [sp.spaceId],
+        );
+        await probe.release();
+      } finally {
+        await row.release();
+      }
+      await expect(leaving).resolves.toBe(204);
+      expect((await linkRow(hub.hubId, a.orgId))?.status).toBe('revoked');
     });
   });
 });

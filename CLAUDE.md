@@ -409,8 +409,12 @@ nenhum deles importa `hubs`.
   primeiro lock) -> linha do vínculo (`HubOrganizationRepository.lockForUpdate`; `lockForShare` na liberação da Sala
   e ao pôr espaço) -> `hub_space` -> espaço -> Gestores. Desvincular segura o vínculo `FOR UPDATE` antes de
   `revokeRoomForOrganization`. O gancho de saída do espaço (`hubs.space-member-left`) roda com o espaço já travado e
-  **só lê** vínculos. O gancho de saída da organização do `hubs` roda **antes** do `spaces` (`order: -10` em
-  `MemberRemovedHooks`), para travar vínculos antes de espaços.
+  **só lê** vínculos. O gancho de saída da organização do `hubs` tem duas fases em `MemberRemovedHooks`: `order: -10`
+  só trava (Hub -> vínculos do dono com a organização -> linhas de hub_space), antes do `spaces`; `order: +10`
+  desvincula. A Sala já caiu na rodada de espaços do `spaces` (só o dono que é Gestor libera, e a liberação cai quando
+  ele sai do espaço), então a cascata não trava uma segunda rodada de espaços. Atribuir papel de Hub trava Hub ->
+  vínculo (FOR SHARE) -> vínculo do alvo com a organização. Para quem não é dono, aprovar/recusar/desvincular dá o
+  mesmo 404 `hub-link-not-found` para Hub inexistente e para Hub sem vínculo (não revela que o Hub existe).
 - **Vínculos** (casos de uso em `application/`): o dono vincula (`any_member_hub` aprova na hora;
   `admin_approved` espera um admin); outro membro pede com o **código de vínculo** do Hub (8 dígitos, 10 min, uso
   único, só hash com domínio próprio; código inválido/vencido/usado/de Hub desregistrado = o mesmo 422

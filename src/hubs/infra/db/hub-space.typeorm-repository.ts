@@ -133,6 +133,30 @@ export class HubSpaceTypeormRepository extends HubSpaceRepository {
     return row ? toRef(row) : null;
   }
 
+  async lockAllOfOrganization(
+    hubId: string,
+    organizationId: string,
+  ): Promise<string[]> {
+    requireUnitOfWork(
+      this.dataSource,
+      'HubSpaceRepository.lockAllOfOrganization',
+    );
+    if (!validate(hubId) || !validate(organizationId)) return [];
+    const rows: { space_id: string }[] = await runInOrganizationScope(
+      this.dataSource,
+      organizationId,
+      (m) =>
+        m.query(
+          `SELECT space_id FROM hub_space
+            WHERE hub_id = $1 AND organization_id = $2 AND deleted_at IS NULL
+            ORDER BY space_id
+              FOR UPDATE`,
+          [hubId, organizationId],
+        ),
+    );
+    return rows.map((r) => r.space_id);
+  }
+
   async listInOrganization(
     hubId: string,
     organizationId: string,

@@ -49,7 +49,12 @@ export class DeregisterHubUseCase {
       if (!hub || hub.isDeregistered) throw hubNotFound();
 
       const everLinked = await this.links.listAllOrgIds(hubId);
-      const revokedOrgIds = await this.links.tombstoneAllOfHub(hubId);
+      // Só os vínculos vivos pendentes/aprovados são revogados de fato (e auditados); recusados e já revogados só
+      // ganham a lápide.
+      const revokedOrgIds = (await this.links.list(hubId))
+        .filter((l) => l.status === 'pending' || l.status === 'approved')
+        .map((l) => l.organizationId);
+      await this.links.tombstoneAllOfHub(hubId);
       const spaceIdsByOrg = new Map<string, string[]>();
       for (const organizationId of everLinked) {
         spaceIdsByOrg.set(

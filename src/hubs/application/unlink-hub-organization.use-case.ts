@@ -32,14 +32,17 @@ export class UnlinkHubOrganizationUseCase {
     const { hubId, organizationId } = input;
     return this.uow.run(async () => {
       await this.uow.setContext({ userId: actor.userId });
-      await resolveLinkDecider(
+      const { isOwner } = await resolveLinkDecider(
         this.access,
         this.orgAccess,
         hubId,
         organizationId,
         actor.userId,
       );
-      if (!(await this.hubs.lockForShare(hubId))) throw hubNotFound();
+      // Quem não é dono não descobre se o Hub existe: Hub inexistente/desregistrado e Hub sem vínculo com a
+      // organização dão o MESMO 404 `hub-link-not-found`.
+      const notFound = isOwner ? hubNotFound : hubLinkNotFound;
+      if (!(await this.hubs.lockForShare(hubId))) throw notFound();
       const link = await this.links.lockForUpdate(hubId, organizationId);
       if (!link) throw hubLinkNotFound();
       await this.cascade.unlink(link, {

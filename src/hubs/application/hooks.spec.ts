@@ -6,6 +6,7 @@ import type { SpaceRoomService } from '../../spaces/application/space-room.servi
 import { HubOrganizationLink } from '../domain/hub-organization-link.js';
 import type { HubOrganizationRepository } from '../domain/hub-organization.repository.js';
 import type { HubRoleRepository } from '../domain/hub-role.repository.js';
+import type { HubSpaceRepository } from '../domain/hub-space.repository.js';
 import { Hub } from '../domain/hub.js';
 import type { HubRepository } from '../domain/hub.repository.js';
 import type { HubLinkCascade } from './hub-link-cascade.js';
@@ -56,6 +57,7 @@ const links = {
 };
 const hubs = { lockForShare: vi.fn(), lockForUpdate: vi.fn() };
 const hubRoles = { removeUsersWithoutLinkedOrg: vi.fn() };
+const hubSpaces = { lockAllOfOrganization: vi.fn() };
 const cascade = { unlink: vi.fn() };
 const room = { revokeRoom: vi.fn() };
 const audit = { record: vi.fn() };
@@ -77,6 +79,7 @@ describe('HubsMemberRemovedHook', () => {
       hooks,
       as<HubRepository>(hubs),
       as<HubOrganizationRepository>(links),
+      as<HubSpaceRepository>(hubSpaces),
       as<HubRoleRepository>(hubRoles),
       as<HubLinkCascade>(cascade),
       as<AuditLog>(audit),
@@ -90,7 +93,7 @@ describe('HubsMemberRemovedHook', () => {
     now: NOW,
   };
 
-  it('registers before the spaces hook (order -10) and unregisters on destroy', async () => {
+  it('registers a lock phase before the spaces hook and the cascade after it; unregisters both on destroy', async () => {
     const hooks = new MemberRemovedHooks();
     const order: string[] = [];
     hooks.register({
@@ -100,21 +103,53 @@ describe('HubsMemberRemovedHook', () => {
       },
     });
     const hook = make(hooks);
-    links.listOwnedInOrganization.mockResolvedValue([]);
+    links.listOwnedInOrganization.mockImplementation(async () => {
+      order.push('hubs:owned');
+      return [];
+    });
     links.listApprovedHubIdsOfOrganization.mockImplementation(async () => {
-      order.push('hubs');
+      order.push('hubs:roles');
       return [];
     });
     hook.onModuleInit();
     await hooks.run(ctx);
-    expect(order).toEqual(['hubs', 'spaces']);
+    expect(order).toEqual(['hubs:owned', 'spaces', 'hubs:owned', 'hubs:roles']);
     hook.onModuleDestroy();
     order.length = 0;
     await hooks.run(ctx);
     expect(order).toEqual(['spaces']);
   });
 
-  it('an owner leaving: unlinks each live link of her hubs (hub share -> link update -> cascade), then drops roles', async () => {
+  it('lock phase: hub share -> link update -> hub_space rows, for live links only, with no write', async () => {
+    links.listOwnedInOrganization.mockResolvedValue([
+      link(HUB_A),
+      link(HUB_B, 'rejected'),
+    ]);
+    hubs.lockForShare.mockImplementation(async (id: string) => {
+      calls.push(`lockHub:${id}`);
+      return hub(id);
+    });
+    links.lockForUpdate.mockImplementation(async (id: string) => {
+      calls.push(`lockLink:${id}`);
+      return id === HUB_A ? link(HUB_A) : link(HUB_B, 'rejected');
+    });
+    hubSpaces.lockAllOfOrganization.mockImplementation(async (id: string) => {
+      calls.push(`lockHubSpaces:${id}`);
+      return [SPACE];
+    });
+    await make().lockOwnedLinks(ctx);
+    expect(calls).toEqual([
+      `lockHub:${HUB_A}`,
+      `lockLink:${HUB_A}`,
+      `lockHubSpaces:${HUB_A}`,
+      `lockHub:${HUB_B}`,
+      `lockLink:${HUB_B}`,
+    ]);
+    expect(cascade.unlink).not.toHaveBeenCalled();
+    expect(hubRoles.removeUsersWithoutLinkedOrg).not.toHaveBeenCalled();
+  });
+
+  it('cascade phase: unlinks each live link of her hubs (hub share -> link update -> cascade), then drops roles', async () => {
     links.listOwnedInOrganization.mockResolvedValue([
       link(HUB_A),
       link(HUB_B, 'rejected'),

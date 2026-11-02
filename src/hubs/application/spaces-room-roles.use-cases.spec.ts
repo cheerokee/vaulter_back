@@ -29,6 +29,7 @@ const NOW = new Date('2026-11-01T12:00:00.000Z');
 const HUB_ID = '019a0000-0000-7000-8000-0000000000aa';
 const ORG = '019a0000-0000-7000-8000-0000000000c1';
 const ORG_B = '019a0000-0000-7000-8000-0000000000c2';
+const ORG_C = '019a0000-0000-7000-8000-0000000000c3';
 const PERSONAL = '019a0000-0000-7000-8000-0000000000c9';
 const OWNER = '019a0000-0000-7000-8000-0000000000a1';
 const GESTOR = '019a0000-0000-7000-8000-0000000000a2';
@@ -84,6 +85,7 @@ const links = {
   lockForShare: vi.fn(),
   listActiveOrgIds: vi.fn(),
   listAllOrgIds: vi.fn(),
+  list: vi.fn(),
   tombstoneAllOfHub: vi.fn(),
 };
 const hubSpaces = {
@@ -346,6 +348,7 @@ describe('AssignHubRoleUseCase', () => {
     new AssignHubRoleUseCase(
       as<HubAccess>(access),
       as<OrganizationDirectory>(directory),
+      as<HubRepository>(hubs),
       as<HubOrganizationRepository>(links),
       as<HubRoleRepository>(hubRoles),
       as<AuditLog>(audit),
@@ -371,7 +374,10 @@ describe('AssignHubRoleUseCase', () => {
     });
     expect(calls).toEqual([
       `requireOwner:${HUB_ID}`,
+      'lockHub:true',
+      `shareLink:${HUB_ID}`,
       `lockMember:${ORG}`,
+      `shareLink:${HUB_ID}`,
       `lockMember:${ORG_B}`,
       'assign:[object Object]',
       'audit:[object Object]',
@@ -407,6 +413,31 @@ describe('AssignHubRoleUseCase', () => {
     await expect(run('nope', 'hub_user')).rejects.toMatchObject({
       code: 'user-not-in-linked-organization',
     });
+    expect(hubRoles.assign).not.toHaveBeenCalled();
+  });
+
+  it('skips an org whose link is no longer approved under the lock (a concurrent unlink won); hub gone is 404', async () => {
+    links.listActiveOrgIds.mockResolvedValue([ORG]);
+    directory.lockActiveMember.mockResolvedValue(true);
+    const revoked = approved();
+    revoked.revoke();
+    links.lockForShare.mockResolvedValueOnce(revoked);
+    await expect(
+      useCase().execute(actor(OWNER), {
+        hubId: HUB_ID,
+        userId: MEMBER,
+        roleKey: 'hub_user',
+      }),
+    ).rejects.toMatchObject({ code: 'user-not-in-linked-organization' });
+    expect(directory.lockActiveMember).not.toHaveBeenCalled();
+    hubs.lockForShare.mockResolvedValueOnce(null);
+    await expect(
+      useCase().execute(actor(OWNER), {
+        hubId: HUB_ID,
+        userId: MEMBER,
+        roleKey: 'hub_user',
+      }),
+    ).rejects.toMatchObject({ code: 'hub-not-found' });
     expect(hubRoles.assign).not.toHaveBeenCalled();
   });
 
@@ -448,7 +479,19 @@ describe('DeregisterHubUseCase', () => {
     });
     // ORG_B: vínculo revogado/recusado (só na lista com lápides)
     links.listAllOrgIds.mockImplementation(log('listAll', [ORG, ORG_B]));
-    links.tombstoneAllOfHub.mockImplementation(log('tombstoneLinks', [ORG]));
+    // ORG: aprovado (auditado); ORG_C: recusado vivo (só lápide, sem auditoria de revogação)
+    const rejected = HubOrganizationLink.requestByOther({
+      hubId: HUB_ID,
+      organizationId: ORG_C,
+      userId: MEMBER,
+      policy: 'any_member_hub',
+      now: NOW,
+    });
+    rejected.reject();
+    links.list.mockImplementation(log('listLive', [approved(), rejected]));
+    links.tombstoneAllOfHub.mockImplementation(
+      log('tombstoneLinks', [ORG, ORG_C]),
+    );
     hubSpaces.removeAllOfOrganization.mockImplementation(
       async (_h: string, orgId: string) => {
         calls.push(`removeSpaces:${orgId}`);
@@ -463,6 +506,7 @@ describe('DeregisterHubUseCase', () => {
       `requireOwner:${HUB_ID}`,
       'lockHubForUpdate:true',
       `listAll:${HUB_ID}`,
+      `listLive:${HUB_ID}`,
       `tombstoneLinks:${HUB_ID}`,
       `removeSpaces:${ORG}`,
       `removeSpaces:${ORG_B}`,
