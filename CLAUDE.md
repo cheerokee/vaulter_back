@@ -612,7 +612,7 @@ Os valores do `.env.example` para os segredos são **só de desenvolvimento**; p
   | `POST /spaces/:id/keys` (troca da chave do espaço) | 10/h por usuário (`userIdTracker`, contador próprio) |
   | `POST /hub-enrollments` (pública) | 20/h por IP |
   | `GET /hub-enrollments/:id/status` (pública) | 120/h por IP |
-  | `POST /hub-auth/challenge` e `POST /hub-auth/token` (públicas) | 60/h por IP, **um orçamento só para as duas** (`@ThrottleGroup('hub-auth', ...)`) |
+  | `POST /hub-auth/challenge` e `POST /hub-auth/token` (públicas) | 60/h por IP, **um orçamento só para as duas** (`THROTTLE_GROUPS.hubAuth`) |
   | `POST /hubs/claim` | 10/h por usuário |
   | `POST /hubs/link-requests` | 10/h por usuário |
   | `POST /hub/link-codes` | 30/h por Hub (`hubIdTracker`) |
