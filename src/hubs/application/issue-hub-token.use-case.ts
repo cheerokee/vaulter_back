@@ -20,8 +20,6 @@ export type IssueHubTokenInput = {
 export type HubTokenResult = { token: string; expiresAt: Date };
 
 const CHALLENGE = /^[A-Za-z0-9_-]{43}$/;
-// Hub inexistente: verifica contra uma chave fixa, para o trabalho (e o tempo) ser o mesmo.
-const DECOY_SIGNING_KEY = 'A'.repeat(43);
 
 // Troca um desafio assinado por um token de Hub (rota pública). Toda falha é o MESMO 401 `hub-auth-failed`. Na
 // transação, no contexto do próprio Hub: o Hub existe e não foi desregistrado, a assinatura confere com a chave
@@ -58,7 +56,7 @@ export class IssueHubTokenUseCase {
         HUB_LABELS.auth,
         { hubId, challenge },
         signature,
-        active ? hub.signingPublicKey : DECOY_SIGNING_KEY,
+        active ? hub.signingPublicKey : this.verifier.decoyPublicKey(),
       );
       if (!active || !signed) throw hubAuthFailed();
       if (!(await this.challenges.consume(hubId, challengeHash, now))) {

@@ -20,8 +20,9 @@ export type ClaimHubInput = { claimCode: string; name: string };
 // 422 `claim-code-invalid`. O nome é conferido ANTES do código (senão o erro de nome diria que o código vale).
 // Tudo numa transação: trava a apresentação pendente (FOR UPDATE: uma reivindicação concorrente do mesmo código
 // espera e, depois do COMMIT da vencedora, não acha mais a linha), cria o Hub, consome a apresentação, dá
-// hub_owner ao dono e hub_room à Sala, vincula a organização pessoal do dono (ownerLinks: aprovado com
-// any_member_hub, o padrão da pessoal) e audita `hub.claimed` na organização pessoal.
+// hub_owner ao dono e hub_room à Sala, vincula a organização pessoal do dono SEMPRE aprovada (spec §4.3: o dono é
+// org_admin da pessoal, então os dois consentimentos são dele, qualquer que seja a política) e audita `hub.claimed`
+// na organização pessoal.
 // Ordem de locks: apresentação -> Hub (novo; o upsert do vínculo o trava FOR SHARE) -> vínculo.
 @Injectable()
 export class ClaimHubUseCase {
@@ -90,7 +91,7 @@ export class ClaimHubUseCase {
       await this.hubRoles.grantSystemRoles(hub.id, actor.userId);
 
       await this.links.upsert(
-        HubOrganizationLink.ownerLinks({
+        HubOrganizationLink.ownerLinksAsOrgAdmin({
           hubId: hub.id,
           organizationId: personalOrgId,
           userId: actor.userId,

@@ -25,6 +25,18 @@ function decode(value: unknown, size: number): Uint8Array | null {
 
 @Injectable()
 export class SodiumHubSignatureVerifier extends HubSignatureVerifier {
+  // Um par Ed25519 aleatório por instância: um ponto válido, de ordem cheia (uma chave fixa como 'A'.repeat(43) é de
+  // ordem pequena e a libsodium a recusa antes de verificar, o que daria uma diferença de tempo). A chave privada é
+  // descartada na hora.
+  private readonly decoy = sodium.to_base64(
+    sodium.crypto_sign_keypair().publicKey,
+    B64,
+  );
+
+  decoyPublicKey(): string {
+    return this.decoy;
+  }
+
   verify(
     label: HubLabel,
     fields: HubSignedFields,

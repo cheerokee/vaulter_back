@@ -9,6 +9,7 @@ import {
   HUB_LABELS,
   type HubSignedFields,
 } from '../../domain/hub-signed-message.js';
+import { getSodium } from '../../../shared/infra/crypto/sodium.js';
 import { SodiumHubSignatureVerifier } from './sodium-hub-signature-verifier.js';
 
 const verifier = new SodiumHubSignatureVerifier();
@@ -25,6 +26,26 @@ const VECTOR = {
 };
 
 describe('SodiumHubSignatureVerifier', () => {
+  it('has a random, full-order decoy key that never validates a real signature', async () => {
+    const sodium = await getSodium();
+    const decoy = verifier.decoyPublicKey();
+    expect(decoy).toBe(verifier.decoyPublicKey());
+    expect(decoy).not.toBe(new SodiumHubSignatureVerifier().decoyPublicKey());
+    expect(decoy).not.toBe('A'.repeat(43));
+    const point = sodium.from_base64(
+      decoy,
+      sodium.base64_variants.URLSAFE_NO_PADDING,
+    );
+    // libsodium recusa pontos de ordem pequena aqui (e antes de verificar): o decoy precisa passar.
+    expect(sodium.crypto_core_ed25519_is_valid_point(point)).toBe(true);
+    const id = await createHubIdentity();
+    const fields = { hubId: 'h', challenge: 'c' };
+    const signature = await signAuth(id, fields);
+    await expect(
+      verifier.verify(HUB_LABELS.auth, fields, signature, decoy),
+    ).resolves.toBe(false);
+  });
+
   it('verifies the fixed test vector (and the client reproduces it)', async () => {
     const { signature, ...fields } = VECTOR;
     const id = await createHubIdentity(SEED);

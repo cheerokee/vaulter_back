@@ -259,7 +259,14 @@ describe('EnrollmentStatusUseCase', () => {
     enrollments.findById.mockResolvedValue(enrollment({ status: 'claimed' }));
     await expect(ask({ signer: other })).rejects.toMatchObject(notFound);
     enrollments.findById.mockResolvedValue(null);
-    await expect(ask()).rejects.toMatchObject(notFound);
+    const spy = vi.spyOn(verifier, 'verify');
+    try {
+      await expect(ask()).rejects.toMatchObject(notFound);
+      // An unknown enrollment is verified against the shared random decoy (same work, always false).
+      expect(spy.mock.calls[0]![3]).toBe(verifier.decoyPublicKey());
+    } finally {
+      spy.mockRestore();
+    }
     await expect(ask({ enrollmentId: 'nope' })).rejects.toMatchObject(notFound);
   });
 

@@ -195,6 +195,27 @@ describe('IssueHubTokenUseCase', () => {
     expect(tokens.issue).toHaveBeenCalledWith(HUB_ID, NOW);
   });
 
+  it('verifies an unknown or deregistered hub against the shared random decoy key', async () => {
+    const spy = vi.spyOn(verifier, 'verify');
+    try {
+      await expect(
+        useCase().execute(await request({ hubId: UNKNOWN })),
+      ).rejects.toMatchObject(FAILED);
+      hubs.findById.mockResolvedValueOnce(makeHub(NOW));
+      await expect(useCase().execute(await request())).rejects.toMatchObject(
+        FAILED,
+      );
+      const keys = spy.mock.calls.map((c) => c[3]);
+      expect(keys).toEqual([
+        verifier.decoyPublicKey(),
+        verifier.decoyPublicKey(),
+      ]);
+      expect(verifier.decoyPublicKey()).not.toBe('A'.repeat(43));
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
   it('gives the same 401 for an unknown hub, a deregistered hub, a wrong signer and a used challenge', async () => {
     await expect(
       useCase().execute(await request({ hubId: UNKNOWN })),

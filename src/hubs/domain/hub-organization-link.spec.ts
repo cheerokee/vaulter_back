@@ -34,6 +34,22 @@ describe('HubOrganizationLink', () => {
     });
   });
 
+  describe('ownerLinksAsOrgAdmin', () => {
+    it('records both consents by the owner and is approved under any policy', () => {
+      for (const policy of ['admin_approved', 'any_member_hub'] as const) {
+        const l = HubOrganizationLink.ownerLinksAsOrgAdmin({
+          ...base,
+          userId: 'owner',
+          policy,
+        });
+        expect(l.status).toBe('approved');
+        expect(l.ownerApprovedByUserId).toBe('owner');
+        expect(l.orgApprovedByUserId).toBe('owner');
+        expect(l.orgApprovedAt).toEqual(now);
+      }
+    });
+  });
+
   describe('requestByOther', () => {
     it('waits for the owner under any_member_hub', () => {
       const l = HubOrganizationLink.requestByOther({

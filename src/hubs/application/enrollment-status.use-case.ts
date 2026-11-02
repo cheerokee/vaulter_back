@@ -24,9 +24,6 @@ export type EnrollmentStatusResult =
   | { status: 'expired' }
   | { status: 'claimed'; hubId: string };
 
-// Verifica contra uma chave fixa quando a apresentação não existe: o trabalho (e o tempo) é o mesmo.
-const DECOY_SIGNING_KEY = 'A'.repeat(43);
-
 function enrollmentNotFound(): NotFoundError {
   return new NotFoundError(
     'enrollment-not-found',
@@ -63,7 +60,7 @@ export class EnrollmentStatusUseCase {
       HUB_LABELS.status,
       { enrollmentId: input.enrollmentId, timestamp: input.timestamp },
       input.signature,
-      enrollment?.signingPublicKey ?? DECOY_SIGNING_KEY,
+      enrollment?.signingPublicKey ?? this.verifier.decoyPublicKey(),
     );
     if (!enrollment || !signed) throw enrollmentNotFound();
 

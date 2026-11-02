@@ -71,6 +71,19 @@ export class HubOrganizationLink extends Entity<HubOrganizationLinkProps> {
     });
   }
 
+  /**
+   * The owner links an organization where they are also the admin (the personal organization at claim, spec §4.3
+   * "vinculada e aprovada"): both consents are recorded by the owner, so the link is approved whatever the policy.
+   */
+  static ownerLinksAsOrgAdmin(input: Start): HubOrganizationLink {
+    return begin(input, {
+      ownerApprovedByUserId: input.userId,
+      ownerApprovedAt: input.now,
+      orgApprovedByUserId: input.userId,
+      orgApprovedAt: input.now,
+    });
+  }
+
   /** Another member asks (via link code): the owner must approve, and an admin too under admin_approved. */
   static requestByOther(input: Start): HubOrganizationLink {
     return begin(input, {

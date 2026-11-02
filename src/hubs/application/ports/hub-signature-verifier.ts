@@ -11,4 +11,11 @@ export abstract class HubSignatureVerifier {
     signatureB64u: string,
     signingPublicKeyB64u: string,
   ): Promise<boolean>;
+
+  /**
+   * A valid Ed25519 public key whose private key nobody holds (random at provider init, never persisted). Verify
+   * against it when the real key is unknown (missing hub or enrollment): the work, and the time, match a real
+   * verification, and the result is always false. The single decoy for every hub use case.
+   */
+  abstract decoyPublicKey(): string;
 }

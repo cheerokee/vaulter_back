@@ -227,10 +227,13 @@ describe('ClaimHubUseCase', () => {
     expect(hubs.create).not.toHaveBeenCalled();
   });
 
-  it('follows the personal org policy: admin_approved leaves the link pending', async () => {
+  it('always approves the personal org link, even under admin_approved: both consents are the owner', async () => {
     directory.hubLinkPolicy.mockResolvedValueOnce('admin_approved');
     await useCase().execute(actor, { claimCode: '12345678', name: 'Sala' });
     const link = links.upsert.mock.calls[0]![0] as HubOrganizationLink;
-    expect(link.status).toBe('pending');
+    expect(link.status).toBe('approved');
+    expect(link.ownerApprovedByUserId).toBe(OWNER);
+    expect(link.orgApprovedByUserId).toBe(OWNER);
+    expect(link.orgApprovedAt).toEqual(NOW);
   });
 });
