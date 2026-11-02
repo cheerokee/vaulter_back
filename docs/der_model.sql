@@ -393,7 +393,8 @@ CREATE TABLE space_key_grants (
 -- approved_by_user_id/approved_at; status (pending | approved | rejected | revoked) é derivado dos dois.
 -- RLS: a policy da organização (única via de escrita), mais leitura pelo membro ativo da organização (só vínculo
 -- approved sem lápide), pelo dono do Hub (hub_owner_user_id = app.user_id) e pelo próprio Hub (hub_id = app.hub_id,
--- qualquer status: a sincronização manda o que não é approved como lápide). CHECK no Postgres: owner_approved_by_user_id nulo ou igual a hub_owner_user_id. hub_owner_user_id é o dono
+-- qualquer status: a sincronização manda o que não é approved como lápide). CHECK no Postgres:
+-- owner_approved_by_user_id nulo ou igual a hub_owner_user_id. hub_owner_user_id é o dono
 -- desnormalizado: a policy de hubs consulta esta tabela, então a desta não pode consultar hubs (recursão); a FK
 -- composta (hub_id, hub_owner_user_id) -> hubs (id, owner_user_id) garante que é o dono real.
 CREATE TABLE hub_organization (

@@ -397,7 +397,15 @@ exportam); nenhum dos dois importa `spaces`.
 `src/hubs/`. Spec: `docs/superpowers/specs/2026-11-01-hubs-design.md`; formato das assinaturas do Hub em
 `docs/crypto/hub-identity.md`. Depende de `identity` (`HubTokenService`), `organizations` (`OrganizationAccess`,
 `OrganizationDirectory`, `AuditLog`) e `spaces` (`SpaceAccess`, `SpaceRoomService`), só pelo que eles exportam;
-nenhum deles importa `hubs`.
+nenhum deles importa `hubs`. Única exceção: a sincronização lê tabelas dos outros módulos por um repositório de
+consulta só de leitura (veja Sincronização).
+- **Identidade do Hub:** o aparelho gera um par Ed25519 e assina mensagens JSON canônicas com **rótulo** de uso
+  (`hub-enroll-v1`, `hub-status-v1`, `hub-auth-v1`, sem o nome do produto; formato, vetor e regras de
+  canonicalização em `docs/crypto/hub-identity.md`, implementação única em `domain/hub-signed-message.ts`). O código
+  de reivindicação (8 dígitos) e o desafio de autenticação ficam no banco só como hash com chave
+  (`HUB_CODE_HASH_KEY`, BLAKE2b, domínio próprio por uso); trocar a chave invalida o que está pendente. O token de
+  Hub sai de `POST /hub-auth/token` (desafio assinado, uso único); o desafio de Hub inexistente ou desregistrado é
+  um **desafio falso** igual ao verdadeiro.
 - **`HubAccess`** (exportado, `application/hub-access.ts`, padrão para sincronização e controllers):
   `find(hubId, userId)` -> `{ hub, role } | null`; `requireAccess` -> **404** `hub-not-found` para quem não vê o Hub
   (desregistrado, inexistente, id malformado: o mesmo 404); `requireOwner` -> **403** para quem vê e não é dono.
@@ -431,6 +439,20 @@ nenhum deles importa `hubs`.
   `hub_owner`/`hub_room`, só o contexto do dono alcança) e a Sala cai em **toda organização a que o Hub já foi
   vinculado** (`listAllOrgIds`, com lápides e revogados). Auditoria sem organização (`hub.claimed`,
   `hub.deregistered`, `hub.role.changed`) vai para a organização pessoal do dono.
+- **`hub_space` e Sala** (a Sala em si é do `spaces`; veja `SpaceRoomService` lá): `hub_space` diz quais espaços de
+  uma organização vinculada estão no Hub (FK composta para o vínculo, lápide ao tirar). Liberar na Sala exige
+  espaço já no Hub, `allowRoomSpaces` só para liberação **nova** (422 `room-not-allowed`; liberar de novo ou trocar
+  o papel de um Hub já na Sala segue permitido), cópias de **todas** as versões, e o Hub conta no `SPACE_MAX_MEMBERS`.
+  Troca de chave sem `hubGrants` com exatamente os Hubs da Sala dá 409 `key-rotation-mismatch`.
+- **Ganchos:** `SpaceMemberLeftHooks` (o `hubs` tira da Sala o que o dono, ao sair do espaço, havia liberado);
+  `MemberRemovedHooks` ganhou `order` (menor roda antes): o `hubs` assina duas vezes, `-10` (só trava) e `+10`
+  (cascata). Dono do Hub que sai da organização (removido ou saindo) tem seus Hubs desvinculados dela.
+- **RLS das tabelas de Hub:** contexto novo `app.hub_id` (token de Hub) e `app.hub_signing_public_key` (abre só o Hub
+  daquela chave: a apresentação confere se a chave já está em uso); o dono lê/grava seus Hubs; o Hub lê **todos** os
+  próprios vínculos (qualquer status) e só os `hub_space` de vínculo aprovado; em `role_assignments` de escopo Hub o
+  contexto do Hub só pode **gravar lápide** em linha viva atribuível (nunca criar nem reativar). `hubs` usa GRANT de
+  UPDATE por coluna (`name`, `last_seen_at`, `deleted_at`, `updated_at`: chave de assinatura e dono imutáveis). `hub_organization.hub_owner_user_id` é cópia
+  desnormalizada do dono para a policy (FK composta com `hubs`): numa transferência de Hub futura, atualizar.
 - **Testes:** helpers em `test/support/hubs-kit.ts` (reivindicar com a cripto real, código de vínculo, atalhos dos
   casos de uso, estado cru de vínculos/espaços/papéis) e `test/support/hub-client.ts` (o aparelho pela HTTP: gera as
   chaves, apresenta, consulta o status assinado, autentica, pede código de vínculo, sincroniza; `onboard` faz o fluxo
@@ -471,7 +493,14 @@ nenhum deles importa `hubs`.
   chega como lápide. **Cascata local do Hub:** lápide de `hub_organization` ou de `hub_space` = o Hub apaga
   localmente o que dependia dele; **sincronização completa** (`since=0`) **substitui** o estado local; **entrada no
   escopo** numa passada incremental (vínculo aprovado ou `hub_space` vivo que o Hub não tinha) = o Hub faz uma
-  sincronização completa (as linhas mantêm o `sync_version` antigo).
+  sincronização completa (as linhas mantêm o `sync_version` antigo). Tipos de item: `hub`, `hub_organization`,
+  `organization`, `member`, `role_assignment`, `space`, `space_key`, `space_key_grant`, `hub_space`; nunca `authHash`,
+  cópia do kit nem cópia de outro Hub. Empate de `sync_version`: ver comentário de `mergeSyncPage` (a página só passa
+  de `limit` quando um único grupo é maior que ele). **Consulta de status** (`GET /hub-enrollments/:id/status`, 120/h
+  por IP, que atrás de NAT é dividido entre aparelhos): recomendar intervalo de **pelo menos 60 s** com jitter e parar
+  no estado final.
+- **Testes (helpers):** `test/support/hub-crypto.ts` (cripto do aparelho: chaves, assinaturas), `hub-client.ts` e
+  `hubs-kit.ts` (acima). Não duplicar nos specs.
 
 ## Banco de dados (TypeORM + migrations)
 - **TypeORM 1.x** + `@nestjs/typeorm`, driver `pg`. Config de conexão em `src/database/typeorm.options.ts`,
@@ -573,8 +602,11 @@ Os valores do `.env.example` para os segredos são **só de desenvolvimento**; p
 
 ## Pendências antes de produção
 - JWKS público para o hub validar tokens offline.
-- Hubs: limpeza física das linhas antigas de `hub_enrollments`, `hub_link_codes` e `hub_auth_challenges` (o runtime
-  não tem `DELETE`; hoje a apresentação vencida só vira `expired` e códigos/desafios usados ficam).
+- Hubs: WebSocket hub ↔ backend (hoje só HTTP com sondagem); apagamento remoto do Hub; transferência de Hub
+  (atualizar `hub_organization.hub_owner_user_id`); ação de admin que tira da Sala todas as liberações de uma
+  organização; consulta de status por Hub atrás de NAT (o limite é por IP); limpeza física das linhas antigas de
+  `hub_enrollments`, `hub_link_codes`, `hub_auth_challenges` e desafios falsos (o runtime não tem `DELETE`; hoje a
+  apresentação vencida só vira `expired`, e códigos/desafios usados ficam; `expireStale` roda a cada apresentação).
 - **Ordem de commit × `sync_version`:** a versão é atribuída na escrita, não no COMMIT; uma transação com versão menor
   que confirma depois de outra com versão maior pode ser pulada para sempre pelo `nextSince` da sincronização do Hub
   (o `REPEATABLE READ` só deixa cada página coerente). Opções: horizonte seguro (guardar `pg_current_xact_id()` numa
@@ -582,8 +614,7 @@ Os valores do `.env.example` para os segredos são **só de desenvolvimento**; p
   versão no momento do commit. Mitigação até lá: sincronização completa periódica do Hub.
 - Exclusão de conta (LGPD) precisa revogar as sessões.
 - Organizações: avisar admins por notificação (convite aceito, membro saiu); exclusão de organização; papéis
-  próprios (modo avançado: `role_permission` com RLS por organização, hoje o catálogo é só leitura); escopo de
-  hub nas policies de `role_assignments` (entra com o módulo `hubs`; o de espaço já existe); quem sai e volta mantém
+  próprios (modo avançado: `role_permission` com RLS por organização, hoje o catálogo é só leitura); quem sai e volta mantém
   o `joinedAt` original (o vínculo é reativado, não recriado); trava de assentos quando houver limites (`SeatPolicy`).
 - Espaços: quem sai do espaço e volta também mantém o `joinedAt` original (a atribuição em `role_assignments` é
   reativada, não recriada); **assinar cada versão da chave** com a Ed25519 de quem fez a troca e o app conferir as
