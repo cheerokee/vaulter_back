@@ -58,7 +58,15 @@ import { HubSpaceTypeormRepository } from './infra/db/hub-space.typeorm-reposito
 import { HubTypeormEntity } from './infra/db/hub.entity.js';
 import { HubTypeormRepository } from './infra/db/hub.typeorm-repository.js';
 import { HubSyncSqlReader } from './infra/db/hub-sync.sql-reader.js';
+import { HubAuthController } from './infra/http/hub-auth.controller.js';
+import { HubEnrollmentsController } from './infra/http/hub-enrollments.controller.js';
+import {
+  HubLinkCodesController,
+  HubOrganizationsController,
+} from './infra/http/hub-organizations.controller.js';
+import { HubSpacesController } from './infra/http/hub-spaces.controller.js';
 import { HubSyncController } from './infra/http/hub-sync.controller.js';
+import { HubsController } from './infra/http/hubs.controller.js';
 import { HubTokenGuard } from './infra/http/hub-token.guard.js';
 import { LinkCodeTypeormRepository } from './infra/db/link-code.typeorm-repository.js';
 
@@ -77,7 +85,15 @@ import { LinkCodeTypeormRepository } from './infra/db/link-code.typeorm-reposito
       HubSpaceTypeormEntity,
     ]),
   ],
-  controllers: [HubSyncController],
+  controllers: [
+    HubEnrollmentsController,
+    HubAuthController,
+    HubsController,
+    HubOrganizationsController,
+    HubLinkCodesController,
+    HubSpacesController,
+    HubSyncController,
+  ],
   providers: [
     // Guard global de rotas @HubAuth(). O HubsModule vem antes do ThrottlingModule no AppModule: o token de Hub é
     // conferido antes do rate limit (que, por Hub, lê `request.hub`).
