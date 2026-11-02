@@ -40,6 +40,52 @@ describe('Swagger documents (e2e)', () => {
     }
   });
 
+  it('lists the hub routes in the internal document only', async () => {
+    const internal = await request(app.getHttpServer())
+      .get('/docs/json')
+      .expect(200);
+    const internalPaths = Object.keys(
+      internal.body.paths as Record<string, unknown>,
+    );
+    const hubPaths = [
+      '/hub-enrollments',
+      '/hub-enrollments/{id}/status',
+      '/hub-auth/challenge',
+      '/hub-auth/token',
+      '/hubs',
+      '/hubs/claim',
+      '/hubs/link-requests',
+      '/hubs/{id}',
+      '/hubs/{id}/organizations',
+      '/hubs/{id}/organizations/{orgId}',
+      '/hubs/{id}/organizations/{orgId}/approve',
+      '/hubs/{id}/organizations/{orgId}/reject',
+      '/hubs/{id}/spaces',
+      '/hubs/{id}/spaces/{spaceId}',
+      '/hubs/{id}/spaces/{spaceId}/room',
+      '/hubs/{id}/roles/{userId}',
+      '/hub/link-codes',
+      '/hub/sync',
+    ];
+    for (const path of hubPaths) expect(internalPaths).toContain(path);
+    // the device's public routes carry no lock; the others do
+    const paths = internal.body.paths as Record<
+      string,
+      Record<string, { security?: unknown }>
+    >;
+    expect(paths['/hub-enrollments']!.post!.security).toBeUndefined();
+    expect(paths['/hub-auth/token']!.post!.security).toBeUndefined();
+    expect(paths['/hubs/claim']!.post!.security).toBeDefined();
+    expect(paths['/hub/sync']!.get!.security).toBeDefined();
+
+    const pub = await request(app.getHttpServer())
+      .get('/docs/public/json')
+      .expect(200);
+    const publicPaths = Object.keys(pub.body.paths as Record<string, unknown>);
+    expect(publicPaths.filter((p) => p.startsWith('/hub'))).toEqual([]);
+    expect(JSON.stringify(pub.body)).not.toMatch(/hub/i);
+  });
+
   it('lists the identity routes in the internal document only', async () => {
     const internal = await request(app.getHttpServer())
       .get('/docs/json')

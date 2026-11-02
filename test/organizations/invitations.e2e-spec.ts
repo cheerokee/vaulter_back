@@ -101,7 +101,9 @@ describe('Invitation endpoints (e2e)', () => {
       .get('/docs/json')
       .expect(200);
     const paths = Object.keys(doc.body.paths as Record<string, unknown>);
-    expect(paths.filter((p) => p.includes('token'))).toEqual([]);
+    // no route takes a token as a path parameter (`/hub-auth/token` is a route name, its token goes in the body)
+    expect(paths.filter((p) => /\{[^}]*token[^}]*\}/i.test(p))).toEqual([]);
+    expect(paths.filter((p) => p.startsWith('/invitations/{'))).toEqual([]);
   });
 
   it('answers 422 validation for a malformed token and invitation-invalid for unknown ones', async () => {

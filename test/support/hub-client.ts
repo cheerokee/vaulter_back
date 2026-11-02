@@ -130,6 +130,30 @@ export function hubClient(getApp: () => INestApplication) {
   const linkCode = (accessToken: string) =>
     http().post('/hub/link-codes').set(bearer(accessToken)).send();
 
+  /** Polls the status until it is `claimed` (a few tries; the claim already happened in the tests). */
+  const waitClaimed = async (device: EnrolledHub): Promise<ClaimedHub> => {
+    for (let i = 0; i < 5; i++) {
+      const res = await status(device.identity, device.enrollmentId);
+      if (res.status !== 200) fail('status', res);
+      if (res.body.status === 'claimed') {
+        return { hubId: res.body.hubId as string, identity: device.identity };
+      }
+    }
+    throw new Error('waitClaimed: the enrollment was not claimed');
+  };
+
+  /** First boot + enrollment: a fresh device identity and its claim code. */
+  const enrolled = async (): Promise<EnrolledHub> => {
+    const identity = await createHubIdentity();
+    const res = await enroll(identity);
+    if (res.status !== 201) fail('enroll', res);
+    return {
+      identity,
+      enrollmentId: res.body.enrollmentId as string,
+      claimCode: res.body.claimCode as string,
+    };
+  };
+
   return {
     http,
     bearer,
@@ -142,27 +166,20 @@ export function hubClient(getApp: () => INestApplication) {
     sync,
     syncAll,
     linkCode,
-    /** First boot + enrollment: a fresh device identity and its claim code. */
-    enrolled: async (): Promise<EnrolledHub> => {
-      const identity = await createHubIdentity();
-      const res = await enroll(identity);
-      if (res.status !== 201) fail('enroll', res);
-      return {
-        identity,
-        enrollmentId: res.body.enrollmentId as string,
-        claimCode: res.body.claimCode as string,
-      };
-    },
-    /** Polls the status until it is `claimed` (a few tries; the claim already happened in the tests). */
-    waitClaimed: async (device: EnrolledHub): Promise<ClaimedHub> => {
-      for (let i = 0; i < 5; i++) {
-        const res = await status(device.identity, device.enrollmentId);
-        if (res.status !== 200) fail('status', res);
-        if (res.body.status === 'claimed') {
-          return { hubId: res.body.hubId as string, identity: device.identity };
-        }
-      }
-      throw new Error('waitClaimed: the enrollment was not claimed');
+    enrolled,
+    waitClaimed,
+    /**
+     * The whole onboarding over HTTP: the device enrolls, the owner's app claims it by code (`POST /hubs/claim`) and
+     * the device learns its hub id from the status.
+     */
+    onboard: async (ownerToken: string, name = 'Sala'): Promise<ClaimedHub> => {
+      const device = await enrolled();
+      const res = await http()
+        .post('/hubs/claim')
+        .set(bearer(ownerToken))
+        .send({ claimCode: device.claimCode, name });
+      if (res.status !== 201) fail('claim', res);
+      return waitClaimed(device);
     },
   };
 }

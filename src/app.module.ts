@@ -30,7 +30,8 @@ import { validateEnv } from './shared/infra/config/env.validation.js';
     OrganizationsModule,
     SpacesModule,
     HubsModule,
-    // Depois do IdentityModule: o guard de token precisa rodar antes do throttler.
+    // Depois do IdentityModule e do HubsModule: os guards de token (usuário e Hub) rodam antes do throttler, que
+    // conta por usuário/Hub (fixado por test/shared/rate-limit e test/hubs/rate-limit).
     ThrottlingModule,
   ],
   controllers: [AppController],

@@ -386,14 +386,14 @@ exportam); nenhum dos dois importa `spaces`.
   -> linha do espaço (`FOR UPDATE`) -> atribuições de Gestor (`lockSpaceManagers`, em ordem de id). O gancho de saída
   trava vários espaços em ordem de id. Mutações do módulo passam por `SpaceAccess.lockAsMember` /
   `lockWithOrgPermission`.
-- **Pendências (não feito ainda):** Hubs (concessões do espaço para Hub e a "sala"); storage/backup no S3 (hoje só a
+- **Pendências (não feito ainda):** storage/backup no S3 (hoje só a
   chave e o kit); nuvem ativa (`cloud_mode = active_cloud`, só o campo existe); excluir espaço; papéis próprios de
   espaço (só os de fábrica); notificações (pendência e troca de chave hoje só aparecem por consulta).
 - **e2e com a cripto real do cliente:** os helpers de espaço ficam em `test/support/identity-client.ts`
   (`c.spaces`: criar com kit, pôr membro selando todas as versões, trocar a chave, retrancar, abrir as cópias) e
   as invariantes de banco em `test/support/spaces-db.ts`. Não duplicar nos specs.
 
-## Módulo `hubs` (em construção)
+## Módulo `hubs`
 `src/hubs/`. Spec: `docs/superpowers/specs/2026-11-01-hubs-design.md`; formato das assinaturas do Hub em
 `docs/crypto/hub-identity.md`. Depende de `identity` (`HubTokenService`), `organizations` (`OrganizationAccess`,
 `OrganizationDirectory`, `AuditLog`) e `spaces` (`SpaceAccess`, `SpaceRoomService`), só pelo que eles exportam;
@@ -432,7 +432,18 @@ nenhum deles importa `hubs`.
   vinculado** (`listAllOrgIds`, com lápides e revogados). Auditoria sem organização (`hub.claimed`,
   `hub.deregistered`, `hub.role.changed`) vai para a organização pessoal do dono.
 - **Testes:** helpers em `test/support/hubs-kit.ts` (reivindicar com a cripto real, código de vínculo, atalhos dos
-  casos de uso, estado cru de vínculos/espaços/papéis).
+  casos de uso, estado cru de vínculos/espaços/papéis) e `test/support/hub-client.ts` (o aparelho pela HTTP: gera as
+  chaves, apresenta, consulta o status assinado, autentica, pede código de vínculo, sincroniza; `onboard` faz o fluxo
+  inteiro com a reivindicação do dono). e2e pela HTTP em `test/hubs/http.e2e-spec.ts` e `test/hubs/rate-limit.e2e-spec.ts`.
+- **HTTP** (`infra/http/`: `hub-enrollments`, `hub-auth`, `hubs`, `hub-organizations` (+ `HubLinkCodesController`),
+  `hub-spaces` e `hub-sync` controllers; rotas da spec §7, todas internas, tag `hubs`): públicas do aparelho
+  (`/hub-enrollments`, `/hub-auth/*`) sem cadeado no Swagger; rotas `/hub/*` só com token de Hub; o resto só com token de
+  usuário. Ids de caminho pelo `uuidPipe`, **exceto** `GET /hub-enrollments/:id/status` (id malformado, assinatura
+  ausente/inválida e apresentação inexistente = o mesmo 404; só o timestamp dá 422). O status lê `X-Hub-Signature` e
+  `X-Hub-Timestamp`. O token de Hub sai como `{ accessToken, expiresAt }`. O código de reivindicação só aparece na
+  resposta da apresentação; a chave de assinatura do Hub não sai em nenhuma resposta. `DELETE /hubs/:id/roles/:userId`
+  é 204 com ou sem papel (idempotente). DTOs: códigos `^[0-9]{8}$`, chaves 43 caracteres base64url, assinatura 86,
+  nonce 22, desafio 43, cópia trancada 108 (formatos próprios do módulo em `dto/hub.dto.ts`).
 - **Rotas de Hub:** `@HubAuth()` (`src/hubs/infra/http/hub-auth.decorators.ts`) marca a rota como `@Public()` para o
   guard de usuário e o `HubTokenGuard` (APP_GUARD do `HubsModule`, que vem **antes** do `ThrottlingModule`) exige o
   token de Hub (`typ: hub+jwt`) de um Hub existente e não desregistrado; `@CurrentHub()` lê `{ hubId }`. Token de
@@ -596,7 +607,17 @@ Os valores do `.env.example` para os segredos são **só de desenvolvimento**; p
   | `POST /invitations/preview` (pública) | 30/min por IP |
   | `POST /invitations/accept` | 10/min por IP |
   | `POST /spaces/:id/keys` (troca da chave do espaço) | 10/h por usuário (`userIdTracker`, contador próprio) |
-  Rota com `@Throttle` próprio tem contador próprio (por rota). Os contadores por e-mail não vão em cabeçalho.
+  | `POST /hub-enrollments` (pública) | 20/h por IP |
+  | `GET /hub-enrollments/:id/status` (pública) | 120/h por IP |
+  | `POST /hub-auth/challenge` e `POST /hub-auth/token` (públicas) | 60/h por IP, **um orçamento só para as duas** (`@ThrottleGroup('hub-auth', ...)`) |
+  | `POST /hubs/claim` | 10/h por usuário |
+  | `POST /hubs/link-requests` | 10/h por usuário |
+  | `POST /hub/link-codes` | 30/h por Hub (`hubIdTracker`) |
+  | `GET /hub/sync` | 120/h por Hub (`hubIdTracker`) |
+  Rota com `@Throttle` próprio tem contador próprio (por rota); `@ThrottleGroup(grupo, limite, tracker?)`
+  (`throttling.decorators.ts`) faz rotas dividirem um contador (chave = grupo + tracker, sem a rota). Limite por Hub usa
+  `hubIdTracker` (`src/hubs/infra/http/hub-id.tracker.ts`, lê `request.hub`): o `HubTokenGuard` precisa rodar antes do
+  throttler (`HubsModule` antes do `ThrottlingModule`; fixado por `test/hubs/rate-limit.e2e-spec.ts`). Os contadores por e-mail não vão em cabeçalho.
   **Reautenticação:** toda rota que confere a prova da senha atual (`currentAuthProof`) leva `@ThrottleReauth()`
   (`throttling.decorators.ts`): throttler nomeado `reauth` (`REAUTH_THROTTLER`, `RATE_LIMITS.reauth`), chaveado só
   pelo usuário (`userIdTracker`, sem a rota — veja `AppThrottlerGuard.generateKey`), então as tentativas nas duas
