@@ -1,4 +1,5 @@
 import type { Hub } from '../../domain/hub.js';
+import type { HubRole } from '../hub-access.js';
 
 export type HubView = {
   id: string;
@@ -18,4 +19,11 @@ export function toHubView(hub: Hub): HubView {
     lastSeenAt: hub.lastSeenAt,
     createdAt: hub.createdAt ?? null,
   };
+}
+
+/** The hub as seen by one user: their role on it (spec §6; `hub_user` is implicit for linked members). */
+export type HubWithRoleView = HubView & { role: HubRole };
+
+export function toHubWithRoleView(hub: Hub, role: HubRole): HubWithRoleView {
+  return { ...toHubView(hub), role };
 }

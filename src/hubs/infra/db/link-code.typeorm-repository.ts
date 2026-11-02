@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
-import { DataSource } from 'typeorm';
+import { DataSource, QueryFailedError } from 'typeorm';
+import { ConflictError } from '../../../shared/domain/errors.js';
 import { currentManager } from '../../../shared/infra/db/unit-of-work.js';
 import type { LinkCode } from '../../domain/link-code.js';
 import { LinkCodeRepository } from '../../domain/link-code.repository.js';
@@ -14,10 +15,25 @@ export class LinkCodeTypeormRepository extends LinkCodeRepository {
     super();
   }
 
+  // Colisão com um código vigente (o único parcial do hash): o caso de uso sorteia outro.
   async create(code: LinkCode): Promise<void> {
-    await currentManager(this.dataSource)
-      .getRepository(HubLinkCodeTypeormEntity)
-      .insert(LinkCodeMapper.toPersistence(code));
+    try {
+      await currentManager(this.dataSource)
+        .getRepository(HubLinkCodeTypeormEntity)
+        .insert(LinkCodeMapper.toPersistence(code));
+    } catch (error) {
+      const driver =
+        error instanceof QueryFailedError
+          ? (error.driverError as { code?: string })
+          : undefined;
+      if (driver?.code === '23505') {
+        throw new ConflictError(
+          'link-code-collision',
+          'Another live link code has the same hash.',
+        );
+      }
+      throw error;
+    }
   }
 
   // Um UPDATE condicional com RETURNING: entre chamadas concorrentes, só a que alterou a linha recebe o código.

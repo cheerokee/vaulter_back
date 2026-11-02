@@ -26,8 +26,16 @@ export type AuditAction =
   | 'space.manager_promoted'
   | 'space.pending_grant_declined'
   | 'hub.claimed'
+  | 'hub.deregistered'
+  | 'hub.organization.requested'
+  | 'hub.organization.approved'
+  | 'hub.organization.rejected'
+  | 'hub.organization.revoked'
+  | 'hub.space.added'
+  | 'hub.space.removed'
   | 'hub.room.granted'
-  | 'hub.room.revoked';
+  | 'hub.room.revoked'
+  | 'hub.role.changed';
 
 export type AuditRecord = {
   organizationId: string;

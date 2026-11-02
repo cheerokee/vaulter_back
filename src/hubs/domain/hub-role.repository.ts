@@ -21,4 +21,17 @@ export abstract class HubRoleRepository {
    * the hub; returns the affected user ids.
    */
   abstract removeUsersWithoutLinkedOrg(hubId: string): Promise<string[]>;
+  /**
+   * The user's live assignable role on the hub, or null. Ambient context: the user themselves (self_read) or the
+   * hub owner.
+   */
+  abstract roleOf(
+    hubId: string,
+    userId: string,
+  ): Promise<AssignableHubRole | null>;
+  /**
+   * Deregistration: tombstones EVERY live hub-scope row of the hub, system rows (hub_owner, hub_room) included.
+   * Needs the owner context (the hub context may only tombstone assignable roles). Returns how many.
+   */
+  abstract removeAllOfHub(hubId: string): Promise<number>;
 }

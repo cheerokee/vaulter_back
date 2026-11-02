@@ -12,6 +12,11 @@ export type MemberRemovedContext = {
 
 export type MemberRemovedHook = {
   name: string;
+  /**
+   * Lower runs first (default 0; ties keep the registration order). `hubs` runs before `spaces` (-10): it locks the
+   * hub link rows before any space, as the global lock order wants (hub -> link -> space).
+   */
+  order?: number;
   onMemberRemoved(ctx: MemberRemovedContext): Promise<void>;
 };
 
@@ -29,6 +34,8 @@ export class MemberRemovedHooks {
       );
     }
     this.hooks.push(hook);
+    // sort é estável: empate mantém a ordem de registro.
+    this.hooks.sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
   }
 
   unregister(name: string): void {

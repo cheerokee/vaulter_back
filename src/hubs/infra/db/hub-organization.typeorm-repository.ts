@@ -142,4 +142,119 @@ export class HubOrganizationTypeormRepository extends HubOrganizationRepository 
     );
     return row ? HubOrganizationMapper.toDomain(row) : null;
   }
+
+  // FOR SHARE também exige a policy de UPDATE (org_isolation): roda no escopo da organização. Só a linha viva.
+  async lockForShare(
+    hubId: string,
+    organizationId: string,
+  ): Promise<HubOrganizationLink | null> {
+    requireUnitOfWork(
+      this.dataSource,
+      'HubOrganizationRepository.lockForShare',
+    );
+    if (!validate(hubId) || !validate(organizationId)) return null;
+    const row = await runInOrganizationScope(
+      this.dataSource,
+      organizationId,
+      (m) =>
+        m.getRepository(HubOrganizationTypeormEntity).findOne({
+          where: { hubId, organizationId },
+          lock: { mode: 'pessimistic_read' },
+        }),
+    );
+    return row ? HubOrganizationMapper.toDomain(row) : null;
+  }
+
+  async findInOrganization(
+    hubId: string,
+    organizationId: string,
+  ): Promise<HubOrganizationLink | null> {
+    if (!validate(hubId) || !validate(organizationId)) return null;
+    const row = await runInOrganizationScope(
+      this.dataSource,
+      organizationId,
+      (m) =>
+        m
+          .getRepository(HubOrganizationTypeormEntity)
+          .findOne({ where: { hubId, organizationId } }),
+    );
+    return row ? HubOrganizationMapper.toDomain(row) : null;
+  }
+
+  // Com lápides e vínculos recusados/revogados: a Sala pode ter ficado em qualquer organização que já foi vinculada.
+  async listAllOrgIds(hubId: string): Promise<string[]> {
+    if (!validate(hubId)) return [];
+    const rows = await this.repo.find({
+      select: { organizationId: true },
+      where: { hubId },
+      withDeleted: true,
+      order: { organizationId: 'ASC' },
+    });
+    return rows.map((r) => r.organizationId);
+  }
+
+  // `hub_owner_user_id` (cópia do dono, com FK composta para hubs) responde "Hubs desta pessoa vinculados a esta
+  // organização" com uma consulta só, no escopo da organização, sem ler hubs.
+  async listOwnedInOrganization(
+    organizationId: string,
+    ownerUserId: string,
+  ): Promise<HubOrganizationLink[]> {
+    if (!validate(organizationId) || !validate(ownerUserId)) return [];
+    const rows = await runInOrganizationScope(
+      this.dataSource,
+      organizationId,
+      (m) =>
+        m.getRepository(HubOrganizationTypeormEntity).find({
+          where: { organizationId, hubOwnerUserId: ownerUserId },
+          order: { hubId: 'ASC' },
+        }),
+    );
+    return rows.map((r) => HubOrganizationMapper.toDomain(r));
+  }
+
+  async listApprovedHubIdsOfOrganization(
+    organizationId: string,
+  ): Promise<string[]> {
+    if (!validate(organizationId)) return [];
+    const rows = await runInOrganizationScope(
+      this.dataSource,
+      organizationId,
+      (m) =>
+        m.getRepository(HubOrganizationTypeormEntity).find({
+          select: { hubId: true },
+          where: { organizationId, status: 'approved' },
+          order: { hubId: 'ASC' },
+        }),
+    );
+    return rows.map((r) => r.hubId);
+  }
+
+  // Desregistro: uma organização por vez, em ordem de id (a ordem dos locks das linhas), cada UPDATE no escopo da
+  // própria organização (org_isolation é a única policy de escrita). Pendente/aprovado vira revogado; recusado e
+  // revogado ficam como estão; todos ganham a lápide.
+  async tombstoneAllOfHub(hubId: string): Promise<string[]> {
+    if (!validate(hubId)) return [];
+    const live = await this.repo.find({
+      select: { organizationId: true },
+      where: { hubId },
+      order: { organizationId: 'ASC' },
+    });
+    const done: string[] = [];
+    for (const { organizationId } of live) {
+      const rows = updatedRows<{ organization_id: string }>(
+        await runInOrganizationScope(this.dataSource, organizationId, (m) =>
+          m.query(
+            `UPDATE hub_organization
+                SET status = CASE WHEN status IN ('pending', 'approved') THEN 'revoked' ELSE status END,
+                    deleted_at = now(), updated_at = now()
+              WHERE hub_id = $1 AND organization_id = $2 AND deleted_at IS NULL
+             RETURNING organization_id`,
+            [hubId, organizationId],
+          ),
+        ),
+      );
+      if (rows.length > 0) done.push(organizationId);
+    }
+    return done;
+  }
 }

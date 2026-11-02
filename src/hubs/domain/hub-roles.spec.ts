@@ -1,3 +1,4 @@
+import { DomainValidationError } from '../../shared/domain/errors.js';
 import { HubRoleRules } from './hub-roles.js';
 
 describe('HubRoleRules', () => {
@@ -11,7 +12,10 @@ describe('HubRoleRules', () => {
     }
   });
 
-  it('protects the owner', () => {
+  it('protects the owner (422)', () => {
+    expect(() => HubRoleRules.assertNotOwner('u1', 'u1')).toThrow(
+      DomainValidationError,
+    );
     expect(() => HubRoleRules.assertNotOwner('u1', 'u1')).toThrow(
       expect.objectContaining({ code: 'hub-owner-protected' }),
     );

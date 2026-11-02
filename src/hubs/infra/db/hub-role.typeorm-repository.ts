@@ -181,4 +181,34 @@ export class HubRoleTypeormRepository extends HubRoleRepository {
     );
     return [...new Set(removed.map((r) => r.user_id))].sort();
   }
+
+  async roleOf(
+    hubId: string,
+    userId: string,
+  ): Promise<AssignableHubRole | null> {
+    if (!validate(hubId) || !validate(userId)) return null;
+    const rows: { key: AssignableHubRole }[] = await this.manager.query(
+      `SELECT r.key FROM role_assignments ra
+         JOIN roles r ON r.id = ra.role_id
+        WHERE ${ACTIVE} AND ra.user_id = $2 AND r.key = ANY($3)
+        LIMIT 1`,
+      [hubId, userId, [...ASSIGNABLE_HUB_ROLES]],
+    );
+    return rows[0]?.key ?? null;
+  }
+
+  // Desregistro (só o dono): todas as linhas vivas do escopo do Hub, hub_owner e hub_room inclusive. O ramo do dono
+  // na policy hub_scope_update alcança qualquer linha do Hub dele; o do Hub, só papéis atribuíveis.
+  async removeAllOfHub(hubId: string): Promise<number> {
+    if (!validate(hubId)) return 0;
+    const rows = updatedRows<{ id: string }>(
+      await this.manager.query(
+        `UPDATE role_assignments SET deleted_at = now(), updated_at = now()
+          WHERE scope_type = 'hub' AND hub_id = $1 AND deleted_at IS NULL
+         RETURNING id`,
+        [hubId],
+      ),
+    );
+    return rows.length;
+  }
 }

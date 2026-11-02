@@ -936,7 +936,7 @@ describe('hubs repositories (e2e, app role)', () => {
         linkCodes.create(
           LinkCode.issue({ hubId: hub.id, codeHash: hex('l3'), now }),
         ),
-      ).rejects.toMatchObject({ driverError: { code: '23505' } });
+      ).rejects.toMatchObject({ code: 'link-code-collision' });
       // l2 (novo, vigente até now + 10 min) e l3 vencem; os usados não contam.
       expect(await linkCodes.expireStale(stale.expiresAt)).toBe(2);
       expect(await linkCodes.expireStale(stale.expiresAt)).toBe(0);
@@ -1071,7 +1071,7 @@ describe('hubs repositories (e2e, app role)', () => {
       ).toEqual([]);
 
       await as({ userId: ana, organizationId: orgA.id }, () =>
-        hubSpaces.remove(hub.id, spaceA.id),
+        hubSpaces.remove(hub.id, spaceA.id, orgA.id),
       );
       expect(
         await as({ userId: olivia }, () => hubSpaces.list(hub.id)),

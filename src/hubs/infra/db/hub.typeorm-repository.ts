@@ -129,4 +129,22 @@ export class HubTypeormRepository extends HubRepository {
     });
     return row ? HubMapper.toDomain(row) : null;
   }
+
+  // FOR SHARE também exige a policy de UPDATE de hubs: roda no contexto do próprio Hub (`app.hub_id`), só neste
+  // trecho, para qualquer caso de uso (dono, admin aprovando, quem pede com código) travar. O lock passa do
+  // savepoint para a transação de fora. Desregistrado (lápide) = null, também para quem esperou o desregistro.
+  async lockForShare(hubId: string): Promise<Hub | null> {
+    requireUnitOfWork(this.dataSource, 'HubRepository.lockForShare');
+    if (!validate(hubId)) return null;
+    const rows: HubRow[] = await runWithContext(
+      this.dataSource,
+      { hubId },
+      (m) =>
+        m.query(
+          `SELECT * FROM hubs WHERE id = $1 AND deleted_at IS NULL FOR SHARE`,
+          [hubId],
+        ),
+    );
+    return rows[0] ? HubMapper.fromRow(rows[0]) : null;
+  }
 }

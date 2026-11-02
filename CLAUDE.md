@@ -395,8 +395,40 @@ exportam); nenhum dos dois importa `spaces`.
 
 ## Módulo `hubs` (em construção)
 `src/hubs/`. Spec: `docs/superpowers/specs/2026-11-01-hubs-design.md`; formato das assinaturas do Hub em
-`docs/crypto/hub-identity.md`. Depende de `identity` (`HubTokenService`) e `organizations` (`OrganizationDirectory`,
-`AuditLog`), só pelo que eles exportam.
+`docs/crypto/hub-identity.md`. Depende de `identity` (`HubTokenService`), `organizations` (`OrganizationAccess`,
+`OrganizationDirectory`, `AuditLog`) e `spaces` (`SpaceAccess`, `SpaceRoomService`), só pelo que eles exportam;
+nenhum deles importa `hubs`.
+- **`HubAccess`** (exportado, `application/hub-access.ts`, padrão para sincronização e controllers):
+  `find(hubId, userId)` -> `{ hub, role } | null`; `requireAccess` -> **404** `hub-not-found` para quem não vê o Hub
+  (desregistrado, inexistente, id malformado: o mesmo 404); `requireOwner` -> **403** para quem vê e não é dono.
+  `role` = `hub_owner` | `hub_operator` | `hub_user` (explícito ou implícito para membro de organização com vínculo
+  aprovado). **Autorização é sempre do caso de uso**: `HubOrganizationRepository.upsert` troca para o contexto do Hub
+  por dentro, então todo caso de uso confere dono / membro (`OrganizationAccess.requireMember`) / admin
+  (`org.hubs.approve`) antes de escrever.
+- **Ordem de locks dos Hubs:** linha do Hub (`HubRepository.lockForShare`; `lockForUpdate` no desregistro, sempre o
+  primeiro lock) -> linha do vínculo (`HubOrganizationRepository.lockForUpdate`; `lockForShare` na liberação da Sala
+  e ao pôr espaço) -> `hub_space` -> espaço -> Gestores. Desvincular segura o vínculo `FOR UPDATE` antes de
+  `revokeRoomForOrganization`. O gancho de saída do espaço (`hubs.space-member-left`) roda com o espaço já travado e
+  **só lê** vínculos. O gancho de saída da organização do `hubs` roda **antes** do `spaces` (`order: -10` em
+  `MemberRemovedHooks`), para travar vínculos antes de espaços.
+- **Vínculos** (casos de uso em `application/`): o dono vincula (`any_member_hub` aprova na hora;
+  `admin_approved` espera um admin); outro membro pede com o **código de vínculo** do Hub (8 dígitos, 10 min, uso
+  único, só hash com domínio próprio; código inválido/vencido/usado/de Hub desregistrado = o mesmo 422
+  `link-code-invalid`; a resposta não traz o `hubId`); aprovar/recusar/desvincular: dono ou admin. **Aprovar usa
+  sempre a política ATUAL**, mesmo quando aquele lado já consentiu (resolve o pendente quando a organização relaxa).
+  Desvincular (`HubLinkCascade`, um `uow.run`): vínculo `revoked`, espaços da organização fora do Hub, Sala e cópias
+  com troca pendente, papéis de Hub de quem ficou sem organização vinculada, auditoria. A organização pessoal do
+  dono é vinculada **sempre aprovada** na reivindicação (`ownerLinksAsOrgAdmin`: os dois consentimentos são dele).
+- **Espaços no Hub / Sala / papéis / desregistro:** pôr = dono membro do espaço ou Gestor (422
+  `organization-not-linked` sem vínculo aprovado); tirar = dono ou Gestor, e tira da Sala. Liberar na Sala = dono
+  que é Gestor, espaço já no Hub (422 `space-not-on-hub`). Papéis `hub_operator`/`hub_user` só para membro de
+  organização vinculada (422 `user-not-in-linked-organization`; dono 422 `hub-owner-protected`). Desregistrar (só o
+  dono): Hub `FOR UPDATE` primeiro, lápide nos vínculos, nos espaços e em todos os papéis do Hub (inclusive
+  `hub_owner`/`hub_room`, só o contexto do dono alcança) e a Sala cai em **toda organização a que o Hub já foi
+  vinculado** (`listAllOrgIds`, com lápides e revogados). Auditoria sem organização (`hub.claimed`,
+  `hub.deregistered`, `hub.role.changed`) vai para a organização pessoal do dono.
+- **Testes:** helpers em `test/support/hubs-kit.ts` (reivindicar com a cripto real, código de vínculo, atalhos dos
+  casos de uso, estado cru de vínculos/espaços/papéis).
 - **Rotas de Hub:** `@HubAuth()` (`src/hubs/infra/http/hub-auth.decorators.ts`) marca a rota como `@Public()` para o
   guard de usuário e o `HubTokenGuard` (APP_GUARD do `HubsModule`, que vem **antes** do `ThrottlingModule`) exige o
   token de Hub (`typ: hub+jwt`) de um Hub existente e não desregistrado; `@CurrentHub()` lê `{ hubId }`. Token de
@@ -406,8 +438,9 @@ exportam); nenhum dos dois importa `spaces`.
   apresentação inexistente = o mesmo 404 `enrollment-not-found`; desafio de Hub inexistente ou desregistrado = um
   desafio falso igual (`hub_id` nulo, nunca valida); toda falha do token = o mesmo 401 `hub-auth-failed`.
 - **Reivindicação** (`ClaimHubUseCase`, um `uow.run`): trava a apresentação (`FOR UPDATE`), cria o Hub, consome a
-  apresentação, dá `hub_owner` ao dono e `hub_room` à Sala, vincula a organização pessoal (`ownerLinks`) e audita
-  `hub.claimed` na organização pessoal.
+  apresentação, dá `hub_owner` ao dono e `hub_room` à Sala, vincula a organização pessoal (sempre aprovada) e audita
+  `hub.claimed` na organização pessoal. Hub ou apresentação inexistente é verificado contra a chave falsa única
+  (`HubSignatureVerifier.decoyPublicKey()`: um par Ed25519 aleatório por instância, ponto válido).
 
 ## Banco de dados (TypeORM + migrations)
 - **TypeORM 1.x** + `@nestjs/typeorm`, driver `pg`. Config de conexão em `src/database/typeorm.options.ts`,

@@ -36,6 +36,24 @@ describe('MemberRemovedHooks', () => {
     expect(order).toEqual(['a:removed', 'b:u1']);
   });
 
+  it('runs a lower `order` first; ties keep the registration order', async () => {
+    const hooks = new MemberRemovedHooks();
+    const order: string[] = [];
+    const hook = (name: string, o?: number) => ({
+      name,
+      ...(o === undefined ? {} : { order: o }),
+      onMemberRemoved: async () => {
+        order.push(name);
+      },
+    });
+    hooks.register(hook('spaces'));
+    hooks.register(hook('other'));
+    hooks.register(hook('hubs', -10));
+    hooks.register(hook('late', 5));
+    await hooks.run(ctx);
+    expect(order).toEqual(['hubs', 'spaces', 'other', 'late']);
+  });
+
   it('propagates an error and skips the later hooks', async () => {
     const hooks = new MemberRemovedHooks();
     const later = vi.fn();

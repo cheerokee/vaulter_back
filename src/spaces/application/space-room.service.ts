@@ -51,7 +51,11 @@ export type RoomRevoker =
   | { kind: 'trusted'; organizationId: string; actorId: string | null };
 
 export type RoomRevokeReason =
-  'revoked' | 'owner_left_space' | 'hub_unlinked' | 'hub_deregistered';
+  | 'revoked'
+  | 'owner_left_space'
+  | 'space_removed_from_hub'
+  | 'hub_unlinked'
+  | 'hub_deregistered';
 
 export type BulkRoomRevocation = {
   hubId: string;

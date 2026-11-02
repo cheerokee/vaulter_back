@@ -18,4 +18,40 @@ export abstract class HubOrganizationRepository {
     hubId: string,
     organizationId: string,
   ): Promise<HubOrganizationLink | null>;
+  /**
+   * SELECT ... FOR SHARE on the live (hub, organization) row, in the organization scope. REQUIRES an active unit of
+   * work. Taken by the Room grant and by adding a space before the space lock; unlink holds the row FOR UPDATE.
+   */
+  abstract lockForShare(
+    hubId: string,
+    organizationId: string,
+  ): Promise<HubOrganizationLink | null>;
+  /** The live row read in the organization scope (the caller already authorized the reader). */
+  abstract findInOrganization(
+    hubId: string,
+    organizationId: string,
+  ): Promise<HubOrganizationLink | null>;
+  /**
+   * Every organization the hub was EVER linked to, tombstones and rejected/revoked links included (ambient context:
+   * the hub owner or the hub). Deregistration revokes the Room in all of them.
+   */
+  abstract listAllOrgIds(hubId: string): Promise<string[]>;
+  /**
+   * Live links of `organizationId` whose hub belongs to `ownerUserId`, read in the organization scope (no lock).
+   * Used by the exit hooks.
+   */
+  abstract listOwnedInOrganization(
+    organizationId: string,
+    ownerUserId: string,
+  ): Promise<HubOrganizationLink[]>;
+  /** Hubs with an approved, live link to `organizationId`, read in the organization scope (no lock). */
+  abstract listApprovedHubIdsOfOrganization(
+    organizationId: string,
+  ): Promise<string[]>;
+  /**
+   * Deregistration: tombstones every live link of the hub (pending/approved ones become `revoked`), one organization
+   * at a time in id order, each in its own scope; returns the organization ids. Ambient context must see the links
+   * (the hub owner).
+   */
+  abstract tombstoneAllOfHub(hubId: string): Promise<string[]>;
 }

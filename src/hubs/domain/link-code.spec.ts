@@ -1,3 +1,4 @@
+import { DomainValidationError } from '../../shared/domain/errors.js';
 import { LinkCode, LINK_CODE_TTL_MS } from './link-code.js';
 
 const now = new Date('2026-11-01T12:00:00Z');
@@ -8,6 +9,7 @@ describe('LinkCode', () => {
     expect(c.expiresAt.getTime() - now.getTime()).toBe(LINK_CODE_TTL_MS);
     c.consume(now);
     expect(c.usedAt).toEqual(now);
+    expect(() => c.consume(now)).toThrow(DomainValidationError);
     expect(() => c.consume(now)).toThrow(
       expect.objectContaining({ code: 'link-code-invalid' }),
     );

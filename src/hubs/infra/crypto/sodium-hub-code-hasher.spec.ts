@@ -37,6 +37,15 @@ describe('SodiumHubCodeHasher', () => {
     expect(await hasher(KEY_B).hash('01234567')).not.toBe(hash);
   });
 
+  it('hashes a link code with its own domain separation (never equal to the claim-code hash)', async () => {
+    const h = hasher();
+    const hash = await h.hashLinkCode('01234567');
+    expect(hash).toMatch(/^[0-9a-f]{64}$/);
+    expect(await h.hashLinkCode('01234567')).toBe(hash);
+    expect(await h.hash('01234567')).not.toBe(hash);
+    expect(await hasher(KEY_B).hashLinkCode('01234567')).not.toBe(hash);
+  });
+
   it('generates 32-byte base64url challenges and hashes them with domain separation', async () => {
     const h = hasher();
     const c = h.newChallenge();

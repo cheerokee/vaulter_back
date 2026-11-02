@@ -1,7 +1,4 @@
-import {
-  DomainValidationError,
-  PermissionDeniedError,
-} from '../../shared/domain/errors.js';
+import { DomainValidationError } from '../../shared/domain/errors.js';
 
 /** Roles the owner may assign to members of linked organizations. */
 export const ASSIGNABLE_HUB_ROLES = ['hub_operator', 'hub_user'] as const;
@@ -20,10 +17,10 @@ export const HubRoleRules = {
     return roleKey as AssignableHubRole;
   },
 
-  /** The owner keeps hub_owner; they cannot assign or remove a role for themselves. */
+  /** The owner keeps hub_owner; they cannot assign or remove a role for themselves (422). */
   assertNotOwner(ownerUserId: string, targetUserId: string): void {
     if (ownerUserId === targetUserId) {
-      throw new PermissionDeniedError(
+      throw new DomainValidationError(
         'hub-owner-protected',
         "The hub owner's role cannot be changed.",
       );

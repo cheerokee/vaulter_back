@@ -1,7 +1,17 @@
-import { ConflictError } from '../../shared/domain/errors.js';
+import { DomainValidationError } from '../../shared/domain/errors.js';
 import { Entity } from '../../shared/domain/entity.js';
 
 export const LINK_CODE_TTL_MS = 10 * 60 * 1000;
+/** 8 decimal digits, like the claim code. */
+export const LINK_CODE_PATTERN = /^[0-9]{8}$/;
+
+/** The single error for a wrong, unknown, expired or already used link code (422): the caller never learns which. */
+export function linkCodeInvalid(): DomainValidationError {
+  return new DomainValidationError(
+    'link-code-invalid',
+    'The link code is invalid or expired.',
+  );
+}
 
 export type LinkCodeProps = {
   hubId: string;
@@ -49,10 +59,7 @@ export class LinkCode extends Entity<LinkCodeProps> {
       this.props.usedAt !== null ||
       now.getTime() >= this.props.expiresAt.getTime()
     ) {
-      throw new ConflictError(
-        'link-code-invalid',
-        'The link code is invalid or expired.',
-      );
+      throw linkCodeInvalid();
     }
     this.props = { ...this.props, usedAt: now };
   }

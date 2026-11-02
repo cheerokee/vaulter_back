@@ -1,6 +1,7 @@
 import type { LinkCode } from './link-code.js';
 
 export abstract class LinkCodeRepository {
+  /** Throws ConflictError('link-code-collision') when a live code holds the same hash (the caller draws again). */
   abstract create(code: LinkCode): Promise<void>;
   /**
    * Conditional (`used_at IS NULL AND expires_at > now`), single use: returns the code only to the winner,

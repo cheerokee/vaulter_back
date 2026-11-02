@@ -11,6 +11,7 @@ const CODE_SPACE = 100_000_000;
 // Domain separation: the same key hashes two kinds of input, so each gets its own prefix.
 const CODE_PREFIX = 'hub-claim-code-v1\0';
 const CHALLENGE_PREFIX = 'hub-auth-challenge-v1\0';
+const LINK_CODE_PREFIX = 'hub-link-code-v1\0';
 
 @Injectable()
 export class SodiumHubCodeHasher extends HubCodeHasher implements OnModuleInit {
@@ -35,6 +36,10 @@ export class SodiumHubCodeHasher extends HubCodeHasher implements OnModuleInit {
 
   hash(code: string): Promise<string> {
     return Promise.resolve(this.keyed(CODE_PREFIX + code));
+  }
+
+  hashLinkCode(code: string): Promise<string> {
+    return Promise.resolve(this.keyed(LINK_CODE_PREFIX + code));
   }
 
   newChallenge(): string {

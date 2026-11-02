@@ -3,6 +3,29 @@ import { APP_GUARD } from '@nestjs/core';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { IdentityModule } from '../identity/identity.module.js';
 import { OrganizationsModule } from '../organizations/organizations.module.js';
+import { SpacesModule } from '../spaces/spaces.module.js';
+import { AddHubSpaceUseCase } from './application/add-hub-space.use-case.js';
+import { ApproveHubLinkUseCase } from './application/approve-hub-link.use-case.js';
+import { AssignHubRoleUseCase } from './application/assign-hub-role.use-case.js';
+import { DeregisterHubUseCase } from './application/deregister-hub.use-case.js';
+import { GetHubUseCase } from './application/get-hub.use-case.js';
+import { GrantRoomUseCase } from './application/grant-room.use-case.js';
+import { HubAccess } from './application/hub-access.js';
+import { HubLinkCascade } from './application/hub-link-cascade.js';
+import { HubsMemberRemovedHook } from './application/member-removed.hook.js';
+import { HubsSpaceMemberLeftHook } from './application/space-member-left.hook.js';
+import { IssueLinkCodeUseCase } from './application/issue-link-code.use-case.js';
+import { LinkHubOrganizationUseCase } from './application/link-hub-organization.use-case.js';
+import { ListHubLinksUseCase } from './application/list-hub-links.use-case.js';
+import { ListHubSpacesUseCase } from './application/list-hub-spaces.use-case.js';
+import { ListHubsUseCase } from './application/list-hubs.use-case.js';
+import { RejectHubLinkUseCase } from './application/reject-hub-link.use-case.js';
+import { RemoveHubRoleUseCase } from './application/remove-hub-role.use-case.js';
+import { RemoveHubSpaceUseCase } from './application/remove-hub-space.use-case.js';
+import { RenameHubUseCase } from './application/rename-hub.use-case.js';
+import { RequestHubLinkUseCase } from './application/request-hub-link.use-case.js';
+import { RevokeRoomUseCase } from './application/revoke-room.use-case.js';
+import { UnlinkHubOrganizationUseCase } from './application/unlink-hub-organization.use-case.js';
 import { AuthenticateHubTokenUseCase } from './application/authenticate-hub-token.use-case.js';
 import { ClaimHubUseCase } from './application/claim-hub.use-case.js';
 import { EnrollHubUseCase } from './application/enroll-hub.use-case.js';
@@ -37,9 +60,10 @@ import { LinkCodeTypeormRepository } from './infra/db/link-code.typeorm-reposito
 
 @Module({
   imports: [
-    // Uma direção só: hubs usa o que identity e organizations exportam; nenhum dos dois importa hubs.
+    // Uma direção só: hubs usa o que identity, organizations e spaces exportam; nenhum deles importa hubs.
     IdentityModule,
     OrganizationsModule,
+    SpacesModule,
     TypeOrmModule.forFeature([
       HubTypeormEntity,
       HubEnrollmentTypeormEntity,
@@ -74,6 +98,30 @@ import { LinkCodeTypeormRepository } from './infra/db/link-code.typeorm-reposito
     IssueHubChallengeUseCase,
     IssueHubTokenUseCase,
     AuthenticateHubTokenUseCase,
+    AddHubSpaceUseCase,
+    ApproveHubLinkUseCase,
+    AssignHubRoleUseCase,
+    DeregisterHubUseCase,
+    GetHubUseCase,
+    GrantRoomUseCase,
+    HubAccess,
+    HubLinkCascade,
+    HubsMemberRemovedHook,
+    HubsSpaceMemberLeftHook,
+    IssueLinkCodeUseCase,
+    LinkHubOrganizationUseCase,
+    ListHubLinksUseCase,
+    ListHubSpacesUseCase,
+    ListHubsUseCase,
+    RejectHubLinkUseCase,
+    RemoveHubRoleUseCase,
+    RemoveHubSpaceUseCase,
+    RenameHubUseCase,
+    RequestHubLinkUseCase,
+    RevokeRoomUseCase,
+    UnlinkHubOrganizationUseCase,
   ],
+  // Para as próximas tarefas (sincronização, controllers) e módulos: checagem de acesso ao Hub.
+  exports: [HubAccess],
 })
 export class HubsModule {}

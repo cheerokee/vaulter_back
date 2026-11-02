@@ -24,4 +24,10 @@ export abstract class HubRepository {
    * for a hub that is being deregistered.
    */
   abstract lockForUpdate(hubId: string): Promise<Hub | null>;
+  /**
+   * SELECT ... FOR SHARE on an ACTIVE hub (null when missing or deregistered), in the hub's own context, so any
+   * caller can take it (authorization is the use case's job). REQUIRES an active unit of work. The first lock of
+   * every link mutation (hub -> link -> hub_space -> space): it serializes with deregistration (FOR UPDATE).
+   */
+  abstract lockForShare(hubId: string): Promise<Hub | null>;
 }
