@@ -2,7 +2,11 @@ import { randomUUID } from 'node:crypto';
 import type { INestApplication } from '@nestjs/common';
 import type request from 'supertest';
 import { PLATFORM_PERMISSIONS } from '../../src/platform/domain/platform-catalog.js';
-import { createTestApp, resetDatabase } from '../setup/test-app.js';
+import {
+  adminDataSource,
+  createTestApp,
+  resetDatabase,
+} from '../setup/test-app.js';
 import {
   type ClientAccount,
   createClientAccount,
@@ -121,6 +125,24 @@ describe('Platform staff and roles (e2e)', () => {
     await expect(grantAdminByCli('nobody@example.com')).rejects.toThrow(
       /nobody@example\.com/,
     );
+  });
+
+  it('the CLI fails (nothing written) when the platform_admin catalog row is missing', async () => {
+    await signUp('admin@example.com', 'Admin');
+    const ds = await adminDataSource();
+    await ds.query(
+      `UPDATE platform_roles SET deleted_at = now() WHERE key = 'platform_admin'`,
+    );
+    try {
+      await expect(grantAdminByCli('admin@example.com')).rejects.toThrow(
+        /platform_admin role is missing/,
+      );
+    } finally {
+      await ds.query(
+        `UPDATE platform_roles SET deleted_at = NULL WHERE key = 'platform_admin'`,
+      );
+    }
+    expect(await platformAuditRows()).toEqual([]);
   });
 
   it('an admin gives platform_support; revoking it takes effect on the very next request', async () => {

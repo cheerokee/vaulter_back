@@ -20,7 +20,8 @@ export const RATE_LIMITS = {
   /**
    * Reautenticação (prova da senha atual): por usuário autenticado, UM orçamento para todas as rotas marcadas
    * com @ThrottleReauth() (`PUT /me/password`, `PUT /me/recovery-code`, `PUT /organizations/:id/recovery-key`,
-   * `POST /spaces/:id/recover`, `POST /spaces/:id/recover/copies`).
+   * `POST /spaces/:id/recover`, `POST /spaces/:id/recover/copies`, `PUT|DELETE /platform/staff/:userId/roles/:roleKey`,
+   * `POST /platform/support-requests` e `POST /platform/support-requests/:id/approve|reject`).
    */
   reauth: { limit: 5, ttl: 15 * MINUTE },
   /**

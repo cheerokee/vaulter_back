@@ -570,12 +570,16 @@ ganha acesso a conteúdo (as chaves ficam com os clientes).
   `@RequireAnyPlatformRole()` (o financeiro tem papel mas nenhuma permissão).
 - **Rotas** (todas internas, token de usuário): `GET /platform/me`; `GET /platform/staff`,
   `PUT|DELETE /platform/staff/:userId/roles/:roleKey` (`roles.manage`, reautenticação; retirar o último admin:
-  422 `last-platform-admin`); `POST|GET /platform/support-requests`, `GET .../:id`, `POST .../:id/approve|reject`;
+  422 `last-platform-admin`); `POST|GET /platform/support-requests`, `GET .../:id`, `POST .../:id/approve|reject`
+  (`GET /platform/support-requests` e `GET .../:id` exigem `platform.audit.read` e, sem `platform.support.approve`,
+  mostram só os pedidos do próprio usuário: o de outra pessoa é o mesmo 404 de pedido inexistente; o vencimento de
+  7 dias é gravado **na leitura** (lista e detalhe) e **na decisão**, sem tarefa agendada);
   `GET /platform/audit`; buscas para achar o alvo: `GET /platform/lookup/users` (por e-mail),
   `/platform/lookup/hubs/:hubId`, `/platform/lookup/organizations/:orgId` (só `platform.support.request`; id, nome,
   dono, status, nada cifrado). Pedir, aprovar, recusar e mexer em papéis entram no orçamento `reauth`.
 - **Primeiro admin:** `npm run platform:grant-admin -- <email>` (`node scripts/platform-grant-admin.ts <email>`), com o
-  login **dono** do banco (`DB_USERNAME`), dentro do container; idempotente; auditado em `platform_audit_logs` com
+  login **dono** do banco (`DB_USERNAME`), dentro do container; idempotente; conta inexistente ou linha
+  `platform_admin` ausente do catálogo: erro e sai com 1, sem gravar; auditado em `platform_audit_logs` com
   `user_id` nulo e via `cli`. É o único jeito de criar admin sem já ser admin.
 - **Pedidos de suporte** (`SupportRequest`): tipos `hub_force_deregister` (alvo `hubId`) e `org_appoint_admin` (alvo
   `organizationId` + `userId`); motivo e prova obrigatórios (até 2000 caracteres). Estados `pending`, `executed`,
@@ -767,7 +771,7 @@ Os valores do `.env.example` para os segredos são **só de desenvolvimento**; p
   | `POST /auth/login` | 10/min por IP **e** 5/min por e-mail normalizado |
   | `POST /auth/refresh` | 60/min por IP |
   | `POST /auth/recovery/lookup` e `POST /auth/recovery/complete` (públicas) | 10/min por IP, **um orçamento só para as duas** (`THROTTLE_GROUPS.accountRecovery`) **e** 5/min por e-mail normalizado, por rota |
-  | `PUT /me/password`, `PUT /me/recovery-code`, `PUT /organizations/:id/recovery-key`, `POST /spaces/:id/recover` e `POST /spaces/:id/recover/copies` `PUT|DELETE /platform/staff/:userId/roles/:roleKey`, `POST /platform/support-requests` e `.../:id/approve|reject` (reautenticação) | 5 por 15 min por usuário, **um orçamento só para todas** |
+  | `PUT /me/password`, `PUT /me/recovery-code`, `PUT /organizations/:id/recovery-key`, `POST /spaces/:id/recover`, `POST /spaces/:id/recover/copies`, `PUT|DELETE /platform/staff/:userId/roles/:roleKey`, `POST /platform/support-requests` e `.../:id/approve|reject` (reautenticação) | 5 por 15 min por usuário, **um orçamento só para todas** |
   | `POST /invitations/preview` (pública) | 30/min por IP |
   | `POST /invitations/accept` | 10/min por IP |
   | `POST /spaces/:id/keys` (troca da chave do espaço) | 10/h por usuário (`userIdTracker`, contador próprio) |

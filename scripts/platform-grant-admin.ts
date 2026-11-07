@@ -13,7 +13,10 @@ function normalizeEmail(raw: string): string {
   return raw.trim().normalize('NFC').toLowerCase();
 }
 
-/** Gives `platform_admin` to the account with this e-mail, in one transaction. Throws if there is no such account. */
+/**
+ * Gives `platform_admin` to the account with this e-mail, in one transaction. Throws (nothing written; the CLI exits
+ * with 1) if there is no such account or the `platform_admin` catalog row is missing.
+ */
 export async function grantPlatformAdmin(
   client: ClientBase,
   email: string,
@@ -27,15 +30,25 @@ export async function grantPlatformAdmin(
     );
     const userId = users.rows[0]?.id;
     if (!userId) throw new Error(`No account with the e-mail ${normalized}.`);
+    // Sem a linha do catálogo o upsert abaixo não gravaria nada e pareceria "já é admin": erro explícito.
+    const role = await client.query<{ id: string }>(
+      `SELECT id FROM platform_roles WHERE key = 'platform_admin' AND deleted_at IS NULL`,
+    );
+    const roleId = role.rows[0]?.id;
+    if (!roleId) {
+      throw new Error(
+        'The platform_admin role is missing from the catalog (platform_roles); run the migrations first.',
+      );
+    }
     // Mesmo upsert do repositório: cria ou limpa a lápide; já vivo, RETURNING vazio.
     const granted = await client.query(
       `INSERT INTO user_platform_role (user_id, platform_role_id)
-       SELECT $1, pr.id FROM platform_roles pr WHERE pr.key = 'platform_admin' AND pr.deleted_at IS NULL
+       VALUES ($1, $2)
        ON CONFLICT (user_id, platform_role_id) DO UPDATE
           SET deleted_at = NULL, updated_at = now()
         WHERE user_platform_role.deleted_at IS NOT NULL
        RETURNING user_id`,
-      [userId],
+      [userId, roleId],
     );
     if (granted.rowCount) {
       await client.query(
