@@ -45,8 +45,8 @@ CREATE TABLE users (
   name VARCHAR(255) NOT NULL,
   email VARCHAR(255) NOT NULL,
   -- A senha nunca chega ao servidor: o cliente deriva dela uma prova de login (auth_hash, guardada aqui já
-  -- com hash do servidor) e uma chave que abre encrypted_private_key. Recuperar a senha devolve o login,
-  -- não os dados.
+  -- com hash do servidor) e uma chave que abre encrypted_private_key. Sem a senha, a conta e os dados voltam
+  -- só pelo código de recuperação (recovery_*, abaixo): ele abre a mesma chave privada e o app grava a senha nova.
   auth_hash VARCHAR(255) NOT NULL,
   kdf_salt VARCHAR(64) NOT NULL,
   kdf_params JSON NOT NULL,

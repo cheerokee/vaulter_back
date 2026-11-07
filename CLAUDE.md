@@ -133,6 +133,8 @@ couber (spec de contas, §12).
     novo de senha, **revoga todas as sessões** (`revoked_reason = account_recovery`) e abre uma nova (resposta de login).
     Toda falha é o mesmo 401 `recovery-failed`, com verificação falsa para o tempo não vazar; o material novo é validado
     (422) antes da prova. `PUT /me/recovery-code` troca o código (reautenticação, não revoga sessões).
+    Quem rouba a senha pode trocar o código: na suspeita de comprometimento o app troca a senha **e** gera código novo,
+    em sequência, nunca em paralelo (`docs/crypto/user-keys.md`).
   - **Banco local com usuários:** a migration `AddUserAccountRecovery` cria colunas NOT NULL e não há preenchimento
     retroativo (a cópia nasce no aparelho); com linhas em `users` ela falha logo no início (`users has N rows`). Zere o
     banco de desenvolvimento antes de migrar (veja Docker). O `globalSetup` só **cria** o banco dos e2e se ele faltar
@@ -677,7 +679,8 @@ Os valores do `.env.example` para os segredos são **só de desenvolvimento**; p
 - `@nestjs/throttler` com guard global (`AppThrottlerGuard` em `ThrottlingModule`, registrado **depois** do
   `IdentityModule` para o guard de token rodar antes — fixado por e2e) e storage no Postgres
   (`PostgresThrottlerStorage`, upsert atômico; várias instâncias dividem os contadores). Chave por IP (`req.ip`,
-  respeita `TRUST_PROXY`; IPv6 agrupado no /64), por e-mail normalizado no login e por usuário nas rotas de reautenticação.
+  respeita `TRUST_PROXY`; IPv6 agrupado no /64), por e-mail normalizado no login e nas rotas de recuperação de conta, e
+  por usuário nas rotas de reautenticação.
 - Limites (`src/shared/infra/http/rate-limits.ts`):
   | Rota | Limite |
   |---|---|

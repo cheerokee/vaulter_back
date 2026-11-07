@@ -135,6 +135,10 @@ Segunda forma de abrir a **mesma chave privada**, para quem perdeu a senha. Cont
   de valer.
 - **Troca de senha não muda o código:** a chave privada e a `publicKey` são as mesmas, então a cópia da
   recuperação continua abrindo.
+- **Quem rouba a senha pode trocar o código:** `PUT /me/recovery-code` pede só a prova da senha atual, então quem
+  a conhece substitui o código e o do dono deixa de valer. Na suspeita de comprometimento, o app deve **trocar a
+  senha E gerar um código novo**, nessa ordem e **em sequência** (esperar a resposta da primeira antes de mandar a
+  segunda, nunca em paralelo): a troca de senha revoga as outras sessões e a do código exige a senha nova.
 
 ### Vetor de teste (código de recuperação, v1)
 
