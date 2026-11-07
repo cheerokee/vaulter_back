@@ -49,6 +49,26 @@ describe('scrubSensitive', () => {
       invite_token: '[REDACTED]',
     });
   });
+
+  it('redacts the account recovery fields in both spellings', () => {
+    const keys = [
+      'recoveryProof',
+      'recovery_proof',
+      'newRecoveryProof',
+      'new_recovery_proof',
+      'recoveryEncryptedPrivateKey',
+      'recovery_encrypted_private_key',
+      'newRecoveryEncryptedPrivateKey',
+      'new_recovery_encrypted_private_key',
+      'recoveryHash',
+      'recovery_hash',
+    ];
+    expect(SENSITIVE_KEYS).toEqual(expect.arrayContaining(keys));
+    const input = Object.fromEntries(keys.map((k) => [k, 'secret-value']));
+    expect(scrubSensitive({ body: input })).toEqual({
+      body: Object.fromEntries(keys.map((k) => [k, '[REDACTED]'])),
+    });
+  });
 });
 
 describe('scrubSensitive with errors and class instances', () => {
