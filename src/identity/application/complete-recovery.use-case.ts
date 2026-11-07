@@ -6,7 +6,10 @@ import { SessionRepository } from '../domain/session.repository.js';
 import { User } from '../domain/user.js';
 import { UserRepository } from '../domain/user.repository.js';
 import { toLoginResult, type LoginResult } from './dto/login-result.js';
-import { verifyRecoveryProof } from './lookup-recovery.use-case.js';
+import {
+  recoveryFailed,
+  verifyRecoveryProof,
+} from './lookup-recovery.use-case.js';
 import { AuthProofHasher } from './ports/auth-proof-hasher.js';
 import { RecoveryProofHasher } from './ports/recovery-proof-hasher.js';
 import {
@@ -64,13 +67,28 @@ export class CompleteRecoveryUseCase {
     // Only after the proof: the Argon2id hash is the expensive part.
     const authHash = await this.authHasher.hash(input.newAuthProof);
     const now = new Date();
-    const tokens = await this.uow.run(async () => {
-      user.changePassword({ authHash, ...newMaterial });
-      await this.users.save(user);
-      await this.sessions.revokeAllForUser(user.id, 'account_recovery', now);
-      return this.sessionIssuer.start(user, input.device, input.client, now);
+    const result = await this.uow.run(async () => {
+      // Re-read under the row lock and check the proof again: a concurrent code change (or recovery) between the
+      // unlocked check and here must win, never be overwritten by a recovery verified against a stale row.
+      const locked = await this.users.findByIdForUpdate(user.id);
+      if (
+        !locked ||
+        !this.recoveryHasher.verify(locked.recoveryHash, input.recoveryProof)
+      ) {
+        throw recoveryFailed();
+      }
+      locked.changePassword({ authHash, ...newMaterial });
+      await this.users.updatePasswordMaterial(locked);
+      await this.sessions.revokeAllForUser(locked.id, 'account_recovery', now);
+      const issued = await this.sessionIssuer.start(
+        locked,
+        input.device,
+        input.client,
+        now,
+      );
+      return { user: locked, issued };
     });
-    this.logger.log({ event: 'account.recovered', userId: user.id });
-    return toLoginResult(user, tokens);
+    this.logger.log({ event: 'account.recovered', userId: result.user.id });
+    return toLoginResult(result.user, result.issued);
   }
 }

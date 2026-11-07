@@ -21,7 +21,7 @@ const params = {
 };
 const NOW = new Date('2026-10-24T12:00:00Z');
 
-const users = { findById: vi.fn(), save: vi.fn() };
+const users = { findById: vi.fn(), updatePasswordMaterial: vi.fn() };
 const sessions = { revokeAllForUser: vi.fn() };
 const hasher = {
   hash: vi.fn(),
@@ -68,7 +68,7 @@ describe('ChangePasswordUseCase', () => {
     vi.useFakeTimers();
     vi.setSystemTime(NOW);
     users.findById.mockImplementation(() => Promise.resolve(makeUser()));
-    users.save.mockResolvedValue(undefined);
+    users.updatePasswordMaterial.mockResolvedValue(undefined);
     sessions.revokeAllForUser.mockResolvedValue(undefined);
     hasher.verify.mockResolvedValue(true);
     hasher.hash.mockResolvedValue('new-hash');
@@ -82,7 +82,7 @@ describe('ChangePasswordUseCase', () => {
       constructor: DomainValidationError,
       code: 'current-auth-proof-invalid',
     });
-    expect(users.save).not.toHaveBeenCalled();
+    expect(users.updatePasswordMaterial).not.toHaveBeenCalled();
     expect(sessions.revokeAllForUser).not.toHaveBeenCalled();
   });
 
@@ -92,7 +92,7 @@ describe('ChangePasswordUseCase', () => {
     ).rejects.toMatchObject({ code: 'current-auth-proof-invalid' });
     expect(hasher.verifyAgainstDummy).toHaveBeenCalledOnce();
     expect(hasher.verify).not.toHaveBeenCalled();
-    expect(users.save).not.toHaveBeenCalled();
+    expect(users.updatePasswordMaterial).not.toHaveBeenCalled();
   });
 
   it('stores the new hash and material and revokes the other sessions only', async () => {
@@ -103,7 +103,7 @@ describe('ChangePasswordUseCase', () => {
       data.currentAuthProof,
     );
     expect(hasher.hash).toHaveBeenCalledWith(data.newAuthProof);
-    const saved: User = users.save.mock.calls[0][0];
+    const saved: User = users.updatePasswordMaterial.mock.calls[0][0];
     expect(saved.authHash).toBe('new-hash');
     expect(saved.kdfSalt).toBe(data.newKdfSalt);
     expect(saved.kdfParams).toEqual({ ...params, opsLimit: 4 });
@@ -127,7 +127,7 @@ describe('ChangePasswordUseCase', () => {
       useCase.execute(auth, { ...input(), newAuthProof: 'bad' }),
     ).rejects.toMatchObject({ code: 'auth-proof-invalid' });
     expect(hasher.hash).not.toHaveBeenCalled();
-    expect(users.save).not.toHaveBeenCalled();
+    expect(users.updatePasswordMaterial).not.toHaveBeenCalled();
     expect(sessions.revokeAllForUser).not.toHaveBeenCalled();
   });
 

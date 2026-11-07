@@ -5,6 +5,7 @@ import { SessionRepository } from '../../src/identity/domain/session.repository.
 import { User } from '../../src/identity/domain/user.js';
 import { UserRepository } from '../../src/identity/domain/user.repository.js';
 import { DEFAULT_KDF_PARAMS } from '../../src/identity/domain/kdf-params.js';
+import { UnitOfWork } from '../../src/shared/infra/db/unit-of-work.js';
 import {
   adminDataSource,
   createTestApp,
@@ -104,10 +105,91 @@ describe('identity repositories', () => {
       kdfParams: { ...DEFAULT_KDF_PARAMS },
       encryptedPrivateKey: b64(73, 0x01),
     });
-    await users.save(user);
+    await users.updatePasswordMaterial(user);
     const v2 = BigInt(await syncVersion(user.id));
     expect(v2).toBeGreaterThan(v1);
     expect((await users.findById(user.id))!.authHash).toBe('new-hash');
+  });
+
+  it('per-field writes: a stale password change never restores the old recovery code, and vice versa', async () => {
+    const user = makeUser();
+    await users.create(user);
+    // Two flows read the same row before either writes (the lost-update scenario).
+    const forPassword = (await users.findById(user.id))!;
+    const forRecovery = (await users.findById(user.id))!;
+
+    const newBlob = Buffer.alloc(73, 0x09);
+    newBlob[0] = 0x01;
+    forRecovery.changeRecoveryCode({
+      recoveryHash: 'cd'.repeat(32),
+      recoveryEncryptedPrivateKey: newBlob.toString('base64url'),
+    });
+    await users.updateRecoveryCode(forRecovery);
+
+    const epk = Buffer.alloc(73, 0x07);
+    epk[0] = 0x01;
+    const newEpk = epk.toString('base64url');
+    forPassword.changePassword({
+      authHash: 'new-hash',
+      kdfSalt: b64(16, 0x05),
+      kdfParams: { ...DEFAULT_KDF_PARAMS, opsLimit: 4 },
+      encryptedPrivateKey: newEpk,
+    });
+    await users.updatePasswordMaterial(forPassword);
+
+    const loaded = (await users.findById(user.id))!;
+    expect(loaded.authHash).toBe('new-hash');
+    expect(loaded.kdfSalt).toBe(b64(16, 0x05));
+    expect(loaded.kdfParams).toEqual({ ...DEFAULT_KDF_PARAMS, opsLimit: 4 });
+    expect(loaded.encryptedPrivateKey).toBe(newEpk);
+    expect(loaded.recoveryHash).toBe('cd'.repeat(32));
+    expect(loaded.recoveryEncryptedPrivateKey).toBe(
+      newBlob.toString('base64url'),
+    );
+
+    // The other order: a stale recovery-code change never restores the old password material.
+    const staleForCode = (await users.findById(user.id))!;
+    const freshForPassword = (await users.findById(user.id))!;
+    freshForPassword.changePassword({
+      authHash: 'newer-hash',
+      kdfSalt: b64(16, 0x06),
+      kdfParams: { ...DEFAULT_KDF_PARAMS },
+      encryptedPrivateKey: b64(73, 0x01),
+    });
+    await users.updatePasswordMaterial(freshForPassword);
+    staleForCode.changeRecoveryCode({
+      recoveryHash: 'ef'.repeat(32),
+      recoveryEncryptedPrivateKey: b64(73, 0x01),
+    });
+    await users.updateRecoveryCode(staleForCode);
+
+    const after = (await users.findById(user.id))!;
+    expect(after.authHash).toBe('newer-hash');
+    expect(after.kdfSalt).toBe(b64(16, 0x06));
+    expect(after.recoveryHash).toBe('ef'.repeat(32));
+  });
+
+  it('findByIdForUpdate locks the row inside a unit of work', async () => {
+    const user = makeUser();
+    await users.create(user);
+    const uow = app.get(UnitOfWork, { strict: false });
+    const locked = await uow.run(async () => {
+      const row = await users.findByIdForUpdate(user.id);
+      const ds = await adminDataSource();
+      // Another connection cannot take the same lock while this transaction holds it.
+      const other: unknown[] = await ds.query(
+        'SELECT id FROM users WHERE id = $1 FOR UPDATE SKIP LOCKED',
+        [user.id],
+      );
+      expect(other).toHaveLength(0);
+      return row;
+    });
+    expect(locked!.id).toBe(user.id);
+    expect(
+      await uow.run(() =>
+        users.findByIdForUpdate('0190f3a0-0000-7000-8000-000000000000'),
+      ),
+    ).toBeNull();
   });
 
   it('rejects a second active user with the same email with ConflictError', async () => {
@@ -262,7 +344,7 @@ describe('identity repositories', () => {
       recoveryHash: 'y'.repeat(64),
       recoveryEncryptedPrivateKey: blob.toString('base64url'),
     });
-    await users.save(user);
+    await users.updateRecoveryCode(user);
     const loaded = (await users.findById(user.id))!;
     expect(loaded.recoveryHash).toBe('y'.repeat(64));
     expect(loaded.recoveryEncryptedPrivateKey).toBe(blob.toString('base64url'));

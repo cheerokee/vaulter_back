@@ -46,7 +46,7 @@ export class ChangeRecoveryCodeUseCase {
       recoveryHash: this.recoveryHasher.hash(input.newRecoveryProof),
       recoveryEncryptedPrivateKey: input.newRecoveryEncryptedPrivateKey,
     });
-    await this.users.save(user);
+    await this.users.updateRecoveryCode(user);
     this.logger.log({
       event: 'account.recovery_code_changed',
       userId: user.id,

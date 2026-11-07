@@ -39,6 +39,21 @@ function makeUser(): User {
   });
 }
 
+function userProps(u: User) {
+  return {
+    name: u.name,
+    email: u.email,
+    authHash: u.authHash,
+    kdfSalt: u.kdfSalt,
+    kdfParams: u.kdfParams,
+    publicKey: u.publicKey,
+    encryptedPrivateKey: u.encryptedPrivateKey,
+    recoveryHash: u.recoveryHash,
+    recoveryEncryptedPrivateKey: u.recoveryEncryptedPrivateKey,
+    createdAt: u.createdAt,
+  };
+}
+
 const input = () => ({
   email: 'Ana@X.com',
   recoveryProof: b64(32, 7),
@@ -51,7 +66,11 @@ const input = () => ({
 });
 
 describe('CompleteRecoveryUseCase', () => {
-  const users = { findByEmail: vi.fn(), save: vi.fn() };
+  const users = {
+    findByEmail: vi.fn(),
+    findByIdForUpdate: vi.fn(),
+    updatePasswordMaterial: vi.fn(),
+  };
   const sessions = { revokeAllForUser: vi.fn() };
   const authHasher = { hash: vi.fn() };
   const recoveryHasher = {
@@ -85,7 +104,10 @@ describe('CompleteRecoveryUseCase', () => {
     vi.setSystemTime(NOW);
     user = makeUser();
     users.findByEmail.mockResolvedValue(user);
-    users.save.mockResolvedValue(undefined);
+    users.findByIdForUpdate.mockImplementation(() =>
+      Promise.resolve(User.restore({ ...userProps(user) }, user.id)),
+    );
+    users.updatePasswordMaterial.mockResolvedValue(undefined);
     sessions.revokeAllForUser.mockResolvedValue(undefined);
     authHasher.hash.mockResolvedValue('new-hash');
     recoveryHasher.verify.mockReturnValue(true);
@@ -127,7 +149,7 @@ describe('CompleteRecoveryUseCase', () => {
       code: 'recovery-failed',
     });
     expect(authHasher.hash).not.toHaveBeenCalled();
-    expect(users.save).not.toHaveBeenCalled();
+    expect(users.updatePasswordMaterial).not.toHaveBeenCalled();
     expect(sessions.revokeAllForUser).not.toHaveBeenCalled();
     expect(issuer.start).not.toHaveBeenCalled();
   });
@@ -153,7 +175,12 @@ describe('CompleteRecoveryUseCase', () => {
       order.push('run:end');
       return out;
     });
-    users.save.mockImplementation(() => {
+    const lockedRead = users.findByIdForUpdate.getMockImplementation()!;
+    users.findByIdForUpdate.mockImplementation((id: string) => {
+      order.push('lock');
+      return lockedRead(id);
+    });
+    users.updatePasswordMaterial.mockImplementation(() => {
       order.push('save');
       return Promise.resolve();
     });
@@ -169,24 +196,36 @@ describe('CompleteRecoveryUseCase', () => {
     const out = await useCase.execute(i);
 
     expect(users.findByEmail).toHaveBeenCalledWith('ana@x.com');
-    expect(recoveryHasher.verify).toHaveBeenCalledWith(
+    expect(users.findByIdForUpdate).toHaveBeenCalledWith(user.id);
+    // Checked twice: unlocked (before the hash) and again on the locked row.
+    expect(recoveryHasher.verify).toHaveBeenCalledTimes(2);
+    expect(recoveryHasher.verify).toHaveBeenNthCalledWith(
+      2,
       'stored-recovery-hash',
       i.recoveryProof,
     );
     expect(authHasher.hash).toHaveBeenCalledWith(i.newAuthProof);
-    expect(order).toEqual(['run:start', 'save', 'revoke', 'start', 'run:end']);
+    expect(order).toEqual([
+      'run:start',
+      'lock',
+      'save',
+      'revoke',
+      'start',
+      'run:end',
+    ]);
     expect(sessions.revokeAllForUser).toHaveBeenCalledWith(
       user.id,
       'account_recovery',
       NOW,
     );
     expect(sessions.revokeAllForUser.mock.calls[0]).toHaveLength(3);
-    const saved = users.save.mock.calls[0]![0] as User;
+    const saved = users.updatePasswordMaterial.mock.calls[0]![0] as User;
     expect(saved.authHash).toBe('new-hash');
     expect(saved.kdfSalt).toBe(i.newKdfSalt);
     expect(saved.encryptedPrivateKey).toBe(i.newEncryptedPrivateKey);
     expect(saved.recoveryHash).toBe('stored-recovery-hash');
-    expect(issuer.start).toHaveBeenCalledWith(user, i.device, i.client, NOW);
+    expect(issuer.start).toHaveBeenCalledWith(saved, i.device, i.client, NOW);
+    expect(saved.id).toBe(user.id);
     expect(out.session).toBe(tokens);
     expect(out.keys.publicKey).toBe(user.publicKey);
     expect(out.keys.encryptedPrivateKey).toBe(i.newEncryptedPrivateKey);
@@ -195,5 +234,40 @@ describe('CompleteRecoveryUseCase', () => {
       event: 'account.recovered',
       userId: user.id,
     });
+  });
+
+  it('fails with recovery-failed and changes nothing when the code changed before the lock', async () => {
+    // Unlocked check passes against the stale row; the locked re-read has the owner's new code.
+    users.findByIdForUpdate.mockResolvedValue(
+      User.restore(
+        { ...userProps(user), recoveryHash: 'rotated-recovery-hash' },
+        user.id,
+      ),
+    );
+    recoveryHasher.verify.mockImplementation(
+      (hash: string) => hash === 'stored-recovery-hash',
+    );
+    await expect(useCase.execute(input())).rejects.toMatchObject({
+      constructor: UnauthenticatedError,
+      code: 'recovery-failed',
+    });
+    expect(recoveryHasher.verify).toHaveBeenLastCalledWith(
+      'rotated-recovery-hash',
+      expect.any(String),
+    );
+    expect(users.updatePasswordMaterial).not.toHaveBeenCalled();
+    expect(sessions.revokeAllForUser).not.toHaveBeenCalled();
+    expect(issuer.start).not.toHaveBeenCalled();
+    expect(logSpy).not.toHaveBeenCalled();
+  });
+
+  it('fails with recovery-failed when the user vanished before the lock', async () => {
+    users.findByIdForUpdate.mockResolvedValue(null);
+    await expect(useCase.execute(input())).rejects.toMatchObject({
+      code: 'recovery-failed',
+    });
+    expect(users.updatePasswordMaterial).not.toHaveBeenCalled();
+    expect(sessions.revokeAllForUser).not.toHaveBeenCalled();
+    expect(issuer.start).not.toHaveBeenCalled();
   });
 });

@@ -654,9 +654,12 @@ Os valores do `.env.example` para os segredos são **só de desenvolvimento**; p
   coluna xid8 junto da versão e só servir linhas abaixo de `pg_snapshot_xmin(pg_current_snapshot())`) ou carimbo de
   versão no momento do commit. Mitigação até lá: sincronização completa periódica do Hub.
 - Exclusão de conta (LGPD) precisa revogar as sessões.
-- Recuperação de conta, limites conhecidos: (a) sem trava na linha do usuário, um `PUT /me/password` vindo de uma sessão
-  que passou na reautenticação logo antes de uma recuperação confirmar pode sobrescrever a senha recuperada (corrida
-  estreita); (b) confirmação por e-mail, aviso ao dono da conta e auditoria visível da recuperação ficam para depois.
+- Recuperação de conta, limites conhecidos: (a) as escritas em `users` são por campo (`updatePasswordMaterial`,
+  `updateRecoveryCode`) e a recuperação reconfere a prova sob `FOR UPDATE` (`findByIdForUpdate`), então trocar o código
+  durante uma recuperação nunca é desfeito; mas `PUT /me/password` não trava a linha, e um que passou na reautenticação
+  logo antes de uma recuperação confirmar ainda pode sobrescrever a senha recuperada (corrida estreita; a sessão dele
+  já foi revogada pela recuperação); (b) confirmação por e-mail, aviso ao dono da conta e auditoria visível da
+  recuperação ficam para depois.
 - Organizações: avisar admins por notificação (convite aceito, membro saiu); exclusão de organização; papéis
   próprios (modo avançado: `role_permission` com RLS por organização, hoje o catálogo é só leitura); quem sai e volta mantém
   o `joinedAt` original (o vínculo é reativado, não recriado); trava de assentos quando houver limites (`SeatPolicy`).

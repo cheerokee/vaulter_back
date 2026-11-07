@@ -50,7 +50,7 @@ export class ChangePasswordUseCase {
       kdfParams: input.newKdfParams,
       encryptedPrivateKey: input.newEncryptedPrivateKey,
     });
-    await this.users.save(user);
+    await this.users.updatePasswordMaterial(user);
     await this.sessions.revokeAllForUser(
       auth.userId,
       'password_change',

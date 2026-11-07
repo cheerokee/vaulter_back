@@ -18,7 +18,7 @@ const params = {
 };
 const NOW = new Date('2026-11-07T12:00:00Z');
 
-const users = { findById: vi.fn(), save: vi.fn() };
+const users = { findById: vi.fn(), updateRecoveryCode: vi.fn() };
 const authHasher = {
   hash: vi.fn(),
   verify: vi.fn(),
@@ -60,7 +60,7 @@ describe('ChangeRecoveryCodeUseCase', () => {
   beforeEach(() => {
     vi.resetAllMocks();
     users.findById.mockImplementation(() => Promise.resolve(makeUser()));
-    users.save.mockResolvedValue(undefined);
+    users.updateRecoveryCode.mockResolvedValue(undefined);
     authHasher.verify.mockResolvedValue(true);
     authHasher.verifyAgainstDummy.mockResolvedValue(false);
     recoveryHasher.hash.mockReturnValue('new-recovery-hash');
@@ -72,7 +72,7 @@ describe('ChangeRecoveryCodeUseCase', () => {
       constructor: DomainValidationError,
       code: 'current-auth-proof-invalid',
     });
-    expect(users.save).not.toHaveBeenCalled();
+    expect(users.updateRecoveryCode).not.toHaveBeenCalled();
     expect(recoveryHasher.hash).not.toHaveBeenCalled();
   });
 
@@ -92,14 +92,14 @@ describe('ChangeRecoveryCodeUseCase', () => {
       constructor: DomainValidationError,
       code: 'recovery-encrypted-private-key-invalid',
     });
-    expect(users.save).not.toHaveBeenCalled();
+    expect(users.updateRecoveryCode).not.toHaveBeenCalled();
   });
 
   it('stores the hash of the new proof and the new blob', async () => {
     const data = input();
     await useCase.execute(auth, data);
     expect(recoveryHasher.hash).toHaveBeenCalledWith(data.newRecoveryProof);
-    const saved: User = users.save.mock.calls[0][0];
+    const saved: User = users.updateRecoveryCode.mock.calls[0][0];
     expect(saved.recoveryHash).toBe('new-recovery-hash');
     expect(saved.recoveryEncryptedPrivateKey).toBe(
       data.newRecoveryEncryptedPrivateKey,

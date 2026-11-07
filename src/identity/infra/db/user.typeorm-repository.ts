@@ -56,12 +56,34 @@ export class UserTypeormRepository extends UserRepository {
     }
   }
 
-  async save(user: User): Promise<void> {
-    const {
-      id,
-      createdAt: _createdAt,
-      ...rest
-    } = UserMapper.toPersistence(user);
-    await this.repo.update({ id }, rest);
+  async findByIdForUpdate(id: string): Promise<User | null> {
+    const row = await this.repo.findOne({
+      where: { id },
+      lock: { mode: 'pessimistic_write' },
+    });
+    return row ? UserMapper.toDomain(row) : null;
+  }
+
+  // Escrita por campo: dois fluxos concorrentes (troca de senha e troca do código) nunca sobrescrevem um o outro.
+  async updatePasswordMaterial(user: User): Promise<void> {
+    await this.repo.update(
+      { id: user.id },
+      {
+        authHash: user.authHash,
+        kdfSalt: user.kdfSalt,
+        kdfParams: user.kdfParams,
+        encryptedPrivateKey: user.encryptedPrivateKey,
+      },
+    );
+  }
+
+  async updateRecoveryCode(user: User): Promise<void> {
+    await this.repo.update(
+      { id: user.id },
+      {
+        recoveryHash: user.recoveryHash,
+        recoveryEncryptedPrivateKey: user.recoveryEncryptedPrivateKey,
+      },
+    );
   }
 }
