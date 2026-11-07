@@ -11,6 +11,12 @@ import { SupportRequestExecutor } from './application/support-request-executor.j
 import { GetPlatformMeUseCase } from './application/get-platform-me.use-case.js';
 import { GrantPlatformRoleUseCase } from './application/grant-platform-role.use-case.js';
 import { ListStaffUseCase } from './application/list-staff.use-case.js';
+import { ListPlatformAuditUseCase } from './application/list-platform-audit.use-case.js';
+import {
+  LookupHubUseCase,
+  LookupOrganizationUseCase,
+  LookupUserUseCase,
+} from './application/lookup.use-cases.js';
 import { PlatformAccess } from './application/platform-access.js';
 import { PlatformAudit } from './application/platform-audit.js';
 import { RevokePlatformRoleUseCase } from './application/revoke-platform-role.use-case.js';
@@ -26,6 +32,8 @@ import { PlatformRoleTypeormRepository } from './infra/db/platform-role.typeorm-
 import { PlatformSupportRequestTypeormEntity } from './infra/db/platform-support-request.entity.js';
 import { SupportRequestTypeormRepository } from './infra/db/support-request.typeorm-repository.js';
 import { UserPlatformRoleTypeormEntity } from './infra/db/user-platform-role.entity.js';
+import { PlatformAuditController } from './infra/http/platform-audit.controller.js';
+import { PlatformLookupController } from './infra/http/platform-lookup.controller.js';
 import { PlatformMeController } from './infra/http/platform-me.controller.js';
 import { PlatformPermissionGuard } from './infra/http/platform-permission.guard.js';
 import { PlatformStaffController } from './infra/http/platform-staff.controller.js';
@@ -38,6 +46,8 @@ import { SupportRequestsController } from './infra/http/support-requests.control
     PlatformMeController,
     PlatformStaffController,
     SupportRequestsController,
+    PlatformLookupController,
+    PlatformAuditController,
   ],
   imports: [
     // UserDirectory (nome/e-mail da equipe) e CurrentAuthProofVerifier (reautenticação).
@@ -79,6 +89,10 @@ import { SupportRequestsController } from './infra/http/support-requests.control
     DecideSupportRequestUseCase,
     ListSupportRequestsUseCase,
     GetSupportRequestUseCase,
+    LookupUserUseCase,
+    LookupHubUseCase,
+    LookupOrganizationUseCase,
+    ListPlatformAuditUseCase,
   ],
   exports: [PlatformAccess, PlatformAudit],
 })

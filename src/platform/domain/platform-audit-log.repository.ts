@@ -8,6 +8,11 @@ export type PlatformAuditAction =
   | 'platform.request.failed'
   | 'platform.request.expired';
 
+import type {
+  CursorPage,
+  CursorPageRequest,
+} from '../../shared/domain/pagination.js';
+
 export type PlatformAuditResult = 'success' | 'denied' | 'error';
 
 export type PlatformAuditEntry = {
@@ -23,7 +28,23 @@ export type PlatformAuditEntry = {
   metadata?: Record<string, unknown>;
 };
 
+export type PlatformAuditRecord = PlatformAuditEntry & {
+  id: string;
+  createdAt: Date;
+};
+
+export type PlatformAuditFilter = {
+  supportRequestId?: string;
+  /** Only rows of support requests created by this person (staff without `platform.support.approve`). */
+  requestedBy?: string;
+};
+
 // Trilha da equipe (platform_audit_logs), só de acréscimo.
 export abstract class PlatformAuditLogRepository {
   abstract append(entry: PlatformAuditEntry): Promise<void>;
+  /** Newest first (by id, cursor). */
+  abstract list(
+    filter: PlatformAuditFilter,
+    page: CursorPageRequest,
+  ): Promise<CursorPage<PlatformAuditRecord>>;
 }

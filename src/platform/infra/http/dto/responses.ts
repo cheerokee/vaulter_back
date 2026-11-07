@@ -1,3 +1,4 @@
+import type { PlatformAuditRecord } from '../../../domain/platform-audit-log.repository.js';
 import type { PlatformMeView } from '../../../application/get-platform-me.use-case.js';
 import type { StaffMemberView } from '../../../application/list-staff.use-case.js';
 import type { SupportRequest } from '../../../domain/support-request.js';
@@ -28,5 +29,20 @@ export function supportRequestResponse(r: SupportRequest) {
     failureType: r.failureType,
     expiresAt: r.expiresAt.toISOString(),
     createdAt: r.createdAt?.toISOString() ?? null,
+  };
+}
+
+export function platformAuditResponse(r: PlatformAuditRecord) {
+  return {
+    id: r.id,
+    action: r.action,
+    result: r.result,
+    userId: r.userId,
+    supportRequestId: r.supportRequestId ?? null,
+    targetUserId: r.targetUserId ?? null,
+    targetHubId: r.targetHubId ?? null,
+    targetOrganizationId: r.targetOrganizationId ?? null,
+    metadata: r.metadata ?? null,
+    createdAt: r.createdAt.toISOString(),
   };
 }
