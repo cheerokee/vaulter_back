@@ -3,6 +3,7 @@ import { createTestApp, resetDatabase } from '../setup/test-app.js';
 import {
   type ClientAccount,
   createClientAccount,
+  createRecoveryMaterial,
   openRecoveryPrivateKey,
   rewrapPrivateKey,
 } from '../support/client-crypto.js';
@@ -217,4 +218,87 @@ describe('Account recovery (e2e)', () => {
     );
     expect(Buffer.from(opened.keys.get(1)!)).toEqual(Buffer.from(key));
   }, 60_000);
+
+  describe('PUT /me/recovery-code', () => {
+    it('replaces the recovery code: the old one stops working, the new one recovers', async () => {
+      const acc = await createClientAccount(PASSWORD_OLD);
+      const email = 'change-code@example.com';
+      const reg = await c.register(acc, email).expect(201);
+      const token = reg.body.session.accessToken as string;
+      const fresh = await createRecoveryMaterial(acc.privateKey);
+
+      await c
+        .http()
+        .put('/me/recovery-code')
+        .set(c.bearer(token))
+        .send({
+          currentAuthProof: acc.authProof,
+          newRecoveryProof: fresh.recoveryProof,
+          newRecoveryEncryptedPrivateKey: fresh.recoveryEncryptedPrivateKey,
+        })
+        .expect(204);
+
+      const old = await c.recoveryLookup(email, acc.recoveryProof).expect(401);
+      expect(old.body.type).toMatch(/\/recovery-failed$/);
+      const lookup = await c
+        .recoveryLookup(email, fresh.recoveryProof)
+        .expect(200);
+      const opened = await openRecoveryPrivateKey(
+        fresh.recoveryCode,
+        lookup.body.recoveryEncryptedPrivateKey as string,
+      );
+      expect(Buffer.from(opened)).toEqual(Buffer.from(acc.privateKey));
+
+      // Sessions are not revoked.
+      await c.http().get('/me').set(c.bearer(token)).expect(200);
+    }, 60_000);
+
+    it('rejects a wrong current proof and keeps the old code', async () => {
+      const acc = await createClientAccount(PASSWORD_OLD);
+      const wrong = await createClientAccount('not the right password');
+      const email = 'change-code-wrong@example.com';
+      const reg = await c.register(acc, email).expect(201);
+      const fresh = await createRecoveryMaterial(acc.privateKey);
+      const res = await c
+        .http()
+        .put('/me/recovery-code')
+        .set(c.bearer(reg.body.session.accessToken as string))
+        .send({
+          currentAuthProof: wrong.authProof,
+          newRecoveryProof: fresh.recoveryProof,
+          newRecoveryEncryptedPrivateKey: fresh.recoveryEncryptedPrivateKey,
+        });
+      expect(res.status).toBe(422);
+      expect(res.body.type).toMatch(/current-auth-proof-invalid$/);
+      await c.recoveryLookup(email, acc.recoveryProof).expect(200);
+    }, 60_000);
+
+    it('keeps the recovery code valid after a password change', async () => {
+      const acc = await createClientAccount(PASSWORD_OLD);
+      const email = 'code-after-password@example.com';
+      const reg = await c.register(acc, email).expect(201);
+      const next = await rewrapPrivateKey(acc.privateKey, PASSWORD_NEW);
+      await c
+        .http()
+        .put('/me/password')
+        .set(c.bearer(reg.body.session.accessToken as string))
+        .send({
+          currentAuthProof: acc.authProof,
+          newAuthProof: next.authProof,
+          newKdfSalt: next.kdfSalt,
+          newKdfParams: next.kdfParams,
+          newEncryptedPrivateKey: next.encryptedPrivateKey,
+        })
+        .expect(204);
+
+      const lookup = await c
+        .recoveryLookup(email, acc.recoveryProof)
+        .expect(200);
+      const opened = await openRecoveryPrivateKey(
+        acc.recoveryCode,
+        lookup.body.recoveryEncryptedPrivateKey as string,
+      );
+      expect(Buffer.from(opened)).toEqual(Buffer.from(acc.privateKey));
+    }, 60_000);
+  });
 });

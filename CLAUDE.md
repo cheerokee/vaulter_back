@@ -666,7 +666,7 @@ Os valores do `.env.example` para os segredos são **só de desenvolvimento**; p
   | `POST /auth/register` | 10/h por IP |
   | `POST /auth/login` | 10/min por IP **e** 5/min por e-mail normalizado |
   | `POST /auth/refresh` | 60/min por IP |
-  | `PUT /me/password`, `PUT /organizations/:id/recovery-key`, `POST /spaces/:id/recover` e `POST /spaces/:id/recover/copies` (reautenticação) | 5 por 15 min por usuário, **um orçamento só para todas** |
+  | `PUT /me/password`, `PUT /me/recovery-code`, `PUT /organizations/:id/recovery-key`, `POST /spaces/:id/recover` e `POST /spaces/:id/recover/copies` (reautenticação) | 5 por 15 min por usuário, **um orçamento só para todas** |
   | `POST /invitations/preview` (pública) | 30/min por IP |
   | `POST /invitations/accept` | 10/min por IP |
   | `POST /spaces/:id/keys` (troca da chave do espaço) | 10/h por usuário (`userIdTracker`, contador próprio) |

@@ -246,6 +246,34 @@ describe('rate limiting (e2e)', () => {
     }
   }, 60_000);
 
+  it('shares the reauthentication budget between PUT /me/password and PUT /me/recovery-code', async () => {
+    const user = await c.signUp(account, 'reauth-code@example.com');
+    const admin = await adminDataSource();
+    await admin.query('TRUNCATE rate_limit_hits');
+    const put = (path: string, ip: string) =>
+      c
+        .http()
+        .put(path)
+        .set(c.bearer(user.token))
+        .set('X-Forwarded-For', ip)
+        .send({});
+    for (let i = 0; i < 3; i++) {
+      expect((await put('/me/password', `198.51.100.${i + 140}`)).status).toBe(
+        422,
+      );
+    }
+    for (let i = 0; i < 2; i++) {
+      expect(
+        (await put('/me/recovery-code', `198.51.100.${i + 150}`)).status,
+      ).toBe(422);
+    }
+    for (const path of ['/me/recovery-code', '/me/password']) {
+      const res = await put(path, '198.51.100.160');
+      expect(res.status).toBe(429);
+      expect(res.body.type).toMatch(/\/too-many-requests$/);
+    }
+  }, 60_000);
+
   it('limits POST /spaces/:id/keys to 10 per hour per user, on its own counter, whatever the IP', async () => {
     const user = await c.signUp(account, 'rotate-limit@example.com');
     const rotate = (ip: string) =>
