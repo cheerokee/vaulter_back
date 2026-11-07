@@ -292,6 +292,12 @@ Todas são atômicas: se algo falha, nada muda.
     oráculo). O Hub que recebe `hub-auth-failed` repetidamente com as próprias chaves intactas deve entender que foi
     desregistrado, apagar os dados locais e pedir o reset de fábrica.
 
+- **Desregistro forçado pela plataforma:** se o dono perdeu a conta (e a recuperação pelo código não resolve), o Hub
+  fica preso nela. A equipe Vaulter faz o desregistro por um pedido de suporte (`hub_force_deregister`, módulo
+  `platform`, com motivo e prova, aprovação dupla para o suporte). O efeito é **idêntico** ao do dono, e as organizações
+  vinculadas veem a ação em `audit_logs` com `user_id` nulo e `metadata { actor: 'platform', supportRequestId }`. Para o
+  aparelho nada muda: `hub-auth-failed`, depois reset de fábrica e nova reivindicação com a conta nova (passo 13).
+
 Outras rotas do dono: `GET /hubs` (Hubs que a pessoa vê, por cursor), `GET /hubs/:id` e `PATCH /hubs/:id` com
 `{ "name" }`.
 

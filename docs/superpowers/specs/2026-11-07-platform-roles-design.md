@@ -1,6 +1,6 @@
 # Papéis da plataforma — design
 
-Data: 07/11/2026 · Status: **aprovada em 07/11/2026** · Repositório: `vaulter_back` (módulo novo `platform`)
+Data: 07/11/2026 · Status: **aprovada em 07/11/2026 (implementada)** · Repositório: `vaulter_back` (módulo novo `platform`)
 
 Nasce de uma conversa do Jonas com o Claude. Parte da spec de produto
 `../valter-valt-ai/docs/superpowers/specs/2026-10-24-organizacoes-espacos-e-nuvem-design.md` ("Papéis da plataforma

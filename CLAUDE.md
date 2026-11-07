@@ -546,6 +546,65 @@ consulta só de leitura (veja Sincronização).
 - **Testes (helpers):** `test/support/hub-crypto.ts` (cripto do aparelho: chaves, assinaturas), `hub-client.ts` e
   `hubs-kit.ts` (acima). Não duplicar nos specs.
 
+## Módulo `platform`
+`src/platform/` (equipe Vaulter: papéis da plataforma, pedidos de suporte, auditoria própria). Spec:
+`docs/superpowers/specs/2026-11-07-platform-roles-design.md`. Quase nada do que a equipe fará existe ainda: o módulo
+entrega a **estrutura** (catálogo, atribuição, trava das rotas, auditoria) e duas ações de suporte. A equipe **nunca**
+ganha acesso a conteúdo (as chaves ficam com os clientes).
+- **Papéis e permissões** (`domain/platform-catalog.ts`, fonte da verdade em código; semeado pela migration
+  `CreatePlatformRoles`, imutável: mudar o catálogo = nova migration; o e2e confere banco == catálogo; `resetDatabase`
+  dos testes restaura o catálogo como faz com o RBAC). Permissões: `platform.roles.manage`, `platform.support.request`,
+  `platform.support.approve`, `platform.support.execute_alone`, `platform.audit.read`. Papéis: `platform_admin` (todas),
+  `platform_support` (`support.request` + `audit.read`), `platform_finance` (nenhuma por ora). Conta normal do `identity`
+  com um papel por cima (`user_platform_role`); atribuição em tabelas próprias, só a equipe.
+- **Fronteira:** o `platform` depende de `identity`, `organizations` e `hubs` só pelo que exportam; nenhum deles importa
+  `platform`. Exporta `PlatformAccess` e `PlatformAudit`. O papel da plataforma nunca aparece em resposta de cliente nem
+  na sincronização.
+- **Trava das rotas** (`PlatformPermissionGuard`, lê as atribuições **no banco a cada requisição**; vale na hora):
+  `@RequirePlatformPermission(p)` ou `@RequireAnyPlatformRole()`. Sem papel ou sem a permissão: **404** igual ao do Nest
+  para rota inexistente (`Cannot <METHOD> <url>`), para não revelar que `/platform/*` existe. `GET /platform/me` usa
+  `@RequireAnyPlatformRole()` (o financeiro tem papel mas nenhuma permissão).
+- **Rotas** (todas internas, token de usuário): `GET /platform/me`; `GET /platform/staff`,
+  `PUT|DELETE /platform/staff/:userId/roles/:roleKey` (`roles.manage`, reautenticação; retirar o último admin:
+  422 `last-platform-admin`); `POST|GET /platform/support-requests`, `GET .../:id`, `POST .../:id/approve|reject`;
+  `GET /platform/audit`; buscas para achar o alvo: `GET /platform/lookup/users` (por e-mail),
+  `/platform/lookup/hubs/:hubId`, `/platform/lookup/organizations/:orgId` (só `platform.support.request`; id, nome,
+  dono, status, nada cifrado). Pedir, aprovar, recusar e mexer em papéis entram no orçamento `reauth`.
+- **Primeiro admin:** `npm run platform:grant-admin -- <email>` (`node scripts/platform-grant-admin.ts <email>`), com o
+  login **dono** do banco (`DB_USERNAME`), dentro do container; idempotente; auditado em `platform_audit_logs` com
+  `user_id` nulo e via `cli`. É o único jeito de criar admin sem já ser admin.
+- **Pedidos de suporte** (`SupportRequest`): tipos `hub_force_deregister` (alvo `hubId`) e `org_appoint_admin` (alvo
+  `organizationId` + `userId`); motivo e prova obrigatórios (até 2000 caracteres). Estados `pending`, `executed`,
+  `rejected`, `expired` (sem decisão em 7 dias), `failed` (erro de domínio na execução: o pedido guarda o `type` do
+  erro e nada muda no alvo). Quem tem `platform.support.execute_alone` (admin) cria o pedido já aprovado e executado na
+  mesma transação; suporte cria **pendente** e outra pessoa com `platform.support.approve` aprova (executa na hora) ou
+  recusa com nota; quem pediu nunca aprova o próprio (`self-approval`, 422). A execução (`SupportRequestExecutor`) roda
+  num `uow.run` aninhado (savepoint): erro de domínio desfaz só a ação e vira `failed`; outro erro desfaz tudo.
+- **Regras de alvo:** organização pessoal recusada (`personal-organization-protected`, 422); **ninguém da equipe pode ser
+  nomeado** admin (`staff-cannot-be-appointed`, 422), conferido na criação **e de novo na execução**. O nomeado pode ser
+  membro atual ou qualquer conta cadastrada (vira membro e admin), mesmo havendo admins.
+- **Operações administrativas exportadas** (recebem um `AuditActor`, `src/shared/application/audit-actor.ts`:
+  `{ kind: 'user', userId }` ou `{ kind: 'platform', supportRequestId }`; `auditActorFields` dá o `userId` e a metadata
+  de cada gravação): `HubAdministration.deregister(hubId, actor)` (mesmo efeito e mesma ordem de locks do
+  `DeregisterHubUseCase`, sem exigir o dono) e `OrganizationAdministration.appointAdmin(orgId, userId, actor, now)`
+  (replica a ordem de locks do `lockMembershipContext`, sem membro ator: `org_admin` travados antes de ler o alvo).
+  Cada uma tem também `summary` (consulta mínima das buscas).
+- **Auditoria:** trilha própria `platform_audit_logs` (*append-only*; `platform.role.granted|revoked`,
+  `platform.request.created|approved|rejected|executed|failed|expired`), em `PlatformAudit.record` dentro da mesma
+  transação. O que mexe numa organização também vai ao `audit_logs` dela, com `user_id` **nulo** e
+  `metadata { actor: 'platform', supportRequestId }` (a conta da equipe não é exposta ao cliente). Existem agora **dois
+  formatos de `member.joined`**: o normal (`user_id` = quem entrou) e o da plataforma (`user_id` nulo e a pessoa que
+  entrou em `metadata.targetUserId`). **Nenhuma rota de cliente lê o `audit_logs` ainda** (pendente).
+  `GET /platform/audit` exige `platform.audit.read` e, sem `platform.support.approve`, mostra só os pedidos do próprio
+  usuário; aceita `supportRequestId` e cursor.
+- **Desregistro forçado:** é a saída para um Hub preso numa conta perdida (veja `docs/hubs/hub-lifecycle.md`); o dono
+  legítimo faz o reset de fábrica e reivindica de novo com a conta nova.
+- **Limites residuais conhecidos** (junto dos do rate limit): o throttler global roda **antes** do
+  `PlatformPermissionGuard`, então as rotas com `@ThrottleReauth()` respondem 429 a quem não é da equipe depois de 5
+  chamadas (rota inexistente nunca dá 429); e um papel perdido entre o guard e a reconferência dentro da transação pode
+  expor o detalhe genérico "The resource was not found.".
+- **Testes:** e2e em `test/platform/` (`catalog`, `staff`, `support-requests`, `lookup`); unitários ao lado do código.
+
 ## Banco de dados (TypeORM + migrations)
 - **TypeORM 1.x** + `@nestjs/typeorm`, driver `pg`. Config de conexão em `src/database/typeorm.options.ts`,
   compartilhada entre a aplicação (`DatabaseModule`) e o CLI (`src/database/data-source.ts`). Variáveis do
@@ -658,6 +717,9 @@ Os valores do `.env.example` para os segredos são **só de desenvolvimento**; p
   coluna xid8 junto da versão e só servir linhas abaixo de `pg_snapshot_xmin(pg_current_snapshot())`) ou carimbo de
   versão no momento do commit. Mitigação até lá: sincronização completa periódica do Hub.
 - Exclusão de conta (LGPD) precisa revogar as sessões.
+- Plataforma: quarentena/aviso por e-mail ao dono e aos admins quando a equipe age numa organização ou Hub; leitura da
+  auditoria da organização pelo cliente (hoje só se grava); endurecer a aprovação dupla (hoje basta outra pessoa com
+  `platform.support.approve`); permissões de financeiro, tickets e chat (o papel `platform_finance` não tem nenhuma).
 - Recuperação de conta, limites conhecidos: (a) as escritas em `users` são por campo (`updatePasswordMaterial`,
   `updateRecoveryCode`) e a recuperação reconfere a prova sob `FOR UPDATE` (`findByIdForUpdate`), então trocar o código
   durante uma recuperação nunca é desfeito; mas `PUT /me/password` não trava a linha, e um que passou na reautenticação
@@ -690,7 +752,7 @@ Os valores do `.env.example` para os segredos são **só de desenvolvimento**; p
   | `POST /auth/login` | 10/min por IP **e** 5/min por e-mail normalizado |
   | `POST /auth/refresh` | 60/min por IP |
   | `POST /auth/recovery/lookup` e `POST /auth/recovery/complete` (públicas) | 10/min por IP, **um orçamento só para as duas** (`THROTTLE_GROUPS.accountRecovery`) **e** 5/min por e-mail normalizado, por rota |
-  | `PUT /me/password`, `PUT /me/recovery-code`, `PUT /organizations/:id/recovery-key`, `POST /spaces/:id/recover` e `POST /spaces/:id/recover/copies` (reautenticação) | 5 por 15 min por usuário, **um orçamento só para todas** |
+  | `PUT /me/password`, `PUT /me/recovery-code`, `PUT /organizations/:id/recovery-key`, `POST /spaces/:id/recover` e `POST /spaces/:id/recover/copies` `PUT|DELETE /platform/staff/:userId/roles/:roleKey`, `POST /platform/support-requests` e `.../:id/approve|reject` (reautenticação) | 5 por 15 min por usuário, **um orçamento só para todas** |
   | `POST /invitations/preview` (pública) | 30/min por IP |
   | `POST /invitations/accept` | 10/min por IP |
   | `POST /spaces/:id/keys` (troca da chave do espaço) | 10/h por usuário (`userIdTracker`, contador próprio) |
