@@ -584,6 +584,12 @@ ganha acesso a conteúdo (as chaves ficam com os clientes).
   mesma transação; suporte cria **pendente** e outra pessoa com `platform.support.approve` aprova (executa na hora) ou
   recusa com nota; quem pediu nunca aprova o próprio (`self-approval`, 422). A execução (`SupportRequestExecutor`) roda
   num `uow.run` aninhado (savepoint): erro de domínio desfaz só a ação e vira `failed`; outro erro desfaz tudo.
+- **Ordem de locks da plataforma** (sempre nesta ordem, sem ciclo): atribuições vivas de `platform_admin`
+  (`lockAdmins` FOR UPDATE em conceder/retirar papel; `lockAdminsForShare` FOR SHARE ao criar e ao decidir pedido, antes
+  de reconferir permissões e o alvo da equipe) -> linha do pedido (`lockById` FOR UPDATE) -> locks da operação
+  executada (Hub/organização). Conceder/retirar papel e decisões/criações se serializam, então a retirada vale na hora
+  e um alvo não vira equipe no meio de uma nomeação. Conceder/retirar nunca travam Hub nem organização. Sem nenhum
+  admin vivo (só em teste), o FOR SHARE não trava nada.
 - **Regras de alvo:** organização pessoal recusada (`personal-organization-protected`, 422); **ninguém da equipe pode ser
   nomeado** admin (`staff-cannot-be-appointed`, 422), conferido na criação **e de novo na execução**. O nomeado pode ser
   membro atual ou qualquer conta cadastrada (vira membro e admin), mesmo havendo admins.

@@ -3,6 +3,7 @@ import { CurrentAuthProofVerifier } from '../../identity/application/current-aut
 import type { Actor } from '../../identity/application/dto/actor.js';
 import { DomainError, NotFoundError } from '../../shared/domain/errors.js';
 import { UnitOfWork } from '../../shared/infra/db/unit-of-work.js';
+import { PlatformRoleRepository } from '../domain/platform-role.repository.js';
 import type { SupportRequest } from '../domain/support-request.js';
 import { SupportRequestRepository } from '../domain/support-request.repository.js';
 import { PlatformAccess } from './platform-access.js';
@@ -25,14 +26,17 @@ type Decision = { kind: 'approve' } | { kind: 'reject'; note: string };
 // Aprova (e executa na hora) ou recusa um pedido pendente de OUTRA pessoa (spec §4.3). Ordem:
 // 1. permissão (404 sem `platform.support.approve`) e pedido existente (404), sem gastar o Argon2;
 // 2. reautenticação FORA da transação;
-// 3. na transação: trava a linha do pedido (FOR UPDATE: duas decisões concorrentes se serializam, a segunda vê o
-//    pedido já decidido, 409), reconfere a permissão, decide, grava, audita e, na aprovação, executa.
+// 3. na transação: trava os admins FOR SHARE (`lockAdminsForShare`: serializa com concessão/retirada de papel, que
+//    começam com `lockAdmins` FOR UPDATE; sempre ANTES do pedido, a mesma ordem da retirada), trava a linha do pedido
+//    (FOR UPDATE: duas decisões concorrentes se serializam, a segunda vê o pedido já decidido, 409), reconfere a
+//    permissão, decide, grava, audita e, na aprovação, executa.
 // Vencido (7 dias sem decisão): o estado `expired` é gravado e auditado, a transação confirma, e SÓ ENTÃO sai o
 // 422 `support-request-expired` (lançar dentro do `run` desfaria a gravação).
 @Injectable()
 export class DecideSupportRequestUseCase {
   constructor(
     private readonly access: PlatformAccess,
+    private readonly roles: PlatformRoleRepository,
     private readonly repo: SupportRequestRepository,
     private readonly audit: PlatformAudit,
     private readonly executor: SupportRequestExecutor,
@@ -73,6 +77,7 @@ export class DecideSupportRequestUseCase {
       async (): Promise<
         { request: SupportRequest } | { error: DomainError }
       > => {
+        await this.roles.lockAdminsForShare();
         const request = await this.repo.lockById(id);
         if (!request) throw supportRequestNotFound();
         await this.access.require(actor.userId, 'platform.support.approve');

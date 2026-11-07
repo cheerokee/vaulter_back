@@ -96,11 +96,22 @@ export class PlatformRoleTypeormRepository extends PlatformRoleRepository {
     return rows.length > 0;
   }
 
-  // SELECT ... FOR UPDATE na transação ambiente: o lock vale até o fim do UnitOfWork.run de quem chamou.
+  // SELECT ... FOR UPDATE/SHARE na transação ambiente: o lock vale até o fim do UnitOfWork.run de quem chamou.
   async lockAdmins(): Promise<string[]> {
+    return this.lockAdminRows('UPDATE', 'lockAdmins');
+  }
+
+  async lockAdminsForShare(): Promise<void> {
+    await this.lockAdminRows('SHARE', 'lockAdminsForShare');
+  }
+
+  private async lockAdminRows(
+    mode: 'UPDATE' | 'SHARE',
+    caller: string,
+  ): Promise<string[]> {
     if (!currentManager(this.dataSource).queryRunner?.isTransactionActive) {
       throw new Error(
-        'PlatformRoleRepository.lockAdmins requires an active unit of work (call it inside UnitOfWork.run).',
+        `PlatformRoleRepository.${caller} requires an active unit of work (call it inside UnitOfWork.run).`,
       );
     }
     const rows = await this.query<{ user_id: string }[]>(
@@ -110,7 +121,7 @@ export class PlatformRoleTypeormRepository extends PlatformRoleRepository {
         WHERE pr.key = 'platform_admin' AND pr.deleted_at IS NULL
           AND upr.deleted_at IS NULL
         ORDER BY upr.user_id
-          FOR UPDATE OF upr`,
+          FOR ${mode} OF upr`,
     );
     return rows.map((r) => r.user_id);
   }

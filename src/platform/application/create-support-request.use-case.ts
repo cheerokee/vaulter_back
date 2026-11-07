@@ -36,7 +36,8 @@ export type CreateSupportRequestInput = {
 //    organização / conta existem (404; um Hub já desregistrado passa e o pedido falha na execução) e o nomeado não
 //    é da equipe (422 `staff-cannot-be-appointed`), sem gastar o Argon2;
 // 2. reautenticação FORA da transação;
-// 3. na transação: reconfere as permissões e o alvo, grava e audita. Com `platform.support.execute_alone` o pedido
+// 3. na transação: trava os admins FOR SHARE (`lockAdminsForShare`: uma concessão/retirada de papel concorrente,
+//    que começa com `lockAdmins` FOR UPDATE, espera ou é esperada), reconfere as permissões e o alvo, grava e audita. Com `platform.support.execute_alone` o pedido
 //    nasce aprovado por quem pediu e é executado na mesma transação; sem, fica pendente para outra pessoa.
 @Injectable()
 export class CreateSupportRequestUseCase {
@@ -64,6 +65,7 @@ export class CreateSupportRequestUseCase {
     await this.verifier.verify(actor.userId, input.currentAuthProof);
 
     return this.uow.run(async () => {
+      await this.roles.lockAdminsForShare();
       const permissions = await this.access.require(
         actor.userId,
         'platform.support.request',

@@ -34,6 +34,13 @@ export abstract class PlatformRoleRepository {
    * an active unit of work: the lock lasts until the caller's transaction ends.
    */
   abstract lockAdmins(): Promise<string[]>;
+  /**
+   * Locks FOR SHARE (in user id order) the same live `platform_admin` assignments. Support request creation and
+   * decisions take it before re-checking permissions and the staff target, so a role grant/revoke (which starts with
+   * `lockAdmins`, FOR UPDATE) waits for them and they wait for it: no decision runs on a role read before a change
+   * that was committed meanwhile. Needs an active unit of work.
+   */
+  abstract lockAdminsForShare(): Promise<void>;
   /** Users with at least one live role, by user id (cursor). */
   abstract listStaff(page: CursorPageRequest): Promise<CursorPage<StaffRoles>>;
 }

@@ -43,6 +43,9 @@ const roles = {
     return [...set].sort();
   }),
   hasAnyRole: vi.fn(async (u: string) => (assigned.get(u)?.length ?? 0) > 0),
+  lockAdminsForShare: vi.fn(async () => {
+    calls.push('roles.lockAdminsForShare');
+  }),
 };
 const stored = new Map<string, SupportRequest>();
 const repo = {
@@ -131,6 +134,7 @@ const create = new CreateSupportRequestUseCase(
 );
 const decide = new DecideSupportRequestUseCase(
   deps.access,
+  roles as unknown as PlatformRoleRepository,
   deps.repo,
   deps.audit,
   executor as unknown as SupportRequestExecutor,
@@ -198,6 +202,7 @@ describe('CreateSupportRequestUseCase', () => {
     expect(calls).toEqual([
       'verifier.verify',
       'uow.run',
+      'roles.lockAdminsForShare',
       'repo.insert',
       'platform.request.created',
     ]);
@@ -211,6 +216,7 @@ describe('CreateSupportRequestUseCase', () => {
     expect(calls).toEqual([
       'verifier.verify',
       'uow.run',
+      'roles.lockAdminsForShare',
       'repo.insert',
       'platform.request.created',
       'platform.request.approved',
@@ -272,6 +278,7 @@ describe('DecideSupportRequestUseCase', () => {
     expect(calls).toEqual([
       'verifier.verify',
       'uow.run',
+      'roles.lockAdminsForShare',
       'repo.lockById',
       'repo.save:pending',
       'platform.request.approved',

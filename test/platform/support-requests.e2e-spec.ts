@@ -14,6 +14,7 @@ import { identityClient } from '../support/identity-client.js';
 import {
   grantRoleInDb,
   platformClient,
+  raceUnderStaffLock,
   requestAuditRows,
 } from '../support/platform-kit.js';
 import { auditRows } from '../support/spaces-db.js';
@@ -507,5 +508,80 @@ describe('Platform support requests (e2e)', () => {
     }
     // Support cannot reject either (needs platform.support.approve).
     await p.rejectRequest(support.token, id, 'no', proof).expect(404);
+  });
+
+  const auditIdOf = async (action: string, supportRequestId?: string) => {
+    const rows: { id: string }[] = await (
+      await adminDataSource()
+    ).query(
+      `SELECT id FROM platform_audit_logs
+        WHERE action = $1 AND ($2::uuid IS NULL OR support_request_id = $2::uuid) ORDER BY id`,
+      [action, supportRequestId ?? null],
+    );
+    return rows.map((r) => r.id);
+  };
+
+  it('two admins approve the same request concurrently: one 200, one 409, executed once', async () => {
+    const admin2 = await c.signUp(account, 'admin2@example.com', 'Admin 2');
+    await grantRoleInDb(admin2.userId, 'platform_admin');
+    const hub = await hk.claim(owner);
+    const created = await p
+      .createRequest(support.token, deregisterBody(hub.hubId))
+      .expect(201);
+    const id = created.body.id as string;
+
+    // Both decisions wait on lockAdminsForShare (held FOR UPDATE here), then serialize on the request row.
+    const results = await raceUnderStaffLock(
+      () =>
+        [admin, admin2].map((u) =>
+          Promise.resolve(p.approveRequest(u.token, id, proof)),
+        ),
+      2,
+    );
+    expect(results.map((r) => r.status).sort((x, y) => x - y)).toEqual([
+      200, 409,
+    ]);
+    expect(results.find((r) => r.status === 409)!.body.type).toMatch(
+      /\/support-request-not-pending$/,
+    );
+    expect(await auditIdOf('platform.request.executed', id)).toHaveLength(1);
+    expect(await hubDeregistered(hub.hubId)).toBe(true);
+  });
+
+  it('a revocation racing a decision: the two serialize (approved before the revoke, or 404 after it)', async () => {
+    const admin2 = await c.signUp(account, 'admin2@example.com', 'Admin 2');
+    await grantRoleInDb(admin2.userId, 'platform_admin');
+    const hub = await hk.claim(owner);
+    const created = await p
+      .createRequest(support.token, deregisterBody(hub.hubId))
+      .expect(201);
+    const id = created.body.id as string;
+
+    // The revoke waits on lockAdmins (FOR UPDATE), the approval on lockAdminsForShare: neither runs on a stale role.
+    const [approval, revocation] = await raceUnderStaffLock(
+      () => [
+        Promise.resolve(p.approveRequest(admin.token, id, proof)),
+        Promise.resolve(
+          p.revoke(admin2.token, admin.userId, 'platform_admin', proof),
+        ),
+      ],
+      2,
+    );
+    expect(revocation!.status).toBe(204);
+    const [revoked] = await auditIdOf('platform.role.revoked');
+    const executed = await auditIdOf('platform.request.executed', id);
+    if (approval!.status === 200) {
+      // Approved first: executed before the revocation was even read.
+      expect(executed).toHaveLength(1);
+      expect(executed[0]! < revoked!).toBe(true);
+      expect(await hubDeregistered(hub.hubId)).toBe(true);
+    } else {
+      // Revoked first: the decision re-checks the permission under the lock and stops.
+      expect(approval!.status).toBe(404);
+      expect(executed).toEqual([]);
+      const after = await p.getRequest(admin2.token, id).expect(200);
+      expect(after.body.status).toBe('pending');
+      expect(await hubDeregistered(hub.hubId)).toBe(false);
+    }
   });
 });
