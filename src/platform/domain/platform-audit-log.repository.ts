@@ -6,7 +6,10 @@ export type PlatformAuditAction =
   | 'platform.request.rejected'
   | 'platform.request.executed'
   | 'platform.request.failed'
-  | 'platform.request.expired';
+  | 'platform.request.expired'
+  | 'platform.lookup.user'
+  | 'platform.lookup.hub'
+  | 'platform.lookup.organization';
 
 import type {
   CursorPage,

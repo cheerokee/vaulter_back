@@ -1,6 +1,10 @@
 import type { INestApplication } from '@nestjs/common';
 import request from 'supertest';
-import { createTestApp, resetDatabase } from '../setup/test-app.js';
+import {
+  adminDataSource,
+  createTestApp,
+  resetDatabase,
+} from '../setup/test-app.js';
 import {
   type ClientAccount,
   createClientAccount,
@@ -96,6 +100,81 @@ describe('Platform lookups and audit listing (e2e)', () => {
       `/platform/lookup/organizations/${MISSING_ID}`,
     ).expect(404);
     await get(support.token, '/platform/lookup/hubs/nope').expect(422);
+  });
+
+  it('every lookup is audited (who, found target or a flag), never the e-mail searched', async () => {
+    const hub = await hk.claim(owner);
+    const org = await c.createOrg(owner.token, 'Acme').expect(201);
+    await get(
+      support.token,
+      '/platform/lookup/users?email=owner@example.com',
+    ).expect(200);
+    await get(
+      support.token,
+      '/platform/lookup/users?email=nobody@example.com',
+    ).expect(404);
+    await get(support.token, `/platform/lookup/hubs/${hub.hubId}`).expect(200);
+    await get(support.token, `/platform/lookup/hubs/${MISSING_ID}`).expect(404);
+    await get(
+      support.token,
+      `/platform/lookup/organizations/${org.body.id}`,
+    ).expect(200);
+    await get(
+      support.token,
+      `/platform/lookup/organizations/${MISSING_ID}`,
+    ).expect(404);
+    // Without the permission: hidden route, nothing recorded.
+    await get(
+      finance.token,
+      '/platform/lookup/users?email=owner@example.com',
+    ).expect(404);
+
+    const rows: Record<string, unknown>[] = await (
+      await adminDataSource()
+    ).query(
+      `SELECT user_id, action, result, target_user_id, target_hub_id, target_organization_id, metadata
+         FROM platform_audit_logs WHERE action LIKE 'platform.lookup.%' ORDER BY id`,
+    );
+    const base = {
+      user_id: support.userId,
+      result: 'success',
+      target_user_id: null,
+      target_hub_id: null,
+      target_organization_id: null,
+    };
+    expect(rows).toEqual([
+      {
+        ...base,
+        action: 'platform.lookup.user',
+        target_user_id: owner.userId,
+        metadata: { found: true },
+      },
+      { ...base, action: 'platform.lookup.user', metadata: { found: false } },
+      {
+        ...base,
+        action: 'platform.lookup.hub',
+        target_hub_id: hub.hubId,
+        metadata: { found: true },
+      },
+      {
+        ...base,
+        action: 'platform.lookup.hub',
+        metadata: { found: false, hubId: MISSING_ID },
+      },
+      {
+        ...base,
+        action: 'platform.lookup.organization',
+        target_organization_id: org.body.id,
+        metadata: { found: true },
+      },
+      {
+        ...base,
+        action: 'platform.lookup.organization',
+        metadata: { found: false, organizationId: MISSING_ID },
+      },
+    ]);
+    expect(JSON.stringify(rows)).not.toContain('nobody@example.com');
+    expect(JSON.stringify(rows)).not.toContain('owner@example.com');
   });
 
   it('a regular user and finance get 404 on every lookup and on the audit', async () => {

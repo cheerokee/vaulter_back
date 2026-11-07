@@ -149,7 +149,9 @@ nº 123"), quem pediu, estado e quem aprovou/recusou.
 ### 4.5 Auditoria da plataforma
 - Trilha própria (`platform_audit_logs`, *append-only*: runtime só `INSERT/SELECT`), com quem fez, ação, alvo, id do
   pedido, resultado e `metadata` sem segredo. Ações: `platform.role.granted|revoked`, `platform.request.created|
-  approved|rejected|executed|failed|expired` *(nomes: decisão do Claude)*.
+  approved|rejected|executed|failed|expired` *(nomes: decisão do Claude)*, e `platform.lookup.user|hub|organization`
+  (toda busca da equipe, achando ou não: alvo achado ou `metadata.found = false`; nunca o e-mail procurado) *(revisão
+  final)*.
 - Ação que mexe numa organização também vai para o `audit_logs` dela (§4.4), para o cliente ver o que a equipe fez.
   Nessas linhas, `user_id` fica **nulo** e a `metadata` leva `{ actor: 'platform', supportRequestId }`: a conta pessoal
   de quem da equipe agiu não é exposta ao cliente (ela fica na trilha da plataforma). *(decisão do Claude)*

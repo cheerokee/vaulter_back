@@ -604,8 +604,10 @@ ganha acesso a conteúdo (as chaves ficam com os clientes).
   (replica a ordem de locks do `lockMembershipContext`, sem membro ator: `org_admin` travados antes de ler o alvo).
   Cada uma tem também `summary` (consulta mínima das buscas).
 - **Auditoria:** trilha própria `platform_audit_logs` (*append-only*; `platform.role.granted|revoked`,
-  `platform.request.created|approved|rejected|executed|failed|expired`), em `PlatformAudit.record` dentro da mesma
-  transação. O que mexe numa organização também vai ao `audit_logs` dela, com `user_id` **nulo** e
+  `platform.request.created|approved|rejected|executed|failed|expired`, `platform.lookup.user|hub|organization`), em
+  `PlatformAudit.record` dentro da mesma transação. **Toda busca é auditada** (rastro LGPD de quem da equipe olhou dado
+  de cliente), achando ou não: o alvo achado nas colunas `target_*` e `metadata.found`; num 404, só `found: false` (e o
+  id procurado de Hub/organização em `metadata`); o e-mail procurado **nunca** é gravado. O que mexe numa organização também vai ao `audit_logs` dela, com `user_id` **nulo** e
   `metadata { actor: 'platform', supportRequestId }` (a conta da equipe não é exposta ao cliente). Existem agora **dois
   formatos de `member.joined`**: o normal (`user_id` = quem entrou) e o da plataforma (`user_id` nulo e a pessoa que
   entrou em `metadata.targetUserId`). **Nenhuma rota de cliente lê o `audit_logs` ainda** (pendente).
