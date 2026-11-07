@@ -8,6 +8,8 @@ import {
   type ClientAccount,
   createClientAccount,
 } from '../support/client-crypto.js';
+import { HubAdministration } from '../../src/hubs/application/hub-administration.js';
+import { ConflictError } from '../../src/shared/domain/errors.js';
 import { hubClient } from '../support/hub-client.js';
 import { hubDeregistered, hubsKit } from '../support/hubs-kit.js';
 import { identityClient } from '../support/identity-client.js';
@@ -633,5 +635,46 @@ describe('Platform support requests (e2e)', () => {
     const res = await p.approveRequest(admin.token, id, proof).expect(409);
     expect(res.body.type).toMatch(/\/support-request-not-pending$/);
     expect(await hubDeregistered(hub.hubId)).toBe(false);
+  });
+
+  it('the execution savepoint undoes a real write when the operation then fails with a domain error', async () => {
+    const hub = await hk.claim(owner);
+    const hubs = app.get(HubAdministration, { strict: false });
+    const real = hubs.deregister.bind(hubs);
+    // The real deregistration writes (Hub, links, roles tombstoned), then a domain error stops the operation.
+    const spy = vi
+      .spyOn(hubs, 'deregister')
+      .mockImplementation(async (...args) => {
+        await real(...args);
+        expect(await hubDeregistered(hub.hubId)).toBe(false); // not committed yet (other connection)
+        throw new ConflictError('test-late-failure', 'Failed after writing.');
+      });
+    try {
+      const created = await p
+        .createRequest(support.token, deregisterBody(hub.hubId))
+        .expect(201);
+      const res = await p
+        .approveRequest(admin.token, created.body.id, proof)
+        .expect(200);
+      expect(spy).toHaveBeenCalledTimes(1);
+      expect(res.body).toMatchObject({
+        status: 'failed',
+        failureType: 'test-late-failure',
+        decidedByUserId: admin.userId,
+      });
+      // The write inside the savepoint was undone; the approval and the failure were committed.
+      expect(await hubDeregistered(hub.hubId)).toBe(false);
+      const token = await hc.authenticate(hub);
+      await hc.sync(token).expect(200);
+      expect(
+        (await requestAuditRows(created.body.id)).map((r) => r.action),
+      ).toEqual([
+        'platform.request.created',
+        'platform.request.approved',
+        'platform.request.failed',
+      ]);
+    } finally {
+      spy.mockRestore();
+    }
   });
 });
