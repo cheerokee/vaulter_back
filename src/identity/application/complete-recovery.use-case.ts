@@ -6,10 +6,7 @@ import { SessionRepository } from '../domain/session.repository.js';
 import { User } from '../domain/user.js';
 import { UserRepository } from '../domain/user.repository.js';
 import { toLoginResult, type LoginResult } from './dto/login-result.js';
-import {
-  recoveryFailed,
-  verifyRecoveryProof,
-} from './lookup-recovery.use-case.js';
+import { recoveryFailed, verifyRecoveryProof } from './recovery-proof.js';
 import { AuthProofHasher } from './ports/auth-proof-hasher.js';
 import { RecoveryProofHasher } from './ports/recovery-proof-hasher.js';
 import {

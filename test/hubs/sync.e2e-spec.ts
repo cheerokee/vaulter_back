@@ -15,6 +15,7 @@ import {
   type KeyedUser,
   recipientOf,
 } from '../support/identity-client.js';
+import { keysDeep } from '../support/json-keys.js';
 
 type Item = {
   type: string;
@@ -23,14 +24,6 @@ type Item = {
   data: Record<string, unknown>;
 };
 type Page = { items: Item[]; nextSince: number };
-
-/** Every object key at any depth of a JSON value. */
-const keysDeep = (value: unknown): string[] =>
-  Array.isArray(value)
-    ? value.flatMap(keysDeep)
-    : value !== null && typeof value === 'object'
-      ? Object.entries(value).flatMap(([key, v]) => [key, ...keysDeep(v)])
-      : [];
 
 const PASSWORD = 'correct horse battery staple';
 

@@ -8,17 +8,10 @@ import {
   rewrapPrivateKey,
 } from '../support/client-crypto.js';
 import { identityClient } from '../support/identity-client.js';
+import { keysDeep } from '../support/json-keys.js';
 
 const PASSWORD_A = 'correct horse battery staple';
 const PASSWORD_B = 'a brand new passphrase';
-
-/** Every object key at any depth of a JSON value. */
-const keysDeep = (value: unknown): string[] =>
-  Array.isArray(value)
-    ? value.flatMap(keysDeep)
-    : value !== null && typeof value === 'object'
-      ? Object.entries(value).flatMap(([key, v]) => [key, ...keysDeep(v)])
-      : [];
 
 describe('Me endpoints (e2e)', () => {
   let app: INestApplication;
