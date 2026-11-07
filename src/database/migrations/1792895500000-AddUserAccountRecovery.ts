@@ -3,12 +3,21 @@ import { MigrationInterface, QueryRunner } from 'typeorm';
 // Spec de recuperação de conta §4.1/§4.2: o cadastro passa a exigir o material do código de recuperação.
 // `recovery_hash` = hash com chave (BLAKE2b, `IDENTITY_RECOVERY_HASH_KEY`) da prova do código, em hex;
 // `recovery_encrypted_private_key` = a chave privada trancada pelo código (formato em docs/crypto/user-keys.md).
-// NOT NULL sem default: não há usuários anteriores a esta migration fora de desenvolvimento.
+// NOT NULL sem default: não há usuários anteriores a esta migration fora de desenvolvimento. Com usuários na
+// tabela, o `up` falha antes de alterar qualquer coisa, com uma mensagem clara (zerar o banco, veja CLAUDE.md).
 // Recuperar a conta revoga todas as sessões com o motivo `account_recovery`.
 export class AddUserAccountRecovery1792895500000 implements MigrationInterface {
   name = 'AddUserAccountRecovery1792895500000';
 
   public async up(queryRunner: QueryRunner): Promise<void> {
+    const [{ count }] = (await queryRunner.query(
+      `SELECT count(*)::int AS count FROM "users"`,
+    )) as [{ count: number }];
+    if (count > 0) {
+      throw new Error(
+        `AddUserAccountRecovery: users has ${count} rows; reset the database (see CLAUDE.md, Docker)`,
+      );
+    }
     await queryRunner.query(
       `ALTER TABLE "users" ADD COLUMN "recovery_hash" character varying(64) NOT NULL`,
     );

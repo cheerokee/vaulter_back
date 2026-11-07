@@ -134,8 +134,10 @@ couber (spec de contas, §12).
     Toda falha é o mesmo 401 `recovery-failed`, com verificação falsa para o tempo não vazar; o material novo é validado
     (422) antes da prova. `PUT /me/recovery-code` troca o código (reautenticação, não revoga sessões).
   - **Banco local com usuários:** a migration `AddUserAccountRecovery` cria colunas NOT NULL e não há preenchimento
-    retroativo (a cópia nasce no aparelho); zere o banco de desenvolvimento antes de migrar (veja Docker). O banco
-    descartável dos e2e é recriado pelo `globalSetup`.
+    retroativo (a cópia nasce no aparelho); com linhas em `users` ela falha logo no início (`users has N rows`). Zere o
+    banco de desenvolvimento antes de migrar (veja Docker). O `globalSetup` só **cria** o banco dos e2e se ele faltar
+    (não recria): se ele já tinha usuários de antes, apague-o uma vez e deixe o próximo `test:e2e` recriá-lo:
+    `docker exec vaulter-back-db dropdb -U <DB_USERNAME> <DB_TEST_DATABASE>`.
 - **Tarefas em segundo plano:** **pg-boss** (fila no próprio Postgres, sem serviço novo).
 - **AWS:** região **`us-east-1` (Virgínia)** — o backend fica perto dos serviços externos (Anthropic, OpenRouter,
   Sentry), então só a ida app → backend cruza o continente; mais barata e com todos os serviços. LGPD permite
