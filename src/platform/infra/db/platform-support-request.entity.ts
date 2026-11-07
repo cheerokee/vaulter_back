@@ -1,10 +1,9 @@
 import { Check, Column, Entity, Index, JoinColumn, ManyToOne } from 'typeorm';
 import { BaseTypeormEntity } from '../../../shared/infra/db/base.entity.js';
-
-export type PlatformSupportRequestType =
-  'hub_force_deregister' | 'org_appoint_admin';
-export type PlatformSupportRequestStatus =
-  'pending' | 'executed' | 'rejected' | 'expired' | 'failed';
+import type {
+  PlatformSupportRequestStatus,
+  PlatformSupportRequestType,
+} from '../../domain/support-request.js';
 
 // Pedido de suporte da equipe (spec §4.3). Só do backend: sem RLS e sem sync_version. O runtime tem
 // SELECT/INSERT/UPDATE, sem DELETE. O alvo depende do tipo: desregistro forçado = só o Hub; nomear admin = a

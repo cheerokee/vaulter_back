@@ -131,5 +131,47 @@ export function platformClient(getApp: () => INestApplication) {
         .delete(`/platform/staff/${userId}/roles/${roleKey}`)
         .set(auth(token))
         .send({ currentAuthProof }),
+    createRequest: (token: string, body: Record<string, unknown>) =>
+      http().post('/platform/support-requests').set(auth(token)).send(body),
+    approveRequest: (token: string, id: string, currentAuthProof: string) =>
+      http()
+        .post(`/platform/support-requests/${id}/approve`)
+        .set(auth(token))
+        .send({ currentAuthProof }),
+    rejectRequest: (
+      token: string,
+      id: string,
+      note: string,
+      currentAuthProof: string,
+    ) =>
+      http()
+        .post(`/platform/support-requests/${id}/reject`)
+        .set(auth(token))
+        .send({ note, currentAuthProof }),
+    listRequests: (
+      token: string,
+      query: Record<string, string | number> = {},
+    ) => http().get('/platform/support-requests').query(query).set(auth(token)),
+    getRequest: (token: string, id: string) =>
+      http().get(`/platform/support-requests/${id}`).set(auth(token)),
   };
+}
+
+export type PlatformRequestAuditRow = PlatformAuditRow & {
+  support_request_id: string | null;
+  target_hub_id: string | null;
+  target_organization_id: string | null;
+};
+
+/** The platform trail of one support request, in order. */
+export async function requestAuditRows(
+  supportRequestId: string,
+): Promise<PlatformRequestAuditRow[]> {
+  const ds = await adminDataSource();
+  return ds.query(
+    `SELECT user_id, action, result, support_request_id, target_user_id, target_hub_id,
+            target_organization_id, metadata
+       FROM platform_audit_logs WHERE support_request_id = $1 ORDER BY id`,
+    [supportRequestId],
+  );
 }

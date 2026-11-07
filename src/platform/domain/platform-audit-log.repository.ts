@@ -11,7 +11,7 @@ export type PlatformAuditAction =
 export type PlatformAuditResult = 'success' | 'denied' | 'error';
 
 export type PlatformAuditEntry = {
-  /** Who acted; null for the command line (platform:grant-admin). */
+  /** Who acted; null for the command line (platform:grant-admin) and the clock (a support request expiring). */
   userId: string | null;
   action: PlatformAuditAction;
   result: PlatformAuditResult;
