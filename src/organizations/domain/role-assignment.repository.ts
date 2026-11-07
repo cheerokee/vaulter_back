@@ -16,6 +16,8 @@ export abstract class RoleAssignmentRepository {
    * requests serialize instead of both seeing "another admin exists".
    */
   abstract lockOrgAdmins(orgId: string): Promise<string[]>;
+  /** User ids of the active org_admin assignments, in id order, WITHOUT a lock (read-only views). */
+  abstract orgAdminIds(orgId: string): Promise<string[]>;
   abstract orgRoleOf(orgId: string, userId: string): Promise<OrgRoleKey | null>;
   abstract permissionsOf(
     orgId: string,

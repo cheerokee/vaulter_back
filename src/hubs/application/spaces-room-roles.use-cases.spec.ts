@@ -20,6 +20,7 @@ import type { HubRepository } from '../domain/hub.repository.js';
 import { AddHubSpaceUseCase } from './add-hub-space.use-case.js';
 import { AssignHubRoleUseCase } from './assign-hub-role.use-case.js';
 import { DeregisterHubUseCase } from './deregister-hub.use-case.js';
+import { HubAdministration } from './hub-administration.js';
 import { GrantRoomUseCase } from './grant-room.use-case.js';
 import type { HubAccess } from './hub-access.js';
 import { RemoveHubSpaceUseCase } from './remove-hub-space.use-case.js';
@@ -80,7 +81,12 @@ const spaceAccess = {
   requireSpaceMember: vi.fn(),
   requireSpacePermission: vi.fn(),
 };
-const hubs = { lockForShare: vi.fn(), lockForUpdate: vi.fn(), save: vi.fn() };
+const hubs = {
+  findById: vi.fn(),
+  lockForShare: vi.fn(),
+  lockForUpdate: vi.fn(),
+  save: vi.fn(),
+};
 const links = {
   lockForShare: vi.fn(),
   listActiveOrgIds: vi.fn(),
@@ -107,17 +113,23 @@ const directory = {
   personalOrganizationIdOf: vi.fn(),
 };
 const audit = { record: vi.fn() };
+let depth = 0;
 let inTx = false;
 const uow = {
   run: vi.fn(async (work: () => Promise<unknown>) => {
+    depth++;
     inTx = true;
     try {
       return await work();
     } finally {
-      inTx = false;
+      inTx = --depth > 0;
     }
   }),
   setContext: vi.fn(),
+  withContext: vi.fn(async (ctx: object, work: () => Promise<unknown>) => {
+    calls.push(`withContext:${JSON.stringify(ctx)}`);
+    return uow.run(work);
+  }),
 };
 const owner = () => ({ hub: makeHub(), role: 'hub_owner' });
 const member = () => ({ hub: makeHub(), role: 'hub_user' });
@@ -457,17 +469,27 @@ describe('AssignHubRoleUseCase', () => {
   });
 });
 
+const administration = () =>
+  new HubAdministration(
+    as<HubRepository>(hubs),
+    as<HubOrganizationRepository>(links),
+    as<HubSpaceRepository>(hubSpaces),
+    as<HubRoleRepository>(hubRoles),
+    as<SpaceRoomService>(room),
+    as<OrganizationDirectory>(directory),
+    as<AuditLog>(audit),
+    as<UnitOfWork>(uow),
+  );
+
 describe('DeregisterHubUseCase', () => {
+  beforeEach(() => {
+    hubs.findById.mockImplementation(log('findHub', makeHub()));
+  });
+
   const useCase = () =>
     new DeregisterHubUseCase(
       as<HubAccess>(access),
-      as<HubRepository>(hubs),
-      as<HubOrganizationRepository>(links),
-      as<HubSpaceRepository>(hubSpaces),
-      as<HubRoleRepository>(hubRoles),
-      as<SpaceRoomService>(room),
-      as<OrganizationDirectory>(directory),
-      as<AuditLog>(audit),
+      administration(),
       as<UnitOfWork>(uow),
     );
 
@@ -504,6 +526,9 @@ describe('DeregisterHubUseCase', () => {
     await useCase().execute(actor(OWNER), HUB_ID);
     expect(calls).toEqual([
       `requireOwner:${HUB_ID}`,
+      `withContext:${JSON.stringify({ hubId: HUB_ID })}`,
+      `findHub:${HUB_ID}`,
+      `withContext:${JSON.stringify({ userId: OWNER })}`,
       'lockHubForUpdate:true',
       `listAll:${HUB_ID}`,
       `listLive:${HUB_ID}`,
@@ -521,15 +546,21 @@ describe('DeregisterHubUseCase', () => {
       actorId: OWNER,
       reason: 'hub_deregistered',
       organizationIds: [ORG, ORG_B],
+      auditMetadata: {},
     });
     expect(hub.isDeregistered).toBe(true);
     expect(
-      audit.record.mock.calls.map((c) => [c[0].organizationId, c[0].action]),
+      audit.record.mock.calls.map((c) => [
+        c[0].organizationId,
+        c[0].action,
+        c[0].userId,
+      ]),
     ).toEqual([
-      [ORG, 'hub.organization.revoked'],
-      [PERSONAL, 'hub.deregistered'],
+      [ORG, 'hub.organization.revoked', OWNER],
+      [PERSONAL, 'hub.deregistered', OWNER],
     ]);
-    expect(uow.run).toHaveBeenCalledTimes(1);
+    // a cascata da administração entra na transação do caso de uso (savepoint)
+    expect(uow.run.mock.calls.length).toBeGreaterThan(1);
   });
 
   it('a hub deregistered meanwhile is 404 and nothing is written', async () => {
@@ -539,5 +570,74 @@ describe('DeregisterHubUseCase', () => {
     );
     expect(links.tombstoneAllOfHub).not.toHaveBeenCalled();
     expect(hubs.save).not.toHaveBeenCalled();
+  });
+});
+
+describe('HubAdministration.deregister', () => {
+  const PLATFORM = { kind: 'platform', supportRequestId: 'sr-1' } as const;
+  const ORIGIN = { actor: 'platform', supportRequestId: 'sr-1' };
+
+  it('platform: finds the owner in the hub context, runs the cascade as the owner, every audit without a user id and with the origin', async () => {
+    const hub = makeHub();
+    hubs.findById.mockResolvedValue(makeHub());
+    hubs.lockForUpdate.mockResolvedValue(hub);
+    links.listAllOrgIds.mockResolvedValue([ORG]);
+    links.list.mockResolvedValue([approved()]);
+    hubSpaces.removeAllOfOrganization.mockResolvedValue([SPACE]);
+    room.revokeAllRoomForHub.mockResolvedValue([SPACE]);
+    await administration().deregister(HUB_ID, PLATFORM);
+    expect(uow.withContext.mock.calls.map((c) => c[0])).toEqual([
+      { hubId: HUB_ID },
+      { userId: OWNER },
+    ]);
+    expect(room.revokeAllRoomForHub).toHaveBeenCalledWith({
+      hubId: HUB_ID,
+      actorId: null,
+      reason: 'hub_deregistered',
+      organizationIds: [ORG],
+      auditMetadata: ORIGIN,
+    });
+    expect(hub.isDeregistered).toBe(true);
+    expect(audit.record.mock.calls.map((c) => c[0])).toEqual([
+      {
+        organizationId: ORG,
+        userId: null,
+        action: 'hub.organization.revoked',
+        metadata: {
+          ...ORIGIN,
+          hubId: HUB_ID,
+          reason: 'hub_deregistered',
+          spaceIds: [SPACE],
+        },
+      },
+      {
+        organizationId: PERSONAL,
+        userId: null,
+        action: 'hub.deregistered',
+        metadata: {
+          ...ORIGIN,
+          hubId: HUB_ID,
+          organizationIds: [ORG],
+          roomSpaceIds: [SPACE],
+        },
+      },
+    ]);
+  });
+
+  it('unknown, deregistered or malformed hub: hub-not-found before any lock', async () => {
+    const gone = makeHub();
+    gone.deregister(NOW);
+    for (const found of [null, gone]) {
+      hubs.findById.mockResolvedValueOnce(found);
+      await expect(
+        administration().deregister(HUB_ID, PLATFORM),
+      ).rejects.toMatchObject({ code: 'hub-not-found' });
+    }
+    await expect(
+      administration().deregister('nope', PLATFORM),
+    ).rejects.toMatchObject({ code: 'hub-not-found' });
+    expect(hubs.findById).toHaveBeenCalledTimes(2);
+    expect(hubs.lockForUpdate).not.toHaveBeenCalled();
+    expect(audit.record).not.toHaveBeenCalled();
   });
 });

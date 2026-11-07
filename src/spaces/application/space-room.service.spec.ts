@@ -445,6 +445,34 @@ describe('SpaceRoomService bulk revocations', () => {
     ]);
   });
 
+  it('revokeAllRoomForHub: auditMetadata is merged into every hub.room.revoked (it never overrides the standard keys)', async () => {
+    await service().revokeAllRoomForHub({
+      hubId: HUB_ID,
+      organizationIds: [ORG_ID],
+      actorId: null,
+      reason: 'hub_deregistered',
+      auditMetadata: {
+        actor: 'platform',
+        supportRequestId: 'sr-1',
+        reason: 'overridden?',
+      },
+    });
+    expect(kit.audited()).toEqual(
+      [SPACE_ID, SPACE_2].sort().map((spaceId) => ({
+        organizationId: ORG_ID,
+        userId: null,
+        action: 'hub.room.revoked',
+        metadata: {
+          actor: 'platform',
+          supportRequestId: 'sr-1',
+          spaceId,
+          hubId: HUB_ID,
+          reason: 'hub_deregistered',
+        },
+      })),
+    );
+  });
+
   it('an error propagates (the caller rolls everything back)', async () => {
     m.room.removeHubInOrg.mockRejectedValue(new Error('db down'));
     await expect(

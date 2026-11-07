@@ -11,6 +11,7 @@ import { DeregisterHubUseCase } from './application/deregister-hub.use-case.js';
 import { GetHubUseCase } from './application/get-hub.use-case.js';
 import { GrantRoomUseCase } from './application/grant-room.use-case.js';
 import { HubAccess } from './application/hub-access.js';
+import { HubAdministration } from './application/hub-administration.js';
 import { HubLinkCascade } from './application/hub-link-cascade.js';
 import { HubsMemberRemovedHook } from './application/member-removed.hook.js';
 import { HubsSpaceMemberLeftHook } from './application/space-member-left.hook.js';
@@ -131,6 +132,7 @@ import { LinkCodeTypeormRepository } from './infra/db/link-code.typeorm-reposito
     GetHubUseCase,
     GrantRoomUseCase,
     HubAccess,
+    HubAdministration,
     HubLinkCascade,
     HubsMemberRemovedHook,
     HubsSpaceMemberLeftHook,
@@ -149,7 +151,8 @@ import { LinkCodeTypeormRepository } from './infra/db/link-code.typeorm-reposito
     UnlinkHubOrganizationUseCase,
     SyncHubUseCase,
   ],
-  // Para as próximas tarefas (sincronização, controllers) e módulos: checagem de acesso ao Hub.
-  exports: [HubAccess],
+  // Para os outros módulos: checagem de acesso ao Hub e as operações administrativas (o `platform` as usa; o `hubs`
+  // não o importa).
+  exports: [HubAccess, HubAdministration],
 })
 export class HubsModule {}

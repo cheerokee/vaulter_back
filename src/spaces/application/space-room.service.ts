@@ -61,6 +61,8 @@ export type BulkRoomRevocation = {
   hubId: string;
   actorId: string | null;
   reason: RoomRevokeReason;
+  /** Extra keys for every `hub.room.revoked` (e.g. the platform origin); never overrides the standard ones. */
+  auditMetadata?: Record<string, unknown>;
 };
 
 function hubNotFound(): NotFoundError {
@@ -250,7 +252,13 @@ export class SpaceRoomService {
       for (const id of ids) {
         const space = locked.get(id);
         if (space)
-          await this.afterRevoke(space, hubId, input.actorId, input.reason);
+          await this.afterRevoke(
+            space,
+            hubId,
+            input.actorId,
+            input.reason,
+            input.auditMetadata,
+          );
       }
       return ids;
     });
@@ -272,6 +280,9 @@ export class SpaceRoomService {
             hubId: input.hubId,
             actorId: input.actorId,
             reason: input.reason,
+            ...(input.auditMetadata
+              ? { auditMetadata: input.auditMetadata }
+              : {}),
             organizationId,
           })),
         );
@@ -285,6 +296,7 @@ export class SpaceRoomService {
     hubId: string,
     actorId: string | null,
     reason: RoomRevokeReason,
+    auditMetadata?: Record<string, unknown>,
   ): Promise<void> {
     space.markRotationRequired();
     await this.spaces.save(space);
@@ -292,7 +304,7 @@ export class SpaceRoomService {
       organizationId: space.organizationId,
       userId: actorId,
       action: 'hub.room.revoked',
-      metadata: { spaceId: space.id, hubId, reason },
+      metadata: { ...auditMetadata, spaceId: space.id, hubId, reason },
     });
   }
 }

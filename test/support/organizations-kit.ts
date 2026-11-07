@@ -110,6 +110,7 @@ export function makeKit() {
   const roles = {
     assignOrgRole: vi.fn(),
     lockOrgAdmins: vi.fn(),
+    orgAdminIds: vi.fn(),
     orgRoleOf: vi.fn(),
     permissionsOf: vi.fn(),
   };
@@ -129,6 +130,16 @@ export function makeKit() {
   const invitationHooks = { validateAndRecord: vi.fn(), onAccepted: vi.fn() };
   const uow = {
     run: vi.fn(async (work: () => Promise<unknown>) => {
+      depth++;
+      try {
+        return await work();
+      } finally {
+        depth--;
+      }
+    }),
+    /** Records the context switch in the trace (`uow.withContext:<json>`), then runs like `run`. */
+    withContext: vi.fn(async (ctx: object, work: () => Promise<unknown>) => {
+      trace.push(`uow.withContext:${JSON.stringify(ctx)}`);
       depth++;
       try {
         return await work();
@@ -179,6 +190,13 @@ export function makeKit() {
     );
     roles.lockOrgAdmins.mockImplementation(async () => {
       tag('roles.lockOrgAdmins');
+      return [...members]
+        .filter(([, r]) => r === 'org_admin')
+        .map(([u]) => u)
+        .sort();
+    });
+    roles.orgAdminIds.mockImplementation(async () => {
+      tag('roles.orgAdminIds');
       return [...members]
         .filter(([, r]) => r === 'org_admin')
         .map(([u]) => u)

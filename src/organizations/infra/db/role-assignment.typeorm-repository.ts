@@ -43,6 +43,17 @@ export class RoleAssignmentTypeormRepository extends RoleAssignmentRepository {
         'RoleAssignmentRepository.lockOrgAdmins requires an active unit of work (call it inside UnitOfWork.run).',
       );
     }
+    return this.adminIds(orgId, 'FOR UPDATE OF ra');
+  }
+
+  async orgAdminIds(orgId: string): Promise<string[]> {
+    return this.adminIds(orgId, '');
+  }
+
+  private async adminIds(
+    orgId: string,
+    lock: 'FOR UPDATE OF ra' | '',
+  ): Promise<string[]> {
     const rows: { user_id: string }[] = await runInOrganizationScope(
       this.dataSource,
       orgId,
@@ -55,7 +66,7 @@ export class RoleAssignmentTypeormRepository extends RoleAssignmentRepository {
               AND ra.scope_type = 'organization' AND ra.organization_id = $1
               AND ra.deleted_at IS NULL
             ORDER BY ra.user_id
-              FOR UPDATE OF ra`,
+              ${lock}`,
           [orgId],
         ),
     );
