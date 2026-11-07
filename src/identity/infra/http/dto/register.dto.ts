@@ -49,6 +49,16 @@ export class RegisterDto {
   @MaxLength(256)
   encryptedPrivateKey!: string;
 
+  @IsString()
+  @Matches(BASE64URL)
+  @MaxLength(256)
+  recoveryProof!: string;
+
+  @IsString()
+  @Matches(BASE64URL)
+  @MaxLength(256)
+  recoveryEncryptedPrivateKey!: string;
+
   @IsDefined()
   @IsObject()
   @ValidateNested()

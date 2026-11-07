@@ -33,6 +33,8 @@ describe('PreLoginUseCase', () => {
         kdfParams: params,
         publicKey: b64(32),
         encryptedPrivateKey: epk.toString('base64url'),
+        recoveryHash: 'recovery-hash',
+        recoveryEncryptedPrivateKey: epk.toString('base64url'),
         now: new Date('2026-10-24T11:00:00Z'),
       }),
     );

@@ -317,3 +317,19 @@ export async function recoveryKitKeypair(): Promise<{
   const pair = sodium.crypto_box_keypair();
   return { publicKey: await b64(pair.publicKey), privateKey: pair.privateKey };
 }
+
+/**
+ * Recovery fields for `User.register` in repository-level tests that bypass the HTTP: a hash-shaped
+ * placeholder and a well-formed (version 0x01, 73 bytes) sealed blob. Never opened by anything.
+ */
+export function testRecoveryFields(): {
+  recoveryHash: string;
+  recoveryEncryptedPrivateKey: string;
+} {
+  const blob = Buffer.alloc(73, 0x07);
+  blob[0] = 0x01;
+  return {
+    recoveryHash: 'x'.repeat(64),
+    recoveryEncryptedPrivateKey: blob.toString('base64url'),
+  };
+}

@@ -4,6 +4,7 @@ import {
   assertEncryptedPrivateKey,
   assertKdfSalt,
   assertPublicKey,
+  assertRecoveryEncryptedPrivateKey,
 } from './crypto-material.js';
 import { assertEmailLength, normalizeEmail } from './email.js';
 import { parseKdfParams, type KdfParams } from './kdf-params.js';
@@ -16,6 +17,8 @@ export type UserProps = {
   kdfParams: KdfParams;
   publicKey: string;
   encryptedPrivateKey: string;
+  recoveryHash: string;
+  recoveryEncryptedPrivateKey: string;
   createdAt?: Date;
   updatedAt?: Date;
 };
@@ -30,10 +33,21 @@ function assertAuthHash(authHash: string): string {
   return authHash;
 }
 
+function assertRecoveryHash(recoveryHash: string): string {
+  if (typeof recoveryHash !== 'string' || recoveryHash.length === 0) {
+    throw new DomainValidationError(
+      'recovery-hash-invalid',
+      'The recovery hash is required.',
+    );
+  }
+  return recoveryHash;
+}
+
 export class User extends Entity<UserProps> {
   /**
-   * Validates and normalizes everything a registration carries except the auth hash, so the
-   * caller can reject bad input before the expensive hashing. Throws DomainValidationError.
+   * Validates and normalizes everything a registration carries except the auth and recovery
+   * hashes, so the caller can reject bad input before the expensive hashing. Throws
+   * DomainValidationError.
    */
   static validateRegistration(input: {
     name: string;
@@ -42,7 +56,8 @@ export class User extends Entity<UserProps> {
     kdfParams: unknown;
     publicKey: string;
     encryptedPrivateKey: string;
-  }): Omit<UserProps, 'authHash' | 'createdAt' | 'updatedAt'> {
+    recoveryEncryptedPrivateKey: string;
+  }): Omit<UserProps, 'authHash' | 'recoveryHash' | 'createdAt' | 'updatedAt'> {
     const name = typeof input.name === 'string' ? input.name.trim() : '';
     if (name.length < 1 || name.length > 255) {
       throw new DomainValidationError(
@@ -57,6 +72,9 @@ export class User extends Entity<UserProps> {
       kdfParams: parseKdfParams(input.kdfParams),
       publicKey: assertPublicKey(input.publicKey),
       encryptedPrivateKey: assertEncryptedPrivateKey(input.encryptedPrivateKey),
+      recoveryEncryptedPrivateKey: assertRecoveryEncryptedPrivateKey(
+        input.recoveryEncryptedPrivateKey,
+      ),
     };
   }
 
@@ -69,12 +87,15 @@ export class User extends Entity<UserProps> {
     kdfParams: unknown;
     publicKey: string;
     encryptedPrivateKey: string;
+    recoveryHash: string;
+    recoveryEncryptedPrivateKey: string;
     now: Date;
   }): User {
     const fields = User.validateRegistration(input);
     return new User({
       ...fields,
       authHash: assertAuthHash(input.authHash),
+      recoveryHash: assertRecoveryHash(input.recoveryHash),
       createdAt: input.now,
     });
   }
@@ -110,6 +131,18 @@ export class User extends Entity<UserProps> {
     };
   }
 
+  /** Replaces the recovery code (hash of its proof and the private key sealed by it). */
+  changeRecoveryCode(input: {
+    recoveryHash: string;
+    recoveryEncryptedPrivateKey: string;
+  }): void {
+    const recoveryHash = assertRecoveryHash(input.recoveryHash);
+    const recoveryEncryptedPrivateKey = assertRecoveryEncryptedPrivateKey(
+      input.recoveryEncryptedPrivateKey,
+    );
+    this.props = { ...this.props, recoveryHash, recoveryEncryptedPrivateKey };
+  }
+
   get name(): string {
     return this.props.name;
   }
@@ -130,6 +163,12 @@ export class User extends Entity<UserProps> {
   }
   get encryptedPrivateKey(): string {
     return this.props.encryptedPrivateKey;
+  }
+  get recoveryHash(): string {
+    return this.props.recoveryHash;
+  }
+  get recoveryEncryptedPrivateKey(): string {
+    return this.props.recoveryEncryptedPrivateKey;
   }
   get createdAt(): Date | undefined {
     return this.props.createdAt;

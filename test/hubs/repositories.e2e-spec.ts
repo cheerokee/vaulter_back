@@ -37,6 +37,7 @@ import {
   resetDatabase,
 } from '../setup/test-app.js';
 import { createHubIdentity } from '../support/hub-crypto.js';
+import { testRecoveryFields } from '../support/client-crypto.js';
 
 const b64 = (n: number, first?: number) => {
   const b = Buffer.alloc(n, 0xab);
@@ -85,6 +86,7 @@ describe('hubs repositories (e2e, app role)', () => {
       kdfParams: { ...DEFAULT_KDF_PARAMS },
       publicKey: b64(32),
       encryptedPrivateKey: b64(73, 0x01),
+      ...testRecoveryFields(),
       now,
     });
     await users.create(user);

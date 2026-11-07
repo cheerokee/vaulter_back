@@ -4,6 +4,7 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { AccessTokenService } from './application/ports/access-token-service.js';
 import { AuthProofHasher } from './application/ports/auth-proof-hasher.js';
 import { DecoySaltFactory } from './application/ports/decoy-salt-factory.js';
+import { RecoveryProofHasher } from './application/ports/recovery-proof-hasher.js';
 import { RefreshTokenCodec } from './application/ports/refresh-token-codec.js';
 import { AuthenticateAccessTokenUseCase } from './application/authenticate-access-token.use-case.js';
 import { RefreshSessionUseCase } from './application/refresh-session.use-case.js';
@@ -24,6 +25,7 @@ import { UserRepository } from './domain/user.repository.js';
 import { JoseAccessTokenService } from './infra/crypto/jose-access-token-service.js';
 import { JoseHubTokenService } from './infra/crypto/jose-hub-token-service.js';
 import { SodiumAuthProofHasher } from './infra/crypto/sodium-auth-proof-hasher.js';
+import { SodiumRecoveryProofHasher } from './infra/crypto/sodium-recovery-proof-hasher.js';
 import { SodiumDecoySaltFactory } from './infra/crypto/sodium-decoy-salt-factory.js';
 import { SodiumRefreshTokenCodec } from './infra/crypto/sodium-refresh-token-codec.js';
 import { UserSessionTypeormEntity } from './infra/db/user-session.entity.js';
@@ -45,6 +47,7 @@ import { SessionsController } from './infra/http/sessions.controller.js';
     { provide: UserRepository, useClass: UserTypeormRepository },
     { provide: SessionRepository, useClass: UserSessionTypeormRepository },
     { provide: AuthProofHasher, useClass: SodiumAuthProofHasher },
+    { provide: RecoveryProofHasher, useClass: SodiumRecoveryProofHasher },
     { provide: AccessTokenService, useClass: JoseAccessTokenService },
     { provide: HubTokenService, useClass: JoseHubTokenService },
     { provide: RefreshTokenCodec, useClass: SodiumRefreshTokenCodec },

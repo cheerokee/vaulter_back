@@ -44,3 +44,22 @@ export function assertEncryptedPrivateKey(s: string): string {
 export function assertAuthProof(s: string): string {
   return check(s, 32, 'auth-proof-invalid', 'The auth proof is invalid.');
 }
+
+export function assertRecoveryProof(s: string): string {
+  return check(
+    s,
+    32,
+    'recovery-proof-invalid',
+    'The recovery proof is invalid.',
+  );
+}
+
+export function assertRecoveryEncryptedPrivateKey(s: string): string {
+  return check(
+    s,
+    73,
+    'recovery-encrypted-private-key-invalid',
+    'The recovery encrypted private key is invalid.',
+    (b) => b[0] === 0x01,
+  );
+}

@@ -19,6 +19,8 @@ const input = () => ({
   kdfParams: { ...DEFAULT_KDF_PARAMS },
   publicKey: b64(32),
   encryptedPrivateKey: epk(),
+  recoveryHash: 'recovery-hash',
+  recoveryEncryptedPrivateKey: epk(0x55),
   now: new Date('2026-10-24T12:00:00Z'),
 });
 
@@ -31,6 +33,62 @@ describe('User', () => {
     expect(u.createdAt).toEqual(new Date('2026-10-24T12:00:00Z'));
     expect(u.authHash).toBe('hash');
     expect(u.kdfParams).toEqual(DEFAULT_KDF_PARAMS);
+    expect(u.recoveryHash).toBe('recovery-hash');
+    expect(u.recoveryEncryptedPrivateKey).toBe(epk(0x55));
+  });
+
+  it('rejects registration without valid recovery material', () => {
+    for (const recoveryEncryptedPrivateKey of [
+      'x',
+      '',
+      undefined as unknown as string,
+    ]) {
+      expect(() =>
+        User.register({ ...input(), recoveryEncryptedPrivateKey }),
+      ).toThrowError(
+        expect.objectContaining({
+          code: 'recovery-encrypted-private-key-invalid',
+        }),
+      );
+    }
+    expect(() => User.register({ ...input(), recoveryHash: '' })).toThrowError(
+      expect.objectContaining({ code: 'recovery-hash-invalid' }),
+    );
+  });
+
+  it('changeRecoveryCode swaps the recovery fields only', () => {
+    const u = User.register(input());
+    const enc = epk(0x66);
+    u.changeRecoveryCode({
+      recoveryHash: 'other-hash',
+      recoveryEncryptedPrivateKey: enc,
+    });
+    expect(u.recoveryHash).toBe('other-hash');
+    expect(u.recoveryEncryptedPrivateKey).toBe(enc);
+    expect(u.encryptedPrivateKey).toBe(epk());
+    expect(u.authHash).toBe('hash');
+  });
+
+  it('changeRecoveryCode validates and keeps the old values on failure', () => {
+    const u = User.register(input());
+    expect(() =>
+      u.changeRecoveryCode({
+        recoveryHash: 'other-hash',
+        recoveryEncryptedPrivateKey: 'bad',
+      }),
+    ).toThrowError(
+      expect.objectContaining({
+        code: 'recovery-encrypted-private-key-invalid',
+      }),
+    );
+    expect(() =>
+      u.changeRecoveryCode({
+        recoveryHash: '',
+        recoveryEncryptedPrivateKey: epk(0x66),
+      }),
+    ).toThrowError(expect.objectContaining({ code: 'recovery-hash-invalid' }));
+    expect(u.recoveryHash).toBe('recovery-hash');
+    expect(u.recoveryEncryptedPrivateKey).toBe(epk(0x55));
   });
 
   it('rejects blank, empty and too long names', () => {
@@ -107,6 +165,8 @@ describe('User', () => {
       kdfParams: u.kdfParams,
       publicKey: u.publicKey,
       encryptedPrivateKey: u.encryptedPrivateKey,
+      recoveryHash: u.recoveryHash,
+      recoveryEncryptedPrivateKey: u.recoveryEncryptedPrivateKey,
     };
     expect(User.restore(props, 'some-id').id).toBe('some-id');
   });

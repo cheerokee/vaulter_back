@@ -31,6 +31,8 @@ describe('Auth endpoints (e2e)', () => {
     kdfParams: account.kdfParams,
     publicKey: account.publicKey,
     encryptedPrivateKey: account.encryptedPrivateKey,
+    recoveryProof: account.recoveryProof,
+    recoveryEncryptedPrivateKey: account.recoveryEncryptedPrivateKey,
     device: DEVICE,
     ...over,
   });
@@ -86,6 +88,40 @@ describe('Auth endpoints (e2e)', () => {
     );
     expect(Buffer.from(key)).toEqual(Buffer.from(account.privateKey));
   }, 60_000);
+
+  it('rejects a registration without the recovery material', async () => {
+    for (const missing of ['recoveryProof', 'recoveryEncryptedPrivateKey']) {
+      const body: Record<string, unknown> = registerBody(
+        `no-recovery-${missing}@example.com`,
+      );
+      delete body[missing];
+      const res = await http().post('/auth/register').send(body);
+      expect(res.status).toBe(422);
+      expect(res.body.type).toMatch(/\/validation-failed$/);
+    }
+    const ds = await adminDataSource();
+    const rows = await ds.query(
+      "SELECT 1 FROM users WHERE email LIKE 'no-recovery-%'",
+    );
+    expect(rows).toHaveLength(0);
+  });
+
+  it('stores only the hash of the recovery proof', async () => {
+    await register('recovery-stored@example.com').expect(201);
+    const ds = await adminDataSource();
+    const [row]: {
+      recovery_hash: string;
+      recovery_encrypted_private_key: string;
+    }[] = await ds.query(
+      'SELECT recovery_hash, recovery_encrypted_private_key FROM users WHERE email = $1',
+      ['recovery-stored@example.com'],
+    );
+    expect(row!.recovery_hash).toMatch(/^[0-9a-f]{64}$/);
+    expect(row!.recovery_hash).not.toBe(account.recoveryProof);
+    expect(row!.recovery_encrypted_private_key).toBe(
+      account.recoveryEncryptedPrivateKey,
+    );
+  });
 
   it('treats email case and surrounding spaces as the same account', async () => {
     await register(' Ana@X.com ').expect(201);
@@ -155,6 +191,16 @@ describe('Auth endpoints (e2e)', () => {
         'encryptedPrivateKey with version 0x02',
         { encryptedPrivateKey: b64(Buffer.alloc(73, 2)) },
         'encrypted-private-key-invalid',
+      ],
+      [
+        'recoveryProof of 31 bytes',
+        { recoveryProof: b64(Buffer.alloc(31, 1)) },
+        'recovery-proof-invalid',
+      ],
+      [
+        'recoveryEncryptedPrivateKey with version 0x02',
+        { recoveryEncryptedPrivateKey: b64(Buffer.alloc(73, 2)) },
+        'recovery-encrypted-private-key-invalid',
       ],
       [
         'kdfParams with an extra key',

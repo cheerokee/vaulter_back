@@ -27,6 +27,8 @@ describe('GetMeUseCase', () => {
       },
       publicKey: b64(32),
       encryptedPrivateKey: b64(73, 0x01),
+      recoveryHash: 'recovery-hash',
+      recoveryEncryptedPrivateKey: b64(73, 0x01),
       now: new Date('2026-10-24T12:00:00Z'),
     });
     users.findById.mockResolvedValue(user);

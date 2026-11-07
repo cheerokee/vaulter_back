@@ -12,6 +12,8 @@ export const UserMapper = {
         kdfParams: row.kdfParams,
         publicKey: row.publicKey,
         encryptedPrivateKey: row.encryptedPrivateKey,
+        recoveryHash: row.recoveryHash,
+        recoveryEncryptedPrivateKey: row.recoveryEncryptedPrivateKey,
         createdAt: row.createdAt,
         updatedAt: row.updatedAt ?? undefined,
       },
@@ -31,6 +33,8 @@ export const UserMapper = {
       kdfParams: user.kdfParams,
       publicKey: user.publicKey,
       encryptedPrivateKey: user.encryptedPrivateKey,
+      recoveryHash: user.recoveryHash,
+      recoveryEncryptedPrivateKey: user.recoveryEncryptedPrivateKey,
     };
   },
 };

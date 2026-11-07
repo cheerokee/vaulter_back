@@ -29,4 +29,10 @@ export class UserTypeormEntity extends SyncableTypeormEntity {
 
   @Column({ type: 'text' })
   encryptedPrivateKey!: string;
+
+  @Column({ type: 'varchar', length: 64 })
+  recoveryHash!: string;
+
+  @Column({ type: 'text' })
+  recoveryEncryptedPrivateKey!: string;
 }

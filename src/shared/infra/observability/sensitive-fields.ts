@@ -27,6 +27,11 @@ const BASE_KEYS = [
   'secret',
   'token',
   'inviteToken',
+  'recoveryProof',
+  'newRecoveryProof',
+  'recoveryEncryptedPrivateKey',
+  'newRecoveryEncryptedPrivateKey',
+  'recoveryHash',
 ] as const;
 
 const toSnake = (k: string) =>

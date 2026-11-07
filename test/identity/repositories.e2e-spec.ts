@@ -10,6 +10,7 @@ import {
   createTestApp,
   resetDatabase,
 } from '../setup/test-app.js';
+import { testRecoveryFields } from '../support/client-crypto.js';
 
 const b64 = (n: number, first?: number) => {
   const b = Buffer.alloc(n, 0xab);
@@ -26,6 +27,7 @@ const makeUser = (email = 'ana@x.com') =>
     kdfParams: { ...DEFAULT_KDF_PARAMS },
     publicKey: b64(32),
     encryptedPrivateKey: b64(73, 0x01),
+    ...testRecoveryFields(),
     now: new Date('2026-10-24T12:34:56.789Z'),
   });
 
@@ -82,6 +84,10 @@ describe('identity repositories', () => {
     expect(loaded!.kdfParams).toEqual(DEFAULT_KDF_PARAMS);
     expect(loaded!.publicKey).toBe(user.publicKey);
     expect(loaded!.encryptedPrivateKey).toBe(user.encryptedPrivateKey);
+    expect(loaded!.recoveryHash).toBe(user.recoveryHash);
+    expect(loaded!.recoveryEncryptedPrivateKey).toBe(
+      user.recoveryEncryptedPrivateKey,
+    );
     expect(loaded!.createdAt).toEqual(user.createdAt);
     expect(loaded!.createdAt!.toISOString()).toBe('2026-10-24T12:34:56.789Z');
     expect((await users.findByEmail('ana@x.com'))!.id).toBe(user.id);
@@ -245,5 +251,30 @@ describe('identity repositories', () => {
     const loaded = (await sessions.findById(session.id))!;
     expect(loaded.refreshTokenHash).toBe('h2');
     expect(loaded.revokedReason).toBe('refresh_reuse');
+  });
+
+  it('saves a new recovery code and accepts the account_recovery revoke reason', async () => {
+    const user = makeUser();
+    await users.create(user);
+    const blob = Buffer.alloc(73, 0x09);
+    blob[0] = 0x01;
+    user.changeRecoveryCode({
+      recoveryHash: 'y'.repeat(64),
+      recoveryEncryptedPrivateKey: blob.toString('base64url'),
+    });
+    await users.save(user);
+    const loaded = (await users.findById(user.id))!;
+    expect(loaded.recoveryHash).toBe('y'.repeat(64));
+    expect(loaded.recoveryEncryptedPrivateKey).toBe(blob.toString('base64url'));
+    expect(loaded.encryptedPrivateKey).toBe(user.encryptedPrivateKey);
+
+    const session = makeSession(user.id);
+    await sessions.create(session);
+    expect(await sessions.revoke(session.id, 'account_recovery', now)).toBe(
+      true,
+    );
+    expect((await sessions.findById(session.id))!.revokedReason).toBe(
+      'account_recovery',
+    );
   });
 });

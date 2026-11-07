@@ -3,7 +3,11 @@ import { Entity } from '../../shared/domain/entity.js';
 
 export type DevicePlatform = 'android' | 'ios' | 'hub' | 'web' | 'other';
 export type SessionRevokedReason =
-  'logout' | 'revoked' | 'refresh_reuse' | 'password_change';
+  | 'logout'
+  | 'revoked'
+  | 'refresh_reuse'
+  | 'password_change'
+  | 'account_recovery';
 
 export type SessionProps = {
   userId: string;

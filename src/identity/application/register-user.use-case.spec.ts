@@ -7,6 +7,7 @@ import type { UnitOfWork } from '../../shared/infra/db/unit-of-work.js';
 import type { UserRepository } from '../domain/user.repository.js';
 import type { User } from '../domain/user.js';
 import type { AuthProofHasher } from './ports/auth-proof-hasher.js';
+import type { RecoveryProofHasher } from './ports/recovery-proof-hasher.js';
 import { RegisterUserUseCase } from './register-user.use-case.js';
 import type { SessionIssuer } from './session-issuer.js';
 
@@ -23,6 +24,8 @@ const input = () => ({
   kdfParams: { algorithm: 'argon2id13', opsLimit: 3, memLimitBytes: 67108864 },
   publicKey: b64(32),
   encryptedPrivateKey: epk.toString('base64url'),
+  recoveryProof: b64(32, 5),
+  recoveryEncryptedPrivateKey: epk.toString('base64url'),
   device: { name: 'Pixel', platform: 'android' as const },
   client: { ip: null, userAgent: null },
 });
@@ -31,12 +34,14 @@ describe('RegisterUserUseCase', () => {
   const now = new Date('2026-10-24T12:00:00Z');
   const users = { create: vi.fn() };
   const hasher = { hash: vi.fn() };
+  const recoveryHasher = { hash: vi.fn() };
   const issuer = { start: vi.fn() };
   const hooks = { run: vi.fn() };
   const uow = { run: vi.fn() };
   const useCase = new RegisterUserUseCase(
     users as unknown as UserRepository,
     hasher as unknown as AuthProofHasher,
+    recoveryHasher as unknown as RecoveryProofHasher,
     issuer as unknown as SessionIssuer,
     uow as unknown as UnitOfWork,
     hooks as unknown as RegistrationHooks,
@@ -54,6 +59,7 @@ describe('RegisterUserUseCase', () => {
     vi.useFakeTimers();
     vi.setSystemTime(now);
     hasher.hash.mockResolvedValue('$argon2id$hashed');
+    recoveryHasher.hash.mockImplementation((p: string) => `recovery:${p}`);
     users.create.mockResolvedValue(undefined);
     issuer.start.mockResolvedValue(tokens);
     hooks.run.mockResolvedValue({});
@@ -80,6 +86,34 @@ describe('RegisterUserUseCase', () => {
     expect(out.user).toMatchObject({ id: created.id, email: 'ana@x.com' });
     expect(out.user.createdAt).toEqual(now);
     expect(created.createdAt).toEqual(now);
+  });
+
+  it('stores only the keyed hash of the recovery proof and the sealed private key', async () => {
+    const i = input();
+    await useCase.execute(i);
+    const created = users.create.mock.calls[0]![0] as User;
+    expect(recoveryHasher.hash).toHaveBeenCalledWith(i.recoveryProof);
+    expect(created.recoveryHash).toBe(`recovery:${i.recoveryProof}`);
+    expect(created.recoveryEncryptedPrivateKey).toBe(
+      i.recoveryEncryptedPrivateKey,
+    );
+  });
+
+  it('rejects a malformed recoveryProof before hashing', async () => {
+    await expect(
+      useCase.execute({ ...input(), recoveryProof: b64(31) }),
+    ).rejects.toMatchObject({ code: 'recovery-proof-invalid' });
+    expect(hasher.hash).not.toHaveBeenCalled();
+    expect(recoveryHasher.hash).not.toHaveBeenCalled();
+    expect(users.create).not.toHaveBeenCalled();
+  });
+
+  it('rejects a malformed recoveryEncryptedPrivateKey before hashing', async () => {
+    await expect(
+      useCase.execute({ ...input(), recoveryEncryptedPrivateKey: b64(73, 2) }),
+    ).rejects.toMatchObject({ code: 'recovery-encrypted-private-key-invalid' });
+    expect(hasher.hash).not.toHaveBeenCalled();
+    expect(users.create).not.toHaveBeenCalled();
   });
 
   it('rejects a malformed encryptedPrivateKey before touching the repository', async () => {

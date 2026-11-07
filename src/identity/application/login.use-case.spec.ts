@@ -19,6 +19,8 @@ const user = User.register({
   kdfParams: { algorithm: 'argon2id13', opsLimit: 3, memLimitBytes: 67108864 },
   publicKey: b64(32),
   encryptedPrivateKey: epk.toString('base64url'),
+  recoveryHash: 'recovery-hash',
+  recoveryEncryptedPrivateKey: epk.toString('base64url'),
   now: new Date('2026-10-24T11:00:00Z'),
 });
 const device = { name: 'Pixel', platform: 'android' as const };

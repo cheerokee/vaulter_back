@@ -69,6 +69,8 @@ export class AuthController {
       kdfParams: dto.kdfParams,
       publicKey: dto.publicKey,
       encryptedPrivateKey: dto.encryptedPrivateKey,
+      recoveryProof: dto.recoveryProof,
+      recoveryEncryptedPrivateKey: dto.recoveryEncryptedPrivateKey,
       inviteToken: dto.inviteToken,
       device: { name: dto.device.name, platform: dto.device.platform },
       client: clientInfo(req),

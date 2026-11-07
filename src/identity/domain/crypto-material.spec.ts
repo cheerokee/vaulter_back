@@ -4,6 +4,8 @@ import {
   assertEncryptedPrivateKey,
   assertKdfSalt,
   assertPublicKey,
+  assertRecoveryEncryptedPrivateKey,
+  assertRecoveryProof,
 } from './crypto-material.js';
 
 const b64 = (bytes: Buffer) => bytes.toString('base64url');
@@ -18,6 +20,7 @@ const cases = [
   ['assertKdfSalt', assertKdfSalt, 16, 'kdf-salt-invalid'],
   ['assertPublicKey', assertPublicKey, 32, 'public-key-invalid'],
   ['assertAuthProof', assertAuthProof, 32, 'auth-proof-invalid'],
+  ['assertRecoveryProof', assertRecoveryProof, 32, 'recovery-proof-invalid'],
 ] as const;
 
 function expectCode(fn: () => unknown, code: string) {
@@ -72,5 +75,20 @@ describe('assertEncryptedPrivateKey', () => {
     expectCode(() => assertEncryptedPrivateKey(epk(73, 0x02)), code);
     expectCode(() => assertEncryptedPrivateKey(epk(73) + '='), code);
     expectCode(() => assertEncryptedPrivateKey(''), code);
+  });
+});
+
+describe('assertRecoveryEncryptedPrivateKey', () => {
+  const code = 'recovery-encrypted-private-key-invalid';
+  it('accepts 73 bytes with version 0x01', () => {
+    const s = epk(73);
+    expect(assertRecoveryEncryptedPrivateKey(s)).toBe(s);
+  });
+  it('rejects wrong size, version 0x02, padding and empty', () => {
+    expectCode(() => assertRecoveryEncryptedPrivateKey(epk(72)), code);
+    expectCode(() => assertRecoveryEncryptedPrivateKey(epk(74)), code);
+    expectCode(() => assertRecoveryEncryptedPrivateKey(epk(73, 0x02)), code);
+    expectCode(() => assertRecoveryEncryptedPrivateKey(epk(73) + '='), code);
+    expectCode(() => assertRecoveryEncryptedPrivateKey(''), code);
   });
 });

@@ -202,6 +202,12 @@ export class EnvironmentVariables {
       'HUB_CODE_HASH_KEY must be 32 bytes encoded as base64url (43 chars, no padding)',
   })
   HUB_CODE_HASH_KEY!: string;
+
+  @Matches(BASE64URL_32_BYTES, {
+    message:
+      'IDENTITY_RECOVERY_HASH_KEY must be 32 bytes encoded as base64url (43 chars, no padding)',
+  })
+  IDENTITY_RECOVERY_HASH_KEY!: string;
 }
 
 export function validateEnv(

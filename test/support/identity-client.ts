@@ -46,6 +46,8 @@ export function identityClient(getApp: () => INestApplication) {
     kdfParams: account.kdfParams,
     publicKey: account.publicKey,
     encryptedPrivateKey: account.encryptedPrivateKey,
+    recoveryProof: account.recoveryProof,
+    recoveryEncryptedPrivateKey: account.recoveryEncryptedPrivateKey,
     device: DEFAULT_DEVICE,
     ...over,
   });

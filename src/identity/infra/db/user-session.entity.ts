@@ -13,7 +13,7 @@ import type {
 )
 @Check(
   'ck_user_sessions_revoked_reason',
-  `"revoked_reason" IS NULL OR "revoked_reason" IN ('logout', 'revoked', 'refresh_reuse', 'password_change')`,
+  `"revoked_reason" IS NULL OR "revoked_reason" IN ('logout', 'revoked', 'refresh_reuse', 'password_change', 'account_recovery')`,
 )
 @Index('ix_user_sessions_user', ['userId', 'revokedAt'])
 export class UserSessionTypeormEntity extends BaseTypeormEntity {

@@ -29,6 +29,11 @@ describe('UserDirectory', () => {
         Buffer.from([1]),
         Buffer.alloc(72, 2),
       ]).toString('base64url'),
+      recoveryHash: 'recovery-hash',
+      recoveryEncryptedPrivateKey: Buffer.concat([
+        Buffer.from([1]),
+        Buffer.alloc(72, 2),
+      ]).toString('base64url'),
       now: new Date(),
     });
     users.findByIds.mockResolvedValue([u]);

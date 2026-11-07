@@ -56,6 +56,8 @@ function makeUser(): User {
     kdfParams: params,
     publicKey: b64(32),
     encryptedPrivateKey: b64(73, 0x01),
+    recoveryHash: 'recovery-hash',
+    recoveryEncryptedPrivateKey: b64(73, 0x01),
     now: NOW,
   });
 }
