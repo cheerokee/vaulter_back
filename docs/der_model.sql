@@ -53,6 +53,11 @@ CREATE TABLE users (
   -- Par de chaves do usuário: com a pública, quem já está num espaço tranca a chave do espaço para ele.
   public_key TEXT NOT NULL,
   encrypted_private_key TEXT NOT NULL,
+  -- Recuperação da conta pelo código de recuperação (formato em docs/crypto/user-keys.md): recovery_hash guarda só o
+  -- hash com chave da prova derivada do código; recovery_encrypted_private_key é a mesma chave privada selada com o
+  -- código, cópia feita no aparelho (por isso não há preenchimento retroativo).
+  recovery_hash VARCHAR(64) NOT NULL,
+  recovery_encrypted_private_key TEXT NOT NULL,
   sync_version BIGINT NOT NULL COMMENT 'versão de sincronização: sequência global do servidor, muda a cada insert/update/exclusão',
   PRIMARY KEY (id),
   UNIQUE INDEX uq_users_email (email),
@@ -74,7 +79,7 @@ CREATE TABLE user_sessions (
   last_ip VARCHAR(45) NULL,
   user_agent VARCHAR(500) NULL,
   revoked_at DATETIME NULL,
-  revoked_reason ENUM('logout', 'revoked', 'refresh_reuse', 'password_change') NULL,
+  revoked_reason ENUM('logout', 'revoked', 'refresh_reuse', 'password_change', 'account_recovery') NULL,
   PRIMARY KEY (id),
   INDEX ix_user_sessions_user (user_id, revoked_at),
   CONSTRAINT fk_user_sessions_users FOREIGN KEY (user_id) REFERENCES users (id)

@@ -125,6 +125,17 @@ couber (spec de contas, §12).
     token forjado (não ganha acesso nenhum); os clientes devem **serializar** as chamadas de refresh.
   - Formato v1 das chaves do usuário (Argon2id, normalização NFC da senha, vetor de teste):
     [`docs/crypto/user-keys.md`](docs/crypto/user-keys.md).
+  - **Recuperação da conta pelo código de recuperação** (spec `docs/superpowers/specs/2026-11-07-account-recovery-design.md`;
+    formato do código e da cópia selada em `docs/crypto/user-keys.md`): o cadastro exige `recoveryProof` e
+    `recoveryEncryptedPrivateKey` (a cópia da chave privada é feita no aparelho; `users.recovery_hash`, só o hash com
+    chave BLAKE2b via `IDENTITY_RECOVERY_HASH_KEY`, e `users.recovery_encrypted_private_key`, ambos NOT NULL).
+    `POST /auth/recovery/lookup` devolve a chave selada com o código e `POST /auth/recovery/complete` grava o material
+    novo de senha, **revoga todas as sessões** (`revoked_reason = account_recovery`) e abre uma nova (resposta de login).
+    Toda falha é o mesmo 401 `recovery-failed`, com verificação falsa para o tempo não vazar; o material novo é validado
+    (422) antes da prova. `PUT /me/recovery-code` troca o código (reautenticação, não revoga sessões).
+  - **Banco local com usuários:** a migration `AddUserAccountRecovery` cria colunas NOT NULL e não há preenchimento
+    retroativo (a cópia nasce no aparelho); zere o banco de desenvolvimento antes de migrar (veja Docker). O banco
+    descartável dos e2e é recriado pelo `globalSetup`.
 - **Tarefas em segundo plano:** **pg-boss** (fila no próprio Postgres, sem serviço novo).
 - **AWS:** região **`us-east-1` (Virgínia)** — o backend fica perto dos serviços externos (Anthropic, OpenRouter,
   Sentry), então só a ida app → backend cruza o continente; mais barata e com todos os serviços. LGPD permite
@@ -620,6 +631,7 @@ Validadas na subida por `src/shared/infra/config/env.validation.ts` (faltou ou i
 | `AUTH_ACCESS_TOKEN_TTL_SECONDS` | validade do access token | `900` |
 | `AUTH_REFRESH_TOKEN_IDLE_DAYS` | inatividade máxima do refresh | `30` |
 | `IDENTITY_DECOY_SALT_KEY` | chave do salt falso do pré-login (32 bytes em base64url) — **segredo** | obrigatória |
+| `IDENTITY_RECOVERY_HASH_KEY` | chave (BLAKE2b com chave) do hash da prova do código de recuperação (32 bytes em base64url) — **segredo**; trocar invalida **todos** os códigos | obrigatória |
 | `HUB_CODE_HASH_KEY` | chave (BLAKE2b com chave) do hash do código de reivindicação e do desafio do Hub (32 bytes em base64url) — **segredo**; trocar invalida códigos e desafios pendentes | obrigatória |
 | `TRUST_PROXY` | confiança em `X-Forwarded-For`: `false`, nº de saltos ou lista de IPs/CIDRs (`true` só em dev; veja abaixo) | `false` |
 | `ARGON2_MAX_QUEUE` | fila máxima do pool do Argon2id; cheia, responde 503 (inteiro >= 1) | `threads × 64` |
@@ -642,6 +654,9 @@ Os valores do `.env.example` para os segredos são **só de desenvolvimento**; p
   coluna xid8 junto da versão e só servir linhas abaixo de `pg_snapshot_xmin(pg_current_snapshot())`) ou carimbo de
   versão no momento do commit. Mitigação até lá: sincronização completa periódica do Hub.
 - Exclusão de conta (LGPD) precisa revogar as sessões.
+- Recuperação de conta, limites conhecidos: (a) sem trava na linha do usuário, um `PUT /me/password` vindo de uma sessão
+  que passou na reautenticação logo antes de uma recuperação confirmar pode sobrescrever a senha recuperada (corrida
+  estreita); (b) confirmação por e-mail, aviso ao dono da conta e auditoria visível da recuperação ficam para depois.
 - Organizações: avisar admins por notificação (convite aceito, membro saiu); exclusão de organização; papéis
   próprios (modo avançado: `role_permission` com RLS por organização, hoje o catálogo é só leitura); quem sai e volta mantém
   o `joinedAt` original (o vínculo é reativado, não recriado); trava de assentos quando houver limites (`SeatPolicy`).
@@ -666,6 +681,7 @@ Os valores do `.env.example` para os segredos são **só de desenvolvimento**; p
   | `POST /auth/register` | 10/h por IP |
   | `POST /auth/login` | 10/min por IP **e** 5/min por e-mail normalizado |
   | `POST /auth/refresh` | 60/min por IP |
+  | `POST /auth/recovery/lookup` e `POST /auth/recovery/complete` (públicas) | 10/min por IP, **um orçamento só para as duas** (`THROTTLE_GROUPS.accountRecovery`) **e** 5/min por e-mail normalizado, por rota |
   | `PUT /me/password`, `PUT /me/recovery-code`, `PUT /organizations/:id/recovery-key`, `POST /spaces/:id/recover` e `POST /spaces/:id/recover/copies` (reautenticação) | 5 por 15 min por usuário, **um orçamento só para todas** |
   | `POST /invitations/preview` (pública) | 30/min por IP |
   | `POST /invitations/accept` | 10/min por IP |
@@ -732,6 +748,8 @@ Os valores do `.env.example` para os segredos são **só de desenvolvimento**; p
   3. depois de **pelo menos o TTL do access token** (`AUTH_ACCESS_TOKEN_TTL_SECONDS`), remover a chave antiga.
 - **`IDENTITY_DECOY_SALT_KEY`**: trocar muda o salt falso de **todos** os e-mails inexistentes, e um atacante que
   observou o salt antigo percebe a diferença (limite aceito). Rotacionar raramente.
+- **`IDENTITY_RECOVERY_HASH_KEY`**: trocar invalida o código de recuperação de **todos** os usuários (o hash guardado
+  deixa de conferir). Não trocar sem um plano de recadastro dos códigos (`PUT /me/recovery-code` de cada usuário).
 - **Senha do login de runtime do banco**: o `02-app-role.sh` lê `DB_APP_PASSWORD` do ambiente do container `db`,
   fixado na criação dele — editar só o `.env` reaplicaria a senha **antiga**, sem avisar. Procedimento:
   1. atualizar `DB_APP_PASSWORD` no `.env`;

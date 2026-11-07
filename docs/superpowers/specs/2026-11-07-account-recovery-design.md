@@ -1,6 +1,6 @@
 # Recuperação de conta pelo código de recuperação — design
 
-Data: 07/11/2026 · Status: **aprovada em 07/11/2026** · Repositório: `vaulter_back` (módulo `identity`)
+Data: 07/11/2026 · Status: **aprovada em 07/11/2026 (implementada)** · Repositório: `vaulter_back` (módulo `identity`)
 
 Nasce de uma conversa do Jonas com o Claude, que começou nos papéis da plataforma e mudou de rumo: antes de decidir
 o que o suporte faz, era preciso resolver o que acontece quando alguém esquece a senha. Parte do formato das chaves
