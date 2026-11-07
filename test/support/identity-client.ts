@@ -320,6 +320,12 @@ export function identityClient(getApp: () => INestApplication) {
     http,
     spaces,
     registerBody,
+    /** POST /auth/recovery/lookup (public): the private key sealed with the recovery code. */
+    recoveryLookup: (email: unknown, recoveryProof: unknown) =>
+      http().post('/auth/recovery/lookup').send({ email, recoveryProof }),
+    /** POST /auth/recovery/complete (public): new password material + device; same response as the login. */
+    recoveryComplete: (body: Record<string, unknown>) =>
+      http().post('/auth/recovery/complete').send(body),
     register: (
       account: ClientAccount,
       email: string,

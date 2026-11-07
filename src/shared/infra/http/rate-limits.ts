@@ -12,6 +12,12 @@ export const RATE_LIMITS = {
   loginEmail: { limit: 5, ttl: MINUTE },
   refresh: { limit: 60, ttl: MINUTE },
   /**
+   * Recuperação da conta (`POST /auth/recovery/lookup` e `POST /auth/recovery/complete`, públicas): por IP, UM
+   * orçamento para as duas rotas (grupo `THROTTLE_GROUPS.accountRecovery`), mais o contador por e-mail do login
+   * (`loginEmail`, por rota). A prova tem 256 bits: o limite é contra abuso, não contra adivinhação.
+   */
+  accountRecoveryIp: { limit: 10, ttl: MINUTE },
+  /**
    * Reautenticação (prova da senha atual): por usuário autenticado, UM orçamento para todas as rotas marcadas
    * com @ThrottleReauth() (`PUT /me/password`, `PUT /organizations/:id/recovery-key`,
    * `POST /spaces/:id/recover`, `POST /spaces/:id/recover/copies`).
@@ -67,4 +73,8 @@ export const REAUTH_THROTTLER = 'reauth';
  */
 export const THROTTLE_GROUPS = {
   hubAuth: { name: 'hub-auth', ...RATE_LIMITS.hubAuth },
+  accountRecovery: {
+    name: 'account-recovery',
+    ...RATE_LIMITS.accountRecoveryIp,
+  },
 } as const;

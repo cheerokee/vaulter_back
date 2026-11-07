@@ -12,6 +12,14 @@ import { identityClient } from '../support/identity-client.js';
 const PASSWORD_A = 'correct horse battery staple';
 const PASSWORD_B = 'a brand new passphrase';
 
+/** Every object key at any depth of a JSON value. */
+const keysDeep = (value: unknown): string[] =>
+  Array.isArray(value)
+    ? value.flatMap(keysDeep)
+    : value !== null && typeof value === 'object'
+      ? Object.entries(value).flatMap(([key, v]) => [key, ...keysDeep(v)])
+      : [];
+
 describe('Me endpoints (e2e)', () => {
   let app: INestApplication;
   let account: ClientAccount;
@@ -47,6 +55,23 @@ describe('Me endpoints (e2e)', () => {
     });
     expect(new Date(res.body.createdAt).toISOString()).toBe(res.body.createdAt);
     expect(JSON.stringify(res.body)).not.toMatch(/authHash|kdf|PrivateKey/);
+  }, 60_000);
+
+  it('GET /me never carries anything of the recovery code', async () => {
+    const reg = await c
+      .register(
+        await createClientAccount(PASSWORD_A),
+        'me-recovery@example.com',
+      )
+      .expect(201);
+    const res = await c
+      .http()
+      .get('/me')
+      .set(c.bearer(reg.body.session.accessToken))
+      .expect(200);
+    expect(keysDeep(res.body).filter((key) => /recovery/i.test(key))).toEqual(
+      [],
+    );
   }, 60_000);
 
   describe('PUT /me/password', () => {

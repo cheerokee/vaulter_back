@@ -24,6 +24,14 @@ type Item = {
 };
 type Page = { items: Item[]; nextSince: number };
 
+/** Every object key at any depth of a JSON value. */
+const keysDeep = (value: unknown): string[] =>
+  Array.isArray(value)
+    ? value.flatMap(keysDeep)
+    : value !== null && typeof value === 'object'
+      ? Object.entries(value).flatMap(([key, v]) => [key, ...keysDeep(v)])
+      : [];
+
 const PASSWORD = 'correct horse battery staple';
 
 // Sincronização do Hub (spec hubs §4.9, decisão 9 do plano) pela rota real GET /hub/sync, com token de Hub, papel de
@@ -287,6 +295,14 @@ describe('hub sync (e2e)', () => {
       [[olivia.userId, ana.userId, bia.userId]],
     );
     for (const h of hashes) expect(body).not.toContain(h.auth_hash);
+    // Nothing of the account recovery code (proof hash, sealed copy) ever reaches the hub.
+    const members = ofType(items, 'member');
+    expect(members.length).toBeGreaterThan(0);
+    for (const m of members) {
+      expect(keysDeep(m.data).filter((key) => /recovery/i.test(key))).toEqual(
+        [],
+      );
+    }
 
     const anaItem = ofType(items, 'member').find(
       (i) => i.data.userId === ana.userId,

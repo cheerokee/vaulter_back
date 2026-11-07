@@ -116,6 +116,55 @@ describe('rate limiting (e2e)', () => {
     expect((await loginAs('a@example.com', '198.51.100.7')).status).toBe(401);
   }, 60_000);
 
+  it('shares one per-IP budget between recovery lookup and complete', async () => {
+    const ip = '198.51.100.60';
+    const proof = account.recoveryProof;
+    const lookup = (email: string, from = ip) =>
+      c
+        .http()
+        .post('/auth/recovery/lookup')
+        .set('X-Forwarded-For', from)
+        .send({ email, recoveryProof: proof });
+    const complete = (email: string) =>
+      c.http().post('/auth/recovery/complete').set('X-Forwarded-For', ip).send({
+        email,
+        recoveryProof: proof,
+        newAuthProof: account.authProof,
+        newKdfSalt: account.kdfSalt,
+        newKdfParams: account.kdfParams,
+        newEncryptedPrivateKey: account.encryptedPrivateKey,
+        device,
+      });
+    for (let i = 0; i < 10; i++) {
+      const email = `rc-ip-${i}@example.com`;
+      const res = await (i % 2 === 0 ? lookup(email) : complete(email));
+      expect(res.status).toBe(401);
+    }
+    for (const res of [
+      await lookup('rc-ip-10@example.com'),
+      await complete('rc-ip-11@example.com'),
+    ]) {
+      expect(res.status).toBe(429);
+      expect(res.body.type).toMatch(/\/too-many-requests$/);
+      expect(Number(res.headers['retry-after'])).toBeGreaterThan(0);
+    }
+
+    // Per e-mail (normalized), across IPs: the 6th lookup for the same e-mail is 429.
+    for (let i = 0; i < 5; i++) {
+      const res = await lookup(
+        i % 2 === 0 ? 'rc-victim@example.com' : ' RC-Victim@Example.com ',
+        `203.0.113.${i + 150}`,
+      );
+      expect(res.status).toBe(401);
+    }
+    const sixth = await lookup('rc-victim@example.com', '203.0.113.199');
+    expect(sixth.status).toBe(429);
+    expect(Number(sixth.headers['retry-after'])).toBeGreaterThan(0);
+    expect((await lookup('rc-other@example.com', '203.0.113.200')).status).toBe(
+      401,
+    );
+  }, 60_000);
+
   it('limits PUT /me/password to 5 per 15 minutes per user, not per IP', async () => {
     const reg = await c.register(account, 'pw@example.com').expect(201);
     const token = reg.body.session.accessToken as string;

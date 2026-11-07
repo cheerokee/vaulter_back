@@ -14,6 +14,8 @@ import { RevokeSessionUseCase } from './application/revoke-session.use-case.js';
 import { GetMeUseCase } from './application/get-me.use-case.js';
 import { ChangePasswordUseCase } from './application/change-password.use-case.js';
 import { LoginUseCase } from './application/login.use-case.js';
+import { LookupRecoveryUseCase } from './application/lookup-recovery.use-case.js';
+import { CompleteRecoveryUseCase } from './application/complete-recovery.use-case.js';
 import { PreLoginUseCase } from './application/pre-login.use-case.js';
 import { RegisterUserUseCase } from './application/register-user.use-case.js';
 import { CurrentAuthProofVerifier } from './application/current-auth-proof-verifier.js';
@@ -63,6 +65,8 @@ import { SessionsController } from './infra/http/sessions.controller.js';
     RevokeSessionUseCase,
     GetMeUseCase,
     ChangePasswordUseCase,
+    LookupRecoveryUseCase,
+    CompleteRecoveryUseCase,
     UserDirectory,
     CurrentAuthProofVerifier,
   ],
