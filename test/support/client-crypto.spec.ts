@@ -314,4 +314,46 @@ describe('client-crypto recovery code', () => {
     expect(() => open(recoveryBlob, encKey, new Uint8Array([1]))).toThrow();
     expect(() => open(recoveryBlob, encKey, RECOVERY_AD)).not.toThrow();
   });
+
+  it('same key, AD 0x01: a blob sealed like the password blob never opens as the recovery copy, and vice versa', async () => {
+    const sodium = await getSodium();
+    const account = await createClientAccount('pw');
+    const { encKey } = await deriveRecoveryKeys(account.recoveryCode);
+    const nonce = sodium.randombytes_buf(24);
+    // Same key as the recovery copy, but the password blob's AD (0x01): only the AD tells them apart.
+    const passwordStyle = await sealPrivateKey(
+      account.privateKey,
+      encKey,
+      nonce,
+    );
+    await expect(
+      openRecoveryPrivateKey(account.recoveryCode, await encode(passwordStyle)),
+    ).rejects.toThrow();
+    const recoveryStyle = await sealPrivateKeyForRecovery(
+      account.privateKey,
+      encKey,
+      nonce,
+    );
+    const open = (blob: Uint8Array, ad: Uint8Array) =>
+      sodium.crypto_aead_xchacha20poly1305_ietf_decrypt(
+        null,
+        blob.slice(25),
+        ad,
+        blob.slice(1, 25),
+        encKey,
+      );
+    expect(() => open(recoveryStyle, new Uint8Array([1]))).toThrow();
+    expect(open(recoveryStyle, RECOVERY_AD)).toEqual(account.privateKey);
+  });
+
+  it('openRecoveryPrivateKey rejects a wrong code', async () => {
+    const sodium = await getSodium();
+    const account = await createClientAccount('pw');
+    await expect(
+      openRecoveryPrivateKey(
+        sodium.randombytes_buf(32),
+        account.recoveryEncryptedPrivateKey,
+      ),
+    ).rejects.toThrow();
+  });
 });
