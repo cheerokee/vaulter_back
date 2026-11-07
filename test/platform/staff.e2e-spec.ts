@@ -1,4 +1,6 @@
+import { randomUUID } from 'node:crypto';
 import type { INestApplication } from '@nestjs/common';
+import type request from 'supertest';
 import { PLATFORM_PERMISSIONS } from '../../src/platform/domain/platform-catalog.js';
 import { createTestApp, resetDatabase } from '../setup/test-app.js';
 import {
@@ -51,6 +53,51 @@ describe('Platform staff and roles (e2e)', () => {
     const res = await p.me(ana.token).expect(404);
     expect(res.body.type).toMatch(/\/not-found$/);
     await c.http().get('/platform/me').expect(401);
+  });
+
+  it('for a non-staff user a platform route answers exactly like a nonexistent route (no oracle)', async () => {
+    const ana = await signUp('ana@example.com');
+    const h = c.bearer(ana.token);
+    const fake = `/platform/${randomUUID()}`;
+    const unknown = await c.http().get(fake).set(h).expect(404);
+    expect(unknown.body.detail).toBe(`Cannot GET ${fake}`);
+    // Drops what legitimately differs: the request id and the path inside detail.
+    const shape = (r: request.Response, path: string) => {
+      const { requestId, detail, ...rest } = r.body as Record<string, unknown>;
+      expect(requestId).toEqual(expect.any(String));
+      return {
+        ...rest,
+        detail: String(detail).replace(path, '<path>'),
+        contentType: r.headers['content-type'],
+      };
+    };
+    const unknownPut = await c
+      .http()
+      .put(fake)
+      .set(h)
+      .send({ currentAuthProof: account.authProof })
+      .expect(404);
+    expect(unknownPut.body.detail).toBe(`Cannot PUT ${fake}`);
+    const expected = {
+      GET: shape(unknown, fake),
+      PUT: shape(unknownPut, fake),
+    };
+    const grantPath = `/platform/staff/${ana.userId}/roles/platform_admin`;
+    const hidden: [request.Response, 'GET' | 'PUT', string][] = [
+      [await p.me(ana.token).expect(404), 'GET', '/platform/me'],
+      [await p.staff(ana.token).expect(404), 'GET', '/platform/staff'],
+      [
+        await p
+          .grant(ana.token, ana.userId, 'platform_admin', account.authProof)
+          .expect(404),
+        'PUT',
+        grantPath,
+      ],
+    ];
+    for (const [res, method, path] of hidden) {
+      expect(res.body.detail).toBe(`Cannot ${method} ${path}`);
+      expect(shape(res, path)).toEqual(expected[method]);
+    }
   });
 
   it('the CLI creates the first admin (idempotent, audited with no user and via cli); GET /platform/me lists the 5 permissions', async () => {
