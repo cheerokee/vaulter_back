@@ -1,4 +1,4 @@
-import { Controller, Get, UseGuards } from '@nestjs/common';
+import { Controller, Get } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import {
   type AuthContext,
@@ -6,11 +6,13 @@ import {
 } from '../../../shared/infra/http/auth.decorators.js';
 import { GetPlatformMeUseCase } from '../../application/get-platform-me.use-case.js';
 import { platformMeResponse } from './dto/responses.js';
-import { RequireAnyPlatformRole } from './platform-permission.decorator.js';
-import { PlatformPermissionGuard } from './platform-permission.guard.js';
+import {
+  PlatformRoutes,
+  RequireAnyPlatformRole,
+} from './platform-permission.decorator.js';
 
 @ApiTags('platform')
-@UseGuards(PlatformPermissionGuard)
+@PlatformRoutes()
 @Controller('platform/me')
 export class PlatformMeController {
   constructor(private readonly getMe: GetPlatformMeUseCase) {}

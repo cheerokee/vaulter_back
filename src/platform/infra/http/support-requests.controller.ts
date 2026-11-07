@@ -6,7 +6,6 @@ import {
   Param,
   Post,
   Query,
-  UseGuards,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import {
@@ -27,13 +26,15 @@ import {
   ListSupportRequestsQuery,
   RejectSupportRequestDto,
 } from './dto/support-request.dto.js';
-import { RequirePlatformPermission } from './platform-permission.decorator.js';
-import { PlatformPermissionGuard } from './platform-permission.guard.js';
+import {
+  PlatformRoutes,
+  RequirePlatformPermission,
+} from './platform-permission.decorator.js';
 
 // Pedidos de suporte da equipe (spec de papéis da plataforma §4.3). Sem a permissão da rota: o 404 de rota
 // inexistente (PlatformPermissionGuard). Mutações pedem reautenticação (`currentAuthProof`, orçamento `reauth`).
 @ApiTags('platform')
-@UseGuards(PlatformPermissionGuard)
+@PlatformRoutes()
 @Controller('platform/support-requests')
 export class SupportRequestsController {
   constructor(

@@ -1,4 +1,4 @@
-import { Controller, Get, Query, UseGuards } from '@nestjs/common';
+import { Controller, Get, Query } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import {
   type AuthContext,
@@ -8,11 +8,13 @@ import { pageResponse } from '../../../shared/infra/http/cursor-pagination.query
 import { ListPlatformAuditUseCase } from '../../application/list-platform-audit.use-case.js';
 import { ListPlatformAuditQuery } from './dto/lookup.dto.js';
 import { platformAuditResponse } from './dto/responses.js';
-import { RequirePlatformPermission } from './platform-permission.decorator.js';
-import { PlatformPermissionGuard } from './platform-permission.guard.js';
+import {
+  PlatformRoutes,
+  RequirePlatformPermission,
+} from './platform-permission.decorator.js';
 
 @ApiTags('platform')
-@UseGuards(PlatformPermissionGuard)
+@PlatformRoutes()
 @Controller('platform/audit')
 export class PlatformAuditController {
   constructor(private readonly list: ListPlatformAuditUseCase) {}

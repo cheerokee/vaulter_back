@@ -10,13 +10,17 @@ import type { AuthContext } from '../../../shared/infra/http/auth.decorators.js'
 import { PlatformAccess } from '../../application/platform-access.js';
 import {
   PLATFORM_PERMISSION_KEY,
+  PLATFORM_ROUTES_KEY,
   type PlatformRequirement,
 } from './platform-permission.decorator.js';
 
-// Trava das rotas /platform/*: roda depois do guard global de token (request.auth) e confere a permissão no banco a
-// cada requisição (sem cache). Sem a permissão: o MESMO 404 de rota inexistente (mesmo detail `Cannot GET /...`). Rota sem
-// @RequirePlatformPermission/@RequireAnyPlatformRole num controller com este guard é erro de programação: falha
-// fechada (500), nunca abre a rota.
+// Trava das rotas /platform/*. Guard GLOBAL (APP_GUARD do PlatformModule): roda depois do guard global de token
+// (request.auth) e ANTES do throttler (PlatformModule antes do ThrottlingModule no AppModule), para quem não é da
+// equipe receber o 404 sem nenhum cabeçalho X-RateLimit-* nem 429 (rota inexistente não passa pelo throttler).
+// Rota sem metadado da plataforma fora de um controller @PlatformRoutes(): não faz nada. Confere a permissão no banco
+// a cada requisição (sem cache). Sem a permissão: o MESMO 404 de rota inexistente (mesmo detail `Cannot GET /...`).
+// Rota sem @RequirePlatformPermission/@RequireAnyPlatformRole num controller @PlatformRoutes() é erro de
+// programação: falha fechada (500), nunca abre a rota.
 @Injectable()
 export class PlatformPermissionGuard implements CanActivate {
   constructor(
@@ -30,6 +34,11 @@ export class PlatformPermissionGuard implements CanActivate {
       context.getHandler(),
     );
     if (!requirement) {
+      const isPlatformController = this.reflector.get<boolean | undefined>(
+        PLATFORM_ROUTES_KEY,
+        context.getClass(),
+      );
+      if (!isPlatformController) return true;
       throw new Error(
         `Platform route ${context.getClass().name}.${context.getHandler().name} has no platform requirement`,
       );

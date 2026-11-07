@@ -561,7 +561,11 @@ ganha acesso a conteúdo (as chaves ficam com os clientes).
   `platform`. Exporta `PlatformAccess` e `PlatformAudit`. O papel da plataforma nunca aparece em resposta de cliente nem
   na sincronização.
 - **Trava das rotas** (`PlatformPermissionGuard`, lê as atribuições **no banco a cada requisição**; vale na hora):
-  `@RequirePlatformPermission(p)` ou `@RequireAnyPlatformRole()`. Sem papel ou sem a permissão: **404** igual ao do Nest
+  controller marcado com `@PlatformRoutes()` e cada rota com `@RequirePlatformPermission(p)` ou
+  `@RequireAnyPlatformRole()` (rota sem requisito num controller da plataforma: 500, falha fechada). O guard é
+  **global** (APP_GUARD do `PlatformModule`, que vem **antes** do `ThrottlingModule`; fora dos controllers da plataforma
+  não faz nada): quem não é da equipe recebe o 404 antes do throttler, **sem** `X-RateLimit-*`, `Retry-After` nem 429,
+  igual a uma rota inexistente (fixado por `test/platform/staff.e2e-spec.ts`). Sem papel ou sem a permissão: **404** igual ao do Nest
   para rota inexistente (`Cannot <METHOD> <url>`), para não revelar que `/platform/*` existe. `GET /platform/me` usa
   `@RequireAnyPlatformRole()` (o financeiro tem papel mas nenhuma permissão).
 - **Rotas** (todas internas, token de usuário): `GET /platform/me`; `GET /platform/staff`,
@@ -599,10 +603,8 @@ ganha acesso a conteúdo (as chaves ficam com os clientes).
   usuário; aceita `supportRequestId` e cursor.
 - **Desregistro forçado:** é a saída para um Hub preso numa conta perdida (veja `docs/hubs/hub-lifecycle.md`); o dono
   legítimo faz o reset de fábrica e reivindica de novo com a conta nova.
-- **Limites residuais conhecidos** (junto dos do rate limit): o throttler global roda **antes** do
-  `PlatformPermissionGuard`, então as rotas com `@ThrottleReauth()` respondem 429 a quem não é da equipe depois de 5
-  chamadas (rota inexistente nunca dá 429); e um papel perdido entre o guard e a reconferência dentro da transação pode
-  expor o detalhe genérico "The resource was not found.".
+- **Limite residual conhecido:** um papel perdido entre o guard e a reconferência dentro da transação pode expor o
+  detalhe genérico "The resource was not found.".
 - **Testes:** e2e em `test/platform/` (`catalog`, `staff`, `support-requests`, `lookup`); unitários ao lado do código.
 
 ## Banco de dados (TypeORM + migrations)
@@ -739,7 +741,8 @@ Os valores do `.env.example` para os segredos são **só de desenvolvimento**; p
 
 ## Rate limit
 - `@nestjs/throttler` com guard global (`AppThrottlerGuard` em `ThrottlingModule`, registrado **depois** do
-  `IdentityModule` para o guard de token rodar antes — fixado por e2e) e storage no Postgres
+  `IdentityModule`, do `HubsModule` e do `PlatformModule` para os guards de token e a trava da plataforma rodarem
+  antes — fixado por e2e) e storage no Postgres
   (`PostgresThrottlerStorage`, upsert atômico; várias instâncias dividem os contadores). Chave por IP (`req.ip`,
   respeita `TRUST_PROXY`; IPv6 agrupado no /64), por e-mail normalizado no login e nas rotas de recuperação de conta, e
   por usuário nas rotas de reautenticação.

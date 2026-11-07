@@ -1,4 +1,4 @@
-import { Controller, Get, Param, Query, UseGuards } from '@nestjs/common';
+import { Controller, Get, Param, Query } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import {
   type AuthContext,
@@ -11,12 +11,14 @@ import {
   LookupUserUseCase,
 } from '../../application/lookup.use-cases.js';
 import { LookupUserQuery } from './dto/lookup.dto.js';
-import { RequirePlatformPermission } from './platform-permission.decorator.js';
-import { PlatformPermissionGuard } from './platform-permission.guard.js';
+import {
+  PlatformRoutes,
+  RequirePlatformPermission,
+} from './platform-permission.decorator.js';
 
 // Consultas do suporte para montar um pedido (spec de papéis da plataforma §4.1): só leitura, sem chaves.
 @ApiTags('platform')
-@UseGuards(PlatformPermissionGuard)
+@PlatformRoutes()
 @Controller('platform/lookup')
 export class PlatformLookupController {
   constructor(

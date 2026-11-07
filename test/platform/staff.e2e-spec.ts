@@ -281,3 +281,61 @@ describe('Platform staff and roles (e2e)', () => {
     ).toEqual([]);
   });
 });
+
+describe('Platform routes with the rate limit on (e2e)', () => {
+  let app: INestApplication;
+  let account: ClientAccount;
+  const c = identityClient(() => app);
+  const p = platformClient(() => app);
+
+  beforeAll(async () => {
+    await resetDatabase();
+    account = await createClientAccount(PASSWORD);
+    app = await createTestApp({ env: { RATE_LIMIT_ENABLED: 'true' } });
+  }, 60_000);
+  afterAll(async () => {
+    await app.close();
+  });
+
+  // Every header the throttler may set (default, user and reauth throttlers) plus Retry-After.
+  const rateHeaders = (r: request.Response) =>
+    Object.keys(r.headers)
+      .filter((h) => h.startsWith('x-ratelimit') || h === 'retry-after')
+      .sort();
+
+  it('a hidden platform route sends the same headers as a nonexistent one (no rate-limit oracle, never 429)', async () => {
+    const ana = await c.signUp(account, 'ana@example.com', 'Ana');
+    const admin = await c.signUp(account, 'admin@example.com', 'Admin');
+    await grantAdminByCli('admin@example.com');
+    const h = c.bearer(ana.token);
+    const fake = `/platform/${randomUUID()}`;
+
+    const unknownGet = await c.http().get(fake).set(h).expect(404);
+    expect(rateHeaders(unknownGet)).toEqual([]);
+    const me = await p.me(ana.token).expect(404);
+    expect(rateHeaders(me)).toEqual(rateHeaders(unknownGet));
+
+    // A reauth route: more calls than the reauth budget (5 per 15 min) and still the plain 404 without headers.
+    const grantPath = `/platform/staff/${ana.userId}/roles/platform_admin`;
+    for (let i = 0; i < 7; i++) {
+      const unknownPut = await c
+        .http()
+        .put(fake)
+        .set(h)
+        .send({ currentAuthProof: account.authProof })
+        .expect(404);
+      const hidden = await p
+        .grant(ana.token, ana.userId, 'platform_admin', account.authProof)
+        .expect(404);
+      expect(hidden.body.detail).toBe(`Cannot PUT ${grantPath}`);
+      expect(rateHeaders(hidden)).toEqual(rateHeaders(unknownPut));
+      expect(rateHeaders(hidden)).toEqual([]);
+    }
+
+    // Control: for staff the throttler still runs (and sets its headers) after the platform guard.
+    const staffMe = await p.me(admin.token).expect(200);
+    expect(rateHeaders(staffMe).some((x) => x.startsWith('x-ratelimit'))).toBe(
+      true,
+    );
+  });
+});

@@ -7,7 +7,6 @@ import {
   Param,
   Put,
   Query,
-  UseGuards,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import {
@@ -29,11 +28,13 @@ import {
   platformRoleKeyPipe,
 } from './dto/platform.dto.js';
 import { staffMemberResponse } from './dto/responses.js';
-import { RequirePlatformPermission } from './platform-permission.decorator.js';
-import { PlatformPermissionGuard } from './platform-permission.guard.js';
+import {
+  PlatformRoutes,
+  RequirePlatformPermission,
+} from './platform-permission.decorator.js';
 
 @ApiTags('platform')
-@UseGuards(PlatformPermissionGuard)
+@PlatformRoutes()
 @Controller('platform/staff')
 export class PlatformStaffController {
   constructor(

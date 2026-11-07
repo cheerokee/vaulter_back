@@ -32,8 +32,9 @@ import { validateEnv } from './shared/infra/config/env.validation.js';
     SpacesModule,
     HubsModule,
     PlatformModule,
-    // Depois do IdentityModule e do HubsModule: os guards de token (usuário e Hub) rodam antes do throttler, que
-    // conta por usuário/Hub (fixado por test/shared/rate-limit e test/hubs/rate-limit).
+    // Depois do IdentityModule, do HubsModule e do PlatformModule: os guards de token (usuário e Hub) rodam antes do
+    // throttler, que conta por usuário/Hub (fixado por test/shared/rate-limit e test/hubs/rate-limit), e a trava da
+    // plataforma responde o 404 antes de o throttler contar (fixado por test/platform/staff).
     ThrottlingModule,
   ],
   controllers: [AppController],

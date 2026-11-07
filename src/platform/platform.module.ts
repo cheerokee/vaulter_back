@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { APP_GUARD } from '@nestjs/core';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { HubsModule } from '../hubs/hubs.module.js';
 import { IdentityModule } from '../identity/identity.module.js';
@@ -75,7 +76,9 @@ import { SupportRequestsController } from './infra/http/support-requests.control
     },
     PlatformAccess,
     PlatformAudit,
-    PlatformPermissionGuard,
+    // Global and registered before the ThrottlingModule (see AppModule): a hidden /platform route answers its 404
+    // before the throttler counts it or sets X-RateLimit-* (fixed by test/platform/staff.e2e-spec.ts).
+    { provide: APP_GUARD, useClass: PlatformPermissionGuard },
     GetPlatformMeUseCase,
     ListStaffUseCase,
     GrantPlatformRoleUseCase,
