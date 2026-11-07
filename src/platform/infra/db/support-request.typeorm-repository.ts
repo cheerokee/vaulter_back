@@ -76,6 +76,17 @@ export class SupportRequestTypeormRepository extends SupportRequestRepository {
     return rows.map((r) => SupportRequestMapper.toDomain(r));
   }
 
+  async lockPendingOf(requestedBy: string): Promise<SupportRequest[]> {
+    const rows = await this.qb()
+      .andWhere(`r.status = 'pending'`)
+      .andWhere('r.decidedByUserId IS NULL')
+      .andWhere('r.requestedByUserId = :requestedBy', { requestedBy })
+      .orderBy('r.id')
+      .setLock('pessimistic_write')
+      .getMany();
+    return rows.map((r) => SupportRequestMapper.toDomain(r));
+  }
+
   async list(
     filter: SupportRequestFilter,
     page: CursorPageRequest,

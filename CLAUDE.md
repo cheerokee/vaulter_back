@@ -582,12 +582,16 @@ ganha acesso a conteúdo (as chaves ficam com os clientes).
   `rejected`, `expired` (sem decisão em 7 dias), `failed` (erro de domínio na execução: o pedido guarda o `type` do
   erro e nada muda no alvo). Quem tem `platform.support.execute_alone` (admin) cria o pedido já aprovado e executado na
   mesma transação; suporte cria **pendente** e outra pessoa com `platform.support.approve` aprova (executa na hora) ou
-  recusa com nota; quem pediu nunca aprova o próprio (`self-approval`, 422). A execução (`SupportRequestExecutor`) roda
+  recusa com nota; quem pediu nunca aprova o próprio (`self-approval`, 422). **Quem pediu perde
+  `platform.support.request`** (papel retirado): os pendentes dele viram `rejected` na mesma transação da retirada, sem
+  decisor e com nota `requester_lost_permission` (auditado `platform.request.rejected` com `metadata.reason`, sem
+  usuário); a decisão reconfere quem pediu sob o lock do pedido e, se perdeu, recusa do mesmo jeito (gravado) e responde
+  409 `support-request-not-pending`. A execução (`SupportRequestExecutor`) roda
   num `uow.run` aninhado (savepoint): erro de domínio desfaz só a ação e vira `failed`; outro erro desfaz tudo.
 - **Ordem de locks da plataforma** (sempre nesta ordem, sem ciclo): atribuições vivas de `platform_admin`
   (`lockAdmins` FOR UPDATE em conceder/retirar papel; `lockAdminsForShare` FOR SHARE ao criar e ao decidir pedido, antes
-  de reconferir permissões e o alvo da equipe) -> linha do pedido (`lockById` FOR UPDATE) -> locks da operação
-  executada (Hub/organização). Conceder/retirar papel e decisões/criações se serializam, então a retirada vale na hora
+  de reconferir permissões e o alvo da equipe) -> linha do pedido (`lockById` FOR UPDATE; na retirada,
+  `lockPendingOf` trava os pendentes da pessoa em ordem de id) -> locks da operação executada (Hub/organização). Conceder/retirar papel e decisões/criações se serializam, então a retirada vale na hora
   e um alvo não vira equipe no meio de uma nomeação. Conceder/retirar nunca travam Hub nem organização. Sem nenhum
   admin vivo (só em teste), o FOR SHARE não trava nada.
 - **Regras de alvo:** organização pessoal recusada (`personal-organization-protected`, 422); **ninguém da equipe pode ser

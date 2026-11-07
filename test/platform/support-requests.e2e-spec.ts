@@ -584,4 +584,54 @@ describe('Platform support requests (e2e)', () => {
       expect(await hubDeregistered(hub.hubId)).toBe(false);
     }
   });
+
+  it('revoking the support role rejects their pending requests (requester_lost_permission); approving then fails', async () => {
+    const hub = await hk.claim(owner);
+    const created = await p
+      .createRequest(support.token, deregisterBody(hub.hubId))
+      .expect(201);
+    const id = created.body.id as string;
+    // An executed one is left alone: only pending requests without a decision are withdrawn.
+    const hub2 = await hk.claim(owner);
+    const done = await p
+      .createRequest(support.token, deregisterBody(hub2.hubId))
+      .expect(201);
+    await p.approveRequest(admin.token, done.body.id, proof).expect(200);
+
+    await p
+      .revoke(admin.token, support.userId, 'platform_support', proof)
+      .expect(204);
+
+    const after = await p.getRequest(admin.token, id).expect(200);
+    expect(after.body).toMatchObject({
+      status: 'rejected',
+      decidedByUserId: null,
+      decidedAt: expect.stringMatching(/Z$/),
+      decisionNote: 'requester_lost_permission',
+    });
+    expect(
+      (await requestAuditRows(id)).map((r) => [
+        r.action,
+        r.user_id,
+        r.metadata,
+      ]),
+    ).toEqual([
+      [
+        'platform.request.created',
+        support.userId,
+        { type: 'hub_force_deregister' },
+      ],
+      [
+        'platform.request.rejected',
+        null,
+        { type: 'hub_force_deregister', reason: 'requester_lost_permission' },
+      ],
+    ]);
+    const still = await p.getRequest(admin.token, done.body.id).expect(200);
+    expect(still.body.status).toBe('executed');
+
+    const res = await p.approveRequest(admin.token, id, proof).expect(409);
+    expect(res.body.type).toMatch(/\/support-request-not-pending$/);
+    expect(await hubDeregistered(hub.hubId)).toBe(false);
+  });
 });

@@ -110,6 +110,10 @@ nº 123"), quem pediu, estado e quem aprovou/recusou.
 - **Quem pede não tem (suporte):** o pedido nasce **pendente**. Outra pessoa com `platform.support.approve` aprova
   (executa na hora) ou recusa (com motivo). **Quem pediu nunca aprova o próprio pedido** (`self-approval`, 422).
 - Pedido pendente vence em 7 dias sem decisão (vira `expired`) *(decisão do Claude)*.
+- Quem pediu perde `platform.support.request` (papel retirado): na mesma transação da retirada, os pedidos pendentes
+  dele viram `rejected` sem decisor, com nota `requester_lost_permission` (auditado `platform.request.rejected` com
+  `metadata.reason`); a decisão reconfere isso sob o lock do pedido e responde 409 `support-request-not-pending`
+  *(decisão do Claude, revisão final)*.
 - Execução falhou (ex.: o Hub já foi desregistrado pelo dono, a conta-alvo sumiu): o pedido fica `failed` com o
   `type` do erro, e nada muda no alvo.
 - Pedir, aprovar e recusar exigem reautenticação.

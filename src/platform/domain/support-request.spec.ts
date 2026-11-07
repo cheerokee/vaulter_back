@@ -3,6 +3,7 @@ import {
   DomainValidationError,
 } from '../../shared/domain/errors.js';
 import {
+  REQUESTER_LOST_PERMISSION,
   SUPPORT_REQUEST_TEXT_MAX,
   SUPPORT_REQUEST_TTL_DAYS,
   SupportRequest,
@@ -255,6 +256,38 @@ describe('SupportRequest', () => {
         () => r.approve(ADMIN, later(8 * DAY)),
         DomainValidationError,
         'support-request-expired',
+      );
+    });
+  });
+
+  describe('rejectForLostPermission', () => {
+    it('a pending request is rejected by nobody, with the requester_lost_permission note', () => {
+      const r = deregister();
+      expect(r.rejectForLostPermission(later(DAY))).toBe('rejected');
+      expect(r.status).toBe('rejected');
+      expect(r.decidedBy).toBeNull();
+      expect(r.decidedAt).toEqual(later(DAY));
+      expect(r.decisionNote).toBe(REQUESTER_LOST_PERMISSION);
+      expect(REQUESTER_LOST_PERMISSION).toBe('requester_lost_permission');
+    });
+
+    it('a due one becomes expired instead', () => {
+      const r = deregister();
+      expect(r.rejectForLostPermission(later(8 * DAY))).toBe('expired');
+      expect(r.status).toBe('expired');
+      expect(r.decisionNote).toBeNull();
+    });
+
+    it('a decided or approved request: support-request-not-pending (409)', () => {
+      const rejected = deregister();
+      rejected.reject(ADMIN, 'no', later(1));
+      expect(() => rejected.rejectForLostPermission(later(2))).toThrow(
+        ConflictError,
+      );
+      const approved = deregister();
+      approved.approve(ADMIN, later(1));
+      expect(() => approved.rejectForLostPermission(later(2))).toThrow(
+        ConflictError,
       );
     });
   });

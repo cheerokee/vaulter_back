@@ -311,6 +311,37 @@ describe('DecideSupportRequestUseCase', () => {
     expect(await uow.run.mock.results[0]!.value).toBeDefined();
   });
 
+  it('a requester who lost platform.support.request: rejected (committed) and 409 support-request-not-pending', async () => {
+    const pending = seedPending(SUPPORT);
+    assigned.delete(SUPPORT);
+    await expect(
+      decide.approve(actor(ADMIN), pending.id, { currentAuthProof: 'proof' }),
+    ).rejects.toMatchObject({ code: 'support-request-not-pending' });
+    expect(pending.status).toBe('rejected');
+    expect(pending.decidedBy).toBeNull();
+    expect(pending.decisionNote).toBe('requester_lost_permission');
+    expect(calls).toEqual([
+      'verifier.verify',
+      'uow.run',
+      'roles.lockAdminsForShare',
+      'repo.lockById',
+      'repo.save:rejected',
+      'platform.request.rejected',
+    ]);
+    expect(audit.record).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        userId: null,
+        metadata: {
+          type: 'hub_force_deregister',
+          reason: 'requester_lost_permission',
+        },
+      }),
+    );
+    expect(executor.execute).not.toHaveBeenCalled();
+    // The error leaves the unit of work only after it resolved (the rejection is committed).
+    expect(await uow.run.mock.results[0]!.value).toBeDefined();
+  });
+
   it('self-approval (requester later became admin): 422, nothing saved', async () => {
     const pending = seedPending(SUPPORT);
     assigned.set(SUPPORT, ['platform_admin']);

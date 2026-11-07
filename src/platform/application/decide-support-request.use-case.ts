@@ -1,7 +1,11 @@
 import { Injectable } from '@nestjs/common';
 import { CurrentAuthProofVerifier } from '../../identity/application/current-auth-proof-verifier.js';
 import type { Actor } from '../../identity/application/dto/actor.js';
-import { DomainError, NotFoundError } from '../../shared/domain/errors.js';
+import {
+  ConflictError,
+  DomainError,
+  NotFoundError,
+} from '../../shared/domain/errors.js';
 import { UnitOfWork } from '../../shared/infra/db/unit-of-work.js';
 import { PlatformRoleRepository } from '../domain/platform-role.repository.js';
 import type { SupportRequest } from '../domain/support-request.js';
@@ -10,6 +14,7 @@ import { PlatformAccess } from './platform-access.js';
 import { PlatformAudit } from './platform-audit.js';
 import {
   persistExpiry,
+  rejectForLostPermission,
   supportRequestAuditEntry,
 } from './support-request-audit.js';
 import { SupportRequestExecutor } from './support-request-executor.js';
@@ -18,6 +23,13 @@ export function supportRequestNotFound(): NotFoundError {
   return new NotFoundError(
     'support-request-not-found',
     'The support request was not found.',
+  );
+}
+
+function requesterLostPermission(): ConflictError {
+  return new ConflictError(
+    'support-request-not-pending',
+    'The support request was rejected: whoever asked no longer may ask for support.',
   );
 }
 
@@ -30,6 +42,9 @@ type Decision = { kind: 'approve' } | { kind: 'reject'; note: string };
 //    começam com `lockAdmins` FOR UPDATE; sempre ANTES do pedido, a mesma ordem da retirada), trava a linha do pedido
 //    (FOR UPDATE: duas decisões concorrentes se serializam, a segunda vê o pedido já decidido, 409), reconfere a
 //    permissão, decide, grava, audita e, na aprovação, executa.
+// Quem pediu perdeu `platform.support.request` (reconferido sob o lock do pedido; a retirada do papel já recusa os
+// pendentes, isto cobre o que escapou dela): o pedido vira `rejected` (`requester_lost_permission`, gravado e
+// auditado como na retirada), a transação confirma, e sai 409 `support-request-not-pending`.
 // Vencido (7 dias sem decisão): o estado `expired` é gravado e auditado, a transação confirma, e SÓ ENTÃO sai o
 // 422 `support-request-expired` (lançar dentro do `run` desfaria a gravação).
 @Injectable()
@@ -83,6 +98,18 @@ export class DecideSupportRequestUseCase {
         await this.access.require(actor.userId, 'platform.support.approve');
         const now = new Date();
         const wasPending = request.status === 'pending';
+        if (
+          wasPending &&
+          !request.isApproved &&
+          now < request.expiresAt &&
+          !(await this.access.has(
+            request.requestedBy,
+            'platform.support.request',
+          ))
+        ) {
+          await rejectForLostPermission(request, now, this.repo, this.audit);
+          return { error: requesterLostPermission() };
+        }
         try {
           if (decision.kind === 'approve') {
             request.approve(actor.userId, now);

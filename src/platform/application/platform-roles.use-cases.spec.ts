@@ -12,6 +12,8 @@ import {
 } from '../domain/platform-catalog.js';
 import type { PlatformAuditLogRepository } from '../domain/platform-audit-log.repository.js';
 import type { PlatformRoleRepository } from '../domain/platform-role.repository.js';
+import { SupportRequest } from '../domain/support-request.js';
+import type { SupportRequestRepository } from '../domain/support-request.repository.js';
 import { GetPlatformMeUseCase } from './get-platform-me.use-case.js';
 import { GrantPlatformRoleUseCase } from './grant-platform-role.use-case.js';
 import { ListStaffUseCase } from './list-staff.use-case.js';
@@ -107,8 +109,21 @@ const deps = [
   directory as unknown as UserDirectory,
   uow as unknown as UnitOfWork,
 ] as const;
+const pendingOf = new Map<string, SupportRequest[]>();
+const requests = {
+  lockPendingOf: vi.fn(async (u: string) => {
+    calls.push('requests.lockPendingOf');
+    return pendingOf.get(u) ?? [];
+  }),
+  save: vi.fn(async (r: SupportRequest) => {
+    calls.push(`requests.save:${r.status}`);
+  }),
+};
 const grant = new GrantPlatformRoleUseCase(...deps);
-const revoke = new RevokePlatformRoleUseCase(...deps);
+const revoke = new RevokePlatformRoleUseCase(
+  ...deps,
+  requests as unknown as SupportRequestRepository,
+);
 const me = new GetPlatformMeUseCase(repo);
 const listStaff = new ListStaffUseCase(
   access,
@@ -120,6 +135,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   calls.length = 0;
   assigned.clear();
+  pendingOf.clear();
   assigned.set(ADMIN, new Set(['platform_admin']));
   assigned.set(SUPPORT, new Set(['platform_support']));
   auditRepo.append.mockImplementation(async () => {
@@ -128,6 +144,65 @@ beforeEach(() => {
 });
 
 describe('RevokePlatformRoleUseCase', () => {
+  const pendingBy = (requestedBy: string, now = new Date()) =>
+    SupportRequest.create({
+      type: 'hub_force_deregister',
+      target: { hubId: '019a1b2c-0000-7000-8000-0000000000d1' },
+      reason: 'r',
+      evidence: 'e',
+      requestedBy,
+      now,
+    });
+
+  it('losing platform.support.request rejects the pending requests of the target in the same transaction', async () => {
+    const pending = pendingBy(SUPPORT);
+    const due = pendingBy(SUPPORT, new Date(Date.now() - 8 * 86_400_000));
+    pendingOf.set(SUPPORT, [pending, due]);
+    await revoke.execute(actor(ADMIN), SUPPORT, 'platform_support', {
+      currentAuthProof: PROOF,
+    });
+    expect(requests.lockPendingOf).toHaveBeenCalledWith(SUPPORT);
+    expect(pending.status).toBe('rejected');
+    expect(pending.decisionNote).toBe('requester_lost_permission');
+    expect(due.status).toBe('expired');
+    expect(auditRepo.append).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userId: null,
+        action: 'platform.request.rejected',
+        supportRequestId: pending.id,
+        metadata: {
+          type: 'hub_force_deregister',
+          reason: 'requester_lost_permission',
+        },
+      }),
+    );
+    expect(auditRepo.append).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userId: null,
+        action: 'platform.request.expired',
+        supportRequestId: due.id,
+      }),
+    );
+    // Lock order: admins (FOR UPDATE), then the revocation, then the target's requests.
+    const inTx = calls.slice(calls.indexOf('uow.run'));
+    expect(inTx.indexOf('roles.lockAdmins')).toBeLessThan(
+      inTx.indexOf('requests.lockPendingOf'),
+    );
+    expect(inTx.indexOf('roles.revoke')).toBeLessThan(
+      inTx.indexOf('requests.lockPendingOf'),
+    );
+    expect(calls).toContain('requests.save:rejected');
+  });
+
+  it('keeping platform.support.request (another role still grants it) leaves the requests alone', async () => {
+    assigned.set(ADMIN2, new Set(['platform_admin', 'platform_support']));
+    pendingOf.set(ADMIN2, [pendingBy(ADMIN2)]);
+    await revoke.execute(actor(ADMIN), ADMIN2, 'platform_support', {
+      currentAuthProof: PROOF,
+    });
+    expect(requests.lockPendingOf).not.toHaveBeenCalled();
+  });
+
   it('the last admin cannot lose platform_admin -> 422 last-platform-admin, nothing written or audited', async () => {
     const err = await revoke
       .execute(actor(ADMIN), ADMIN, 'platform_admin', {

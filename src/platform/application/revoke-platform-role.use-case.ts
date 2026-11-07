@@ -6,16 +6,22 @@ import { UnitOfWork } from '../../shared/infra/db/unit-of-work.js';
 import type { PlatformRoleKey } from '../domain/platform-catalog.js';
 import { PlatformRoleRepository } from '../domain/platform-role.repository.js';
 import { assertNotLastPlatformAdmin } from '../domain/platform-staff.js';
+import { SupportRequestRepository } from '../domain/support-request.repository.js';
 import {
   requireExistingUser,
   type PlatformRoleChangeInput,
 } from './grant-platform-role.use-case.js';
 import { PlatformAccess } from './platform-access.js';
 import { PlatformAudit } from './platform-audit.js';
+import { rejectForLostPermission } from './support-request-audit.js';
 
 // Retira um papel da plataforma (idempotente: sem o papel, não grava nem audita). Mesma ordem da concessão; a regra
 // do último admin é decidida sob `lockAdmins` (FOR UPDATE nas atribuições vivas de platform_admin): duas retiradas
 // concorrentes dos dois únicos admins se serializam e a segunda vê só um admin vivo (422 `last-platform-admin`).
+// Se a pessoa fica sem `platform.support.request`, os pedidos pendentes dela (sem decisão) viram `rejected` na
+// mesma transação (`requester_lost_permission`, auditado `platform.request.rejected` sem usuário). Ordem de locks:
+// admins (FOR UPDATE) -> pedidos da pessoa (FOR UPDATE, em ordem de id), a mesma da decisão (admins FOR SHARE ->
+// pedido).
 @Injectable()
 export class RevokePlatformRoleUseCase {
   constructor(
@@ -25,6 +31,7 @@ export class RevokePlatformRoleUseCase {
     private readonly verifier: CurrentAuthProofVerifier,
     private readonly directory: UserDirectory,
     private readonly uow: UnitOfWork,
+    private readonly requests: SupportRequestRepository,
   ) {}
 
   async execute(
@@ -40,7 +47,8 @@ export class RevokePlatformRoleUseCase {
       const admins = await this.roles.lockAdmins();
       await this.access.require(actor.userId, 'platform.roles.manage');
       assertNotLastPlatformAdmin(roleKey, targetUserId, admins);
-      if (!(await this.roles.revoke(targetUserId, roleKey, new Date()))) return;
+      const now = new Date();
+      if (!(await this.roles.revoke(targetUserId, roleKey, now))) return;
       await this.audit.record({
         userId: actor.userId,
         action: 'platform.role.revoked',
@@ -48,6 +56,12 @@ export class RevokePlatformRoleUseCase {
         targetUserId,
         metadata: { roleKey },
       });
+      if (await this.access.has(targetUserId, 'platform.support.request')) {
+        return;
+      }
+      for (const request of await this.requests.lockPendingOf(targetUserId)) {
+        await rejectForLostPermission(request, now, this.requests, this.audit);
+      }
     });
   }
 }

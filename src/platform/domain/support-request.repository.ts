@@ -26,6 +26,11 @@ export abstract class SupportRequestRepository {
    * right now is skipped: its decision handles the expiry). Needs an active unit of work.
    */
   abstract lockDuePending(now: Date): Promise<SupportRequest[]>;
+  /**
+   * Pending requests without a decision asked by `requestedBy`, locked FOR UPDATE in id order (the requester lost
+   * `platform.support.request`). Needs an active unit of work.
+   */
+  abstract lockPendingOf(requestedBy: string): Promise<SupportRequest[]>;
   /** Newest first (by id, cursor). */
   abstract list(
     filter: SupportRequestFilter,

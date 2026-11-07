@@ -1,4 +1,7 @@
-import type { SupportRequest } from '../domain/support-request.js';
+import {
+  REQUESTER_LOST_PERMISSION,
+  type SupportRequest,
+} from '../domain/support-request.js';
 import type { SupportRequestRepository } from '../domain/support-request.repository.js';
 import type {
   PlatformAudit,
@@ -52,5 +55,28 @@ export async function persistExpiry(
   await repo.save(request);
   await audit.record(
     supportRequestAuditEntry(request, 'platform.request.expired', null),
+  );
+}
+
+/**
+ * The requester lost `platform.support.request`: rejects `request` (pending, no decision, row locked) with the note
+ * `requester_lost_permission`, saves it and audits `platform.request.rejected` with no user (nobody decided) and
+ * `metadata.reason`. A due one is expired instead (`platform.request.expired`). Inside a unit of work.
+ */
+export async function rejectForLostPermission(
+  request: SupportRequest,
+  now: Date,
+  repo: SupportRequestRepository,
+  audit: PlatformAudit,
+): Promise<void> {
+  if (request.rejectForLostPermission(now) === 'expired') {
+    await persistExpiry(request, repo, audit);
+    return;
+  }
+  await repo.save(request);
+  await audit.record(
+    supportRequestAuditEntry(request, 'platform.request.rejected', null, {
+      reason: REQUESTER_LOST_PERMISSION,
+    }),
   );
 }

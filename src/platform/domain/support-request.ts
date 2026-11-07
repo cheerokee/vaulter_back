@@ -20,6 +20,12 @@ export const SUPPORT_REQUEST_STATUSES = [
 export type PlatformSupportRequestStatus =
   (typeof SUPPORT_REQUEST_STATUSES)[number];
 
+/**
+ * Decision note (and audit reason) of a pending request rejected because its requester lost
+ * `platform.support.request` (role revoked): rejected by nobody, the request has no decider.
+ */
+export const REQUESTER_LOST_PERMISSION = 'requester_lost_permission';
+
 /** A pending request without a decision expires after this many days (spec §4.3). */
 export const SUPPORT_REQUEST_TTL_DAYS = 7;
 /** Max length of the reason, the evidence and the decision note. */
@@ -158,6 +164,29 @@ export class SupportRequest extends Entity<SupportRequestProps> {
       decidedAt: now,
       decisionNote,
     };
+  }
+
+  /**
+   * The requester lost `platform.support.request`: a pending request without a decision becomes `rejected` with no
+   * decider and the note `requester_lost_permission`; one already due becomes `expired` instead. Returns the new
+   * status; anything else (decided, approved) is `support-request-not-pending`.
+   */
+  rejectForLostPermission(now: Date): 'rejected' | 'expired' {
+    if (this.expireIfDue(now)) return 'expired';
+    if (this.props.status !== 'pending' || this.isApproved) {
+      throw new ConflictError(
+        'support-request-not-pending',
+        'The support request was already decided.',
+      );
+    }
+    this.props = {
+      ...this.props,
+      status: 'rejected',
+      decidedBy: null,
+      decidedAt: now,
+      decisionNote: REQUESTER_LOST_PERMISSION,
+    };
+    return 'rejected';
   }
 
   markExecuted(now: Date): void {
