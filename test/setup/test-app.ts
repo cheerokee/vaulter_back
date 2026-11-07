@@ -54,17 +54,20 @@ export async function adminDataSource(): Promise<DataSource> {
   return admin;
 }
 
-// Catálogo RBAC é dado de migration: o reset o guarda antes de truncar e o repõe igual (mesmos ids) depois.
-// Ordem respeita as FKs; de roles só voltam os papéis de fábrica.
+// Catálogos (RBAC e plataforma) são dado de migration: o reset os guarda antes de truncar e os repõe iguais (mesmos
+// ids) depois. Ordem respeita as FKs; de roles só voltam os papéis de fábrica.
 const CATALOG_TABLES: [table: string, where: string][] = [
   ['permissions', 'true'],
   ['permission_dependency', 'true'],
   ['roles', '"organization_id" IS NULL'],
   ['role_permission', 'true'],
+  ['platform_roles', 'true'],
+  ['platform_permissions', 'true'],
+  ['platform_role_permission', 'true'],
 ];
 let catalogSnapshot: Record<string, unknown[]> | undefined;
 
-// Esvazia todas as tabelas, exceto o histórico de migrations, e repõe o catálogo RBAC.
+// Esvazia todas as tabelas, exceto o histórico de migrations, e repõe os catálogos.
 export async function resetDatabase(): Promise<void> {
   const ds = await adminDataSource();
   const tables: { tablename: string }[] = await ds.query(
@@ -85,6 +88,15 @@ export async function resetDatabase(): Promise<void> {
       catalogSnapshot = undefined;
       throw new Error(
         'resetDatabase: the RBAC catalog snapshot is empty (permissions); migrations did not seed it.',
+      );
+    }
+    if (
+      names.has('platform_permissions') &&
+      !catalogSnapshot.platform_permissions?.length
+    ) {
+      catalogSnapshot = undefined;
+      throw new Error(
+        'resetDatabase: the platform catalog snapshot is empty (platform_permissions); migrations did not seed it.',
       );
     }
   }

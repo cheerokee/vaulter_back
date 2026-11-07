@@ -10,6 +10,7 @@ import { IdentityModule } from './identity/identity.module.js';
 import { OrganizationsModule } from './organizations/organizations.module.js';
 import { SpacesModule } from './spaces/spaces.module.js';
 import { HubsModule } from './hubs/hubs.module.js';
+import { PlatformModule } from './platform/platform.module.js';
 import { pinoHttpOptions } from './shared/infra/observability/logger.config.js';
 import { ThrottlingModule } from './shared/infra/http/throttling.module.js';
 import { validateEnv } from './shared/infra/config/env.validation.js';
@@ -30,6 +31,7 @@ import { validateEnv } from './shared/infra/config/env.validation.js';
     OrganizationsModule,
     SpacesModule,
     HubsModule,
+    PlatformModule,
     // Depois do IdentityModule e do HubsModule: os guards de token (usuário e Hub) rodam antes do throttler, que
     // conta por usuário/Hub (fixado por test/shared/rate-limit e test/hubs/rate-limit).
     ThrottlingModule,

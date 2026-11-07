@@ -85,19 +85,44 @@ CREATE TABLE user_sessions (
   CONSTRAINT fk_user_sessions_users FOREIGN KEY (user_id) REFERENCES users (id)
 );
 
--- Papéis da plataforma (equipe Vaulter: suporte, financeiro...). Separados dos papéis de cliente (roles), que
--- têm escopo de organização/espaço/hub e chegam ao hub; estes ficam só no backend.
+-- Papéis da plataforma (equipe: suporte, financeiro...). Separados dos papéis de cliente (roles), que têm escopo
+-- de organização/espaço/hub e chegam ao hub; estes ficam só no backend: sem sync_version, sem RLS e fora da
+-- sincronização. Catálogo fixo (platform_roles, platform_permissions, platform_role_permission) semeado por migration
+-- imutável; o runtime só lê. Spec: docs/superpowers/specs/2026-11-07-platform-roles-design.md.
 CREATE TABLE platform_roles (
   id CHAR(36) NOT NULL,
   created_at DATETIME NOT NULL,
   updated_at DATETIME NULL,
   deleted_at DATETIME NULL,
-  `key` VARCHAR(50) NOT NULL COMMENT 'código fixo usado pelo backend (ex.: support); name é só exibição',
+  `key` VARCHAR(50) NOT NULL COMMENT 'código fixo usado pelo backend (ex.: platform_support); name é só exibição',
   name VARCHAR(255) NOT NULL,
   PRIMARY KEY (id),
-  UNIQUE INDEX uq_platform_roles_key (`key`)
+  UNIQUE INDEX uq_platform_roles_key (`key`) COMMENT 'único entre vivos (WHERE deleted_at IS NULL no Postgres)'
 );
 
+CREATE TABLE platform_permissions (
+  id CHAR(36) NOT NULL,
+  created_at DATETIME NOT NULL,
+  updated_at DATETIME NULL,
+  deleted_at DATETIME NULL,
+  `key` VARCHAR(100) NOT NULL COMMENT 'ex.: platform.support.request',
+  PRIMARY KEY (id),
+  UNIQUE INDEX uq_platform_permissions_key (`key`)
+);
+
+CREATE TABLE platform_role_permission (
+  platform_role_id CHAR(36) NOT NULL,
+  platform_permission_id CHAR(36) NOT NULL,
+  created_at DATETIME NOT NULL,
+  updated_at DATETIME NULL,
+  deleted_at DATETIME NULL,
+  PRIMARY KEY (platform_role_id, platform_permission_id),
+  INDEX fk_platform_role_permission_platform_permissions_idx (platform_permission_id),
+  CONSTRAINT fk_platform_role_permission_platform_roles FOREIGN KEY (platform_role_id) REFERENCES platform_roles (id),
+  CONSTRAINT fk_platform_role_permission_platform_permissions FOREIGN KEY (platform_permission_id) REFERENCES platform_permissions (id)
+);
+
+-- Retirar o papel = lápide (deleted_at); dar de novo limpa o deleted_at da mesma linha. Runtime sem DELETE.
 CREATE TABLE user_platform_role (
   user_id CHAR(36) NOT NULL,
   platform_role_id CHAR(36) NOT NULL,
@@ -734,4 +759,73 @@ CREATE TABLE audit_logs (
   CONSTRAINT fk_audit_logs_users FOREIGN KEY (user_id) REFERENCES users (id),
   CONSTRAINT fk_audit_logs_spaces FOREIGN KEY (space_id) REFERENCES spaces (id),
   CONSTRAINT fk_audit_logs_hubs FOREIGN KEY (hub_id) REFERENCES hubs (id)
+);
+
+-- ---------------------------------------------------------------------------------------------------
+-- Suporte e auditoria da plataforma (só backend; depois de hubs e organizations por causa das FKs)
+-- ---------------------------------------------------------------------------------------------------
+
+-- Pedido de suporte da equipe. Quem tem platform.support.execute_alone cria já executado; os demais criam pendente
+-- e outra pessoa com platform.support.approve aprova (executa) ou recusa. Pendente vence em 7 dias (expired).
+-- Alvo por tipo (CHECK no Postgres): hub_force_deregister = só target_hub_id; org_appoint_admin =
+-- target_organization_id + target_user_id. Runtime: SELECT/INSERT/UPDATE, sem DELETE.
+CREATE TABLE platform_support_requests (
+  id CHAR(36) NOT NULL,
+  created_at DATETIME NOT NULL,
+  updated_at DATETIME NULL,
+  deleted_at DATETIME NULL,
+  type ENUM('hub_force_deregister', 'org_appoint_admin') NOT NULL,
+  status ENUM('pending', 'executed', 'rejected', 'expired', 'failed') NOT NULL,
+  requested_by_user_id CHAR(36) NOT NULL,
+  target_hub_id CHAR(36) NULL,
+  target_organization_id CHAR(36) NULL,
+  target_user_id CHAR(36) NULL COMMENT 'pessoa nomeada admin (org_appoint_admin)',
+  reason TEXT NOT NULL COMMENT 'motivo, obrigatório',
+  evidence TEXT NOT NULL COMMENT 'prova: o que foi conferido e as referências, obrigatória',
+  decided_by_user_id CHAR(36) NULL,
+  decided_at DATETIME NULL,
+  decision_note TEXT NULL COMMENT 'motivo da recusa',
+  executed_at DATETIME NULL,
+  failure_type VARCHAR(100) NULL COMMENT 'type estável do erro quando status = failed',
+  expires_at DATETIME NOT NULL,
+  PRIMARY KEY (id),
+  INDEX ix_platform_support_requests_status_created (status, created_at),
+  INDEX fk_platform_support_requests_requested_by_idx (requested_by_user_id),
+  INDEX fk_platform_support_requests_decided_by_idx (decided_by_user_id),
+  INDEX fk_platform_support_requests_target_hub_idx (target_hub_id),
+  INDEX fk_platform_support_requests_target_organization_idx (target_organization_id),
+  INDEX fk_platform_support_requests_target_user_idx (target_user_id),
+  CONSTRAINT fk_platform_support_requests_requested_by FOREIGN KEY (requested_by_user_id) REFERENCES users (id),
+  CONSTRAINT fk_platform_support_requests_target_hub FOREIGN KEY (target_hub_id) REFERENCES hubs (id),
+  CONSTRAINT fk_platform_support_requests_target_organization FOREIGN KEY (target_organization_id) REFERENCES organizations (id),
+  CONSTRAINT fk_platform_support_requests_target_user FOREIGN KEY (target_user_id) REFERENCES users (id),
+  CONSTRAINT fk_platform_support_requests_decided_by FOREIGN KEY (decided_by_user_id) REFERENCES users (id)
+);
+
+-- Trilha da equipe, só de acréscimo (runtime: INSERT/SELECT). user_id nulo = comando de linha.
+CREATE TABLE platform_audit_logs (
+  id CHAR(36) NOT NULL,
+  created_at DATETIME NOT NULL,
+  updated_at DATETIME NULL,
+  deleted_at DATETIME NULL,
+  user_id CHAR(36) NULL,
+  action VARCHAR(100) NOT NULL COMMENT 'ex.: platform.role.granted, platform.request.executed',
+  support_request_id CHAR(36) NULL,
+  target_user_id CHAR(36) NULL,
+  target_hub_id CHAR(36) NULL,
+  target_organization_id CHAR(36) NULL,
+  result ENUM('success', 'denied', 'error') NOT NULL,
+  metadata JSON NULL COMMENT 'sem segredo, token ou prova de reautenticação',
+  PRIMARY KEY (id),
+  INDEX ix_platform_audit_logs_created (created_at),
+  INDEX fk_platform_audit_logs_users_idx (user_id),
+  INDEX fk_platform_audit_logs_support_requests_idx (support_request_id),
+  INDEX fk_platform_audit_logs_target_user_idx (target_user_id),
+  INDEX fk_platform_audit_logs_target_hub_idx (target_hub_id),
+  INDEX fk_platform_audit_logs_target_organization_idx (target_organization_id),
+  CONSTRAINT fk_platform_audit_logs_users FOREIGN KEY (user_id) REFERENCES users (id),
+  CONSTRAINT fk_platform_audit_logs_support_requests FOREIGN KEY (support_request_id) REFERENCES platform_support_requests (id),
+  CONSTRAINT fk_platform_audit_logs_target_user FOREIGN KEY (target_user_id) REFERENCES users (id),
+  CONSTRAINT fk_platform_audit_logs_target_hub FOREIGN KEY (target_hub_id) REFERENCES hubs (id),
+  CONSTRAINT fk_platform_audit_logs_target_organization FOREIGN KEY (target_organization_id) REFERENCES organizations (id)
 );
