@@ -71,9 +71,9 @@ de `0x01` deve ser rejeitada; mudar o formato exige novo byte de versão.
   cliente envia a prova atual e o novo material (`kdfSalt`, `kdfParams`, `authProof`, `encryptedPrivateKey`).
   A `publicKey` não muda, então as chaves de espaço trancadas para o usuário continuam abrindo. As demais
   sessões do usuário são revogadas.
-- **Recuperação de senha por e-mail:** devolve o **login, não os dados**. A chave privada só abre com a senha.
-  O kit de recuperação da organização reabre os espaços, não a chave pessoal. Quem está sozinho e perde senha
-  e kit perde o que está cifrado.
+- **Recuperação pelo código:** devolve **login e dados**: o código abre a cópia da chave privada trancada para
+  ele (veja "Código de recuperação (v1)"). Sem o código, quem está sozinho e perde a senha perde o que está
+  cifrado; o kit de recuperação da organização reabre os espaços, não a chave pessoal.
 
 ## Sessões e refresh
 
@@ -98,6 +98,54 @@ Valores **somente para teste**, fixados em `test/support/client-crypto.spec.ts`.
 - chave privada (hex): `202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f`
 - nonce (hex): `404142434445464748494a4b4c4d4e4f5051525354555657`
 - `encryptedPrivateKey` (base64url, 73 bytes): `AUBBQkNERUZHSElKS0xNTk9QUVJTVFVWVyVmvEhw5hdU_i8_F5QXRdBzxrOQEYU4T5WNY0ytgSvemr3tpmGm9ofdjXdxwLdS-A`
+
+## Código de recuperação (v1)
+
+Segunda forma de abrir a **mesma chave privada**, para quem perdeu a senha. Contrato entre backend, app e hub.
+
+- **Código:** 32 bytes aleatórios (`randombytes_buf(32)`), 256 bits, gerados no aparelho. Como mostrar à pessoa
+  (palavras, grupos de caracteres) é decisão do app; o contrato com o backend é sobre os 32 bytes.
+- **Subchaves:** `crypto_kdf_derive_from_key(32, id, "acctrcvy", código)` (contexto de 8 bytes ASCII, diferente de
+  `"acctkeys"` e sem o nome do produto):
+  - `id = 1`: **`recoveryProof`** (vai ao servidor, que guarda só um hash com chave);
+  - `id = 2`: **chave de cifra da recuperação** (nunca sai do aparelho).
+- **Sem Argon2id:** o código já tem 256 bits de entropia, não precisa de derivação lenta.
+- **`recoveryEncryptedPrivateKey`** (73 bytes): mesma construção do `encryptedPrivateKey`,
+
+```
+0x01 ‖ nonce (24) ‖ ciphertext+tag (48)
+```
+
+  com `crypto_aead_xchacha20poly1305_ietf_encrypt(privateKey (32), ad, nonce, chaveDeCifraDaRecuperação)` e
+  **`ad = 0x01 ‖ "recovery"`** (9 bytes: `017265636f76657279`). O dado associado diferente (e a chave também)
+  impede que um blob abra no lugar do outro. Versão diferente de `0x01` deve ser rejeitada.
+
+| Campo                         | Bytes | Caracteres |
+| ----------------------------- | ----- | ---------- |
+| `recoveryProof`               | 32    | 43         |
+| `recoveryEncryptedPrivateKey` | 73    | 98         |
+
+**Fluxos**
+- **Cadastro:** obrigatório. Gerar o código, derivar, trancar a **mesma chave privada** e enviar `recoveryProof` e
+  `recoveryEncryptedPrivateKey` junto com o resto do cadastro. O app mostra o código uma única vez.
+- **Recuperar a conta (dois passos):** com e-mail e código, derivar `recoveryProof` e pedir a cópia trancada;
+  abrir localmente com a chave de cifra da recuperação; escolher senha nova e mandar o material novo da senha
+  (novo `kdfSalt`, `authProof`, `encryptedPrivateKey`).
+- **Trocar o código:** gerar código novo, derivar e trancar de novo a mesma chave privada; o código antigo deixa
+  de valer.
+- **Troca de senha não muda o código:** a chave privada e a `publicKey` são as mesmas, então a cópia da
+  recuperação continua abrindo.
+
+### Vetor de teste (código de recuperação, v1)
+
+Valores **somente para teste**, fixados em `test/support/client-crypto.spec.ts`.
+
+- código (hex): `000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f`
+- `recoveryProof` (hex): `8b694343d0339a7f4f30b5ca57d3ecc3118da01cc5417da0c604067726402354` (base64url: `i2lDQ9Azmn9PMLXKV9PswxGNoBzFQX2gxgQGdyZAI1Q`)
+- chave de cifra da recuperação (hex, valor de teste, nunca trafega): `3fc03ca419234853e609d9b7be6efb6b50bbb2d270835d7006359d70bdc61eac`
+- chave privada (hex): `202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f`
+- nonce (hex): `404142434445464748494a4b4c4d4e4f5051525354555657`
+- `recoveryEncryptedPrivateKey` (base64url, 73 bytes): `AUBBQkNERUZHSElKS0xNTk9QUVJTVFVWV8aKaX3VBFxqb4nyCks33RJ2-TY0nUZpAUgz7W8-l6zM72YsHY2axWqWtc0DyplWkw`
 
 ## Chave de espaço
 

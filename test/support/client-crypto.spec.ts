@@ -10,6 +10,10 @@ import {
   sealSpaceKey,
   openSpaceKey,
   recoveryKitKeypair,
+  deriveRecoveryKeys,
+  sealPrivateKeyForRecovery,
+  openRecoveryPrivateKey,
+  RECOVERY_AD,
   TEST_KDF_PARAMS,
 } from './client-crypto.js';
 
@@ -248,3 +252,66 @@ const SPACE_VECTOR = {
   wrappedKey:
     'AdwKH5FH2gGEG0G0xcaboGdZ8hzlNG7cZBdOFFlZj7sTux3htnYMie3AYgYtHttohH7FgzBVdy6pRWaiouIlD9NZRXGuuEuFP1THe9YvfTnX',
 };
+
+const RECOVERY_VECTOR = {
+  codeHex: '000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f',
+  privateKeyHex:
+    '202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f',
+  nonceHex: '404142434445464748494a4b4c4d4e4f5051525354555657',
+  recoveryProofHex:
+    '8b694343d0339a7f4f30b5ca57d3ecc3118da01cc5417da0c604067726402354',
+  encKeyHex: '3fc03ca419234853e609d9b7be6efb6b50bbb2d270835d7006359d70bdc61eac',
+  recoveryEncryptedPrivateKey:
+    'AUBBQkNERUZHSElKS0xNTk9QUVJTVFVWV8aKaX3VBFxqb4nyCks33RJ2-TY0nUZpAUgz7W8-l6zM72YsHY2axWqWtc0DyplWkw',
+};
+
+describe('client-crypto recovery code', () => {
+  it('derives the recovery proof and seals the private key per the v1 recovery vector', async () => {
+    const sodium = await getSodium();
+    const { recoveryProof, encKey } = await deriveRecoveryKeys(
+      sodium.from_hex(RECOVERY_VECTOR.codeHex),
+    );
+    expect(sodium.to_hex(recoveryProof)).toBe(RECOVERY_VECTOR.recoveryProofHex);
+    expect(sodium.to_hex(encKey)).toBe(RECOVERY_VECTOR.encKeyHex);
+    const blob = await sealPrivateKeyForRecovery(
+      sodium.from_hex(RECOVERY_VECTOR.privateKeyHex),
+      encKey,
+      sodium.from_hex(RECOVERY_VECTOR.nonceHex),
+    );
+    expect(blob.length).toBe(73);
+    expect(await encode(blob)).toBe(
+      RECOVERY_VECTOR.recoveryEncryptedPrivateKey,
+    );
+  });
+
+  it('opens the recovery copy back to the same private key', async () => {
+    const account = await createClientAccount('pw');
+    const opened = await openRecoveryPrivateKey(
+      account.recoveryCode,
+      account.recoveryEncryptedPrivateKey,
+    );
+    expect(opened).toEqual(account.privateKey);
+    expect(account.recoveryCode.length).toBe(32);
+    expect(account.recoveryProof).toHaveLength(43);
+    expect(account.recoveryEncryptedPrivateKey).toHaveLength(98);
+  });
+
+  it('never opens the password blob with the recovery key (different AD)', async () => {
+    const sodium = await getSodium();
+    const account = await createClientAccount('pw');
+    const { encKey } = await deriveRecoveryKeys(account.recoveryCode);
+    const open = (blob: Uint8Array, key: Uint8Array, ad: Uint8Array) =>
+      sodium.crypto_aead_xchacha20poly1305_ietf_decrypt(
+        null,
+        blob.slice(25),
+        ad,
+        blob.slice(1, 25),
+        key,
+      );
+    const passwordBlob = await decode(account.encryptedPrivateKey);
+    expect(() => open(passwordBlob, encKey, new Uint8Array([1]))).toThrow();
+    const recoveryBlob = await decode(account.recoveryEncryptedPrivateKey);
+    expect(() => open(recoveryBlob, encKey, new Uint8Array([1]))).toThrow();
+    expect(() => open(recoveryBlob, encKey, RECOVERY_AD)).not.toThrow();
+  });
+});

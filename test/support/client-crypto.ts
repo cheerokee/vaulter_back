@@ -14,6 +14,9 @@ export type ClientAccount = {
   publicKey: string;
   encryptedPrivateKey: string;
   privateKey: Uint8Array;
+  recoveryCode: Uint8Array;
+  recoveryProof: string;
+  recoveryEncryptedPrivateKey: string;
 };
 
 export const TEST_KDF_PARAMS: KdfParams = {
@@ -24,6 +27,12 @@ export const TEST_KDF_PARAMS: KdfParams = {
 
 const CONTEXT = 'acctkeys';
 const FORMAT_VERSION = 1;
+export const RECOVERY_CONTEXT = 'acctrcvy';
+/** 0x01 || ASCII "recovery" (9 bytes): keeps the two private-key blobs apart. */
+export const RECOVERY_AD = new Uint8Array([
+  FORMAT_VERSION,
+  ...new TextEncoder().encode('recovery'),
+]);
 
 async function b64(bytes: Uint8Array): Promise<string> {
   const sodium = await getSodium();
@@ -87,6 +96,84 @@ export async function sealPrivateKey(
   return blob;
 }
 
+/** Recovery subkeys straight from the 32-byte code (no Argon2id: 256 bits of entropy). */
+export async function deriveRecoveryKeys(
+  code: Uint8Array,
+): Promise<{ recoveryProof: Uint8Array; encKey: Uint8Array }> {
+  const sodium = await getSodium();
+  return {
+    recoveryProof: sodium.crypto_kdf_derive_from_key(
+      32,
+      1,
+      RECOVERY_CONTEXT,
+      code,
+    ),
+    encKey: sodium.crypto_kdf_derive_from_key(32, 2, RECOVERY_CONTEXT, code),
+  };
+}
+
+/** 0x01 || nonce(24) || AEAD(privateKey, ad = 0x01 || "recovery") -> 73 bytes. */
+export async function sealPrivateKeyForRecovery(
+  privateKey: Uint8Array,
+  encKey: Uint8Array,
+  nonce: Uint8Array,
+): Promise<Uint8Array> {
+  const sodium = await getSodium();
+  const cipher = sodium.crypto_aead_xchacha20poly1305_ietf_encrypt(
+    privateKey,
+    RECOVERY_AD,
+    null,
+    nonce,
+    encKey,
+  );
+  const blob = new Uint8Array(1 + nonce.length + cipher.length);
+  blob[0] = FORMAT_VERSION;
+  blob.set(nonce, 1);
+  blob.set(cipher, 1 + nonce.length);
+  return blob;
+}
+
+/** New random recovery code and the two values the server stores. */
+export async function createRecoveryMaterial(privateKey: Uint8Array): Promise<{
+  recoveryCode: Uint8Array;
+  recoveryProof: string;
+  recoveryEncryptedPrivateKey: string;
+}> {
+  const sodium = await getSodium();
+  const recoveryCode = sodium.randombytes_buf(32);
+  const { recoveryProof, encKey } = await deriveRecoveryKeys(recoveryCode);
+  const nonce = sodium.randombytes_buf(
+    sodium.crypto_aead_xchacha20poly1305_ietf_NPUBBYTES,
+  );
+  const blob = await sealPrivateKeyForRecovery(privateKey, encKey, nonce);
+  return {
+    recoveryCode,
+    recoveryProof: await b64(recoveryProof),
+    recoveryEncryptedPrivateKey: await b64(blob),
+  };
+}
+
+/** Throws when the code is wrong or the blob is malformed. */
+export async function openRecoveryPrivateKey(
+  code: Uint8Array,
+  recoveryEncryptedPrivateKey: string,
+): Promise<Uint8Array> {
+  const sodium = await getSodium();
+  const blob = await fromB64(recoveryEncryptedPrivateKey);
+  if (blob[0] !== FORMAT_VERSION) {
+    throw new Error('unsupported key format version');
+  }
+  const nonceLength = sodium.crypto_aead_xchacha20poly1305_ietf_NPUBBYTES;
+  const { encKey } = await deriveRecoveryKeys(code);
+  return sodium.crypto_aead_xchacha20poly1305_ietf_decrypt(
+    null,
+    blob.slice(1 + nonceLength),
+    RECOVERY_AD,
+    blob.slice(1, 1 + nonceLength),
+    encKey,
+  );
+}
+
 async function wrap(
   privateKey: Uint8Array,
   password: string,
@@ -119,6 +206,7 @@ export async function createClientAccount(
     ...wrapped,
     publicKey: await b64(keypair.publicKey),
     privateKey: keypair.privateKey,
+    ...(await createRecoveryMaterial(keypair.privateKey)),
   };
 }
 
