@@ -41,6 +41,17 @@ export class HubAccess {
     });
   }
 
+  /**
+   * Whether the person has any role on the hub (owner, explicit or implicit), read in a CLEAN context: only
+   * `app.user_id` of that person, with the caller's `app.hub_id`/`app.organization_id` blanked for the read (a hub
+   * context would show the hub to anyone). Trusted backend check (login through the hub, revocation sweeps).
+   */
+  hasAccess(hubId: string, userId: string): Promise<boolean> {
+    return this.uow.withContext({ hubId: '', organizationId: '' }, async () =>
+      Boolean(await this.find(hubId, userId)),
+    );
+  }
+
   /** Anyone who sees the hub; 404 `hub-not-found` otherwise. */
   async requireAccess(hubId: string, userId: string): Promise<HubAccessGrant> {
     const grant = await this.find(hubId, userId);

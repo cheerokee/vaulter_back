@@ -26,6 +26,7 @@ import type { HubAccess } from './hub-access.js';
 import type { SpaceStorage } from '../../spaces/application/space-storage.js';
 import { RemoveHubSpaceUseCase } from './remove-hub-space.use-case.js';
 import { RevokeRoomUseCase } from './revoke-room.use-case.js';
+import type { HubPersonSessions } from './hub-person-sessions.js';
 
 const NOW = new Date('2026-11-01T12:00:00.000Z');
 const HUB_ID = '019a0000-0000-7000-8000-0000000000aa';
@@ -117,6 +118,14 @@ const directory = {
   personalOrganizationIdOf: vi.fn(),
 };
 const audit = { record: vi.fn() };
+const personSessions = {
+  revokeLostAccess: vi.fn(async (hubIds: Iterable<string>) => {
+    calls.push(`revokeLostAccess:${[...hubIds].join(',')}`);
+  }),
+  revokeAll: vi.fn(async (hubId: string) => {
+    calls.push(`revokeAllSessions:${hubId}`);
+  }),
+};
 let depth = 0;
 let inTx = false;
 const uow = {
@@ -552,6 +561,7 @@ const administration = () =>
     as<SpaceRoomService>(room),
     as<OrganizationDirectory>(directory),
     as<AuditLog>(audit),
+    as<HubPersonSessions>(personSessions),
     as<UnitOfWork>(uow),
   );
 
@@ -612,6 +622,7 @@ describe('DeregisterHubUseCase', () => {
       'revokeAllRoom:[object Object]',
       `removeRoles:${HUB_ID}`,
       'saveHub:[object Object]',
+      `revokeAllSessions:${HUB_ID}`,
       'audit:[object Object]',
       'audit:[object Object]',
     ]);

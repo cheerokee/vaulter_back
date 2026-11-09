@@ -52,6 +52,12 @@ export const RATE_LIMITS = {
   hubLinkRequest: { limit: 10, ttl: HOUR },
   /** Código de vínculo pedido pelo Hub (`POST /hub/link-codes`): por Hub. */
   hubLinkCode: { limit: 30, ttl: HOUR },
+  /**
+   * Login de pessoa pelo Hub (`POST /hub/user-sessions`, token de Hub): dois contadores, como o `/auth/login`. Por Hub
+   * (`default`, `hubIdTracker`: o Hub faz o papel do IP; trocar de IP não zera) e por e-mail normalizado (throttler
+   * `email`, `RATE_LIMITS.loginEmail`, contador desta rota).
+   */
+  hubPersonLogin: { limit: 10, ttl: MINUTE },
   /** Sincronização do Hub (`GET /hub/sync`): por Hub. */
   hubSync: { limit: 120, ttl: HOUR },
 } as const;

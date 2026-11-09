@@ -90,6 +90,46 @@ describe('Session', () => {
     ).toThrow(expect.objectContaining({ code: 'device-invalid' }));
   });
 
+  it.each([
+    ['hub platform without a hub', 'hub', null],
+    [
+      'another platform with a hub',
+      'android',
+      '01a1c1c7-d97a-7596-9dc8-07988c27a845',
+    ],
+  ] as const)('start rejects %s with device-invalid', (_l, platform, hubId) => {
+    expect(() =>
+      Session.start({
+        userId: 'u1',
+        deviceName: 'Sala',
+        devicePlatform: platform,
+        hubId,
+        refreshTokenHash: 'h1',
+        idleDays: 30,
+        now,
+        ip: null,
+        userAgent: null,
+      }),
+    ).toThrow(expect.objectContaining({ code: 'device-invalid' }));
+  });
+
+  it('start binds a hub session to its hub', () => {
+    const hubId = '01a1c1c7-d97a-7596-9dc8-07988c27a845';
+    const s = Session.start({
+      userId: 'u1',
+      deviceName: 'Sala',
+      devicePlatform: 'hub',
+      hubId,
+      refreshTokenHash: 'h1',
+      idleDays: 30,
+      now,
+      ip: null,
+      userAgent: null,
+    });
+    expect(s.hubId).toBe(hubId);
+    expect(s.devicePlatform).toBe('hub');
+  });
+
   it('start trims the device name', () => {
     const s = Session.start({
       userId: 'u1',

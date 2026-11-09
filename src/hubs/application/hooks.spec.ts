@@ -11,6 +11,7 @@ import { Hub } from '../domain/hub.js';
 import type { HubRepository } from '../domain/hub.repository.js';
 import type { HubLinkCascade } from './hub-link-cascade.js';
 import { HubsMemberRemovedHook } from './member-removed.hook.js';
+import type { HubPersonSessions } from './hub-person-sessions.js';
 import { HubsSpaceMemberLeftHook } from './space-member-left.hook.js';
 
 const NOW = new Date('2026-11-01T12:00:00.000Z');
@@ -61,6 +62,11 @@ const hubSpaces = { lockAllOfOrganization: vi.fn() };
 const cascade = { unlink: vi.fn() };
 const room = { revokeRoom: vi.fn() };
 const audit = { record: vi.fn() };
+const personSessions = {
+  revokeLostAccess: vi.fn(async (hubIds: Iterable<string>) => {
+    calls.push(`revokeLostAccess:${[...hubIds].join(',')}`);
+  }),
+};
 const uow = {
   withContext: vi.fn(async (ctx: unknown, work: () => Promise<unknown>) => {
     calls.push(`withContext:${JSON.stringify(ctx)}`);
@@ -83,6 +89,7 @@ describe('HubsMemberRemovedHook', () => {
       as<HubRoleRepository>(hubRoles),
       as<HubLinkCascade>(cascade),
       as<AuditLog>(audit),
+      as<HubPersonSessions>(personSessions),
       as<UnitOfWork>(uow),
     );
   const ctx = {
@@ -181,6 +188,8 @@ describe('HubsMemberRemovedHook', () => {
       `lockLink:${HUB_B}`,
       `withContext:${JSON.stringify({ hubId: HUB_B })}`,
       `removeRoles:${HUB_B}`,
+      // Por último: as sessões presas aos Hubs tocados (os dela e os vinculados à organização).
+      `revokeLostAccess:${HUB_A},${HUB_B},${HUB_B}`,
     ]);
     expect(cascade.unlink.mock.calls[0]![1]).toEqual({
       actorId: ADMIN,

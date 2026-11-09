@@ -1,6 +1,7 @@
 import { UnauthenticatedError } from '../../shared/domain/errors.js';
 import type { UserRepository } from '../domain/user.repository.js';
 import { User } from '../domain/user.js';
+import { CredentialCheck } from './credential-check.js';
 import { LoginUseCase } from './login.use-case.js';
 import type { AuthProofHasher } from './ports/auth-proof-hasher.js';
 import type { SessionIssuer } from './session-issuer.js';
@@ -32,8 +33,10 @@ describe('LoginUseCase', () => {
   const hasher = { verify: vi.fn(), verifyAgainstDummy: vi.fn() };
   const issuer = { start: vi.fn() };
   const useCase = new LoginUseCase(
-    users as unknown as UserRepository,
-    hasher as unknown as AuthProofHasher,
+    new CredentialCheck(
+      users as unknown as UserRepository,
+      hasher as unknown as AuthProofHasher,
+    ),
     issuer as unknown as SessionIssuer,
   );
   const tokens = {
@@ -74,6 +77,20 @@ describe('LoginUseCase', () => {
     expect(out.keys.publicKey).toBe(user.publicKey);
     expect(out.keys.encryptedPrivateKey).toBe(user.encryptedPrivateKey);
     expect(out.session).toBe(tokens);
+  });
+
+  it('refuses the hub platform with the same invalid-credentials, after the same verification', async () => {
+    hasher.verify.mockResolvedValue(true);
+    await expect(
+      useCase.execute({
+        email: 'ana@x.com',
+        authProof: PROOF,
+        device: { name: 'Sala', platform: 'hub' },
+        client,
+      }),
+    ).rejects.toMatchObject(invalid);
+    expect(hasher.verify).toHaveBeenCalledWith('stored-hash', PROOF);
+    expect(issuer.start).not.toHaveBeenCalled();
   });
 
   it('throws invalid-credentials for wrong proof', async () => {

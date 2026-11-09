@@ -128,6 +128,11 @@ couber (spec de contas, §12).
     no lugar do outro; falha = 401 `invalid-hub-token`);
   - trade-off conhecido: quem souber o id de uma sessão pode forçar a revogação dela apresentando um refresh
     token forjado (não ganha acesso nenhum); os clientes devem **serializar** as chamadas de refresh.
+  - **sessão presa a um Hub** (`user_sessions.hub_id`, CHECK: plataforma `hub` <=> `hub_id`): só nasce pelo
+    `HubSessionIssuer.loginOnHub` (exportado; a checagem de papel é um callback `isAllowed` do `hubs`, rodado na mesma
+    transação da criação da sessão). `/auth/login` com `platform: 'hub'` dá o mesmo 401 `invalid-credentials` (depois da
+    mesma verificação, `CredentialCheck`). `HubBoundSessions` (exportado) revoga as sessões de um Hub com o motivo
+    `hub_access_lost`, chamado pelo `hubs` dentro do unit of work dele.
   - Formato v1 das chaves do usuário (Argon2id, normalização NFC da senha, vetor de teste):
     [`docs/crypto/user-keys.md`](docs/crypto/user-keys.md).
   - **Recuperação da conta pelo código de recuperação** (spec `docs/superpowers/specs/2026-11-07-account-recovery-design.md`;
@@ -538,6 +543,14 @@ consulta só de leitura (veja Sincronização).
 - **Ganchos:** `SpaceMemberLeftHooks` (o `hubs` tira da Sala o que o dono, ao sair do espaço, havia liberado);
   `MemberRemovedHooks` ganhou `order` (menor roda antes): o `hubs` assina duas vezes, `-10` (só trava) e `+10`
   (cascata). Dono do Hub que sai da organização (removido ou saindo) tem seus Hubs desvinculados dela.
+- **Login de pessoa pelo Hub** (`POST /hub/user-sessions`, token de Hub; `LoginPersonOnHubUseCase` +
+  `HubPersonSessions`): só quem tem papel no Hub (`HubAccess.hasAccess`, num contexto limpo: só `app.user_id`), senão o
+  mesmo 401 `invalid-credentials`. A sessão fica presa ao Hub e cai (`hub_access_lost`) quando a pessoa perde todo
+  papel nele: `HubPersonSessions.revokeLostAccess` roda **por último** em tirar papel, desvincular e no gancho `+10`
+  de saída da organização; o desregistro revoga todas as sessões do Hub. Corrida login × revogação: o login segura o
+  Hub FOR SHARE e um advisory lock das sessões do Hub (`HubRepository.lockPersonSessions`) compartilhado até o COMMIT; a
+  varredura pega o advisory exclusivo por último (vários Hubs em ordem de id). Fixado por
+  `test/hubs/user-sessions.e2e-spec.ts`.
 - **RLS das tabelas de Hub:** contexto novo `app.hub_id` (token de Hub) e `app.hub_signing_public_key` (abre só o Hub
   daquela chave: a apresentação confere se a chave já está em uso); o dono lê/grava seus Hubs; o Hub lê **todos** os
   próprios vínculos (qualquer status) e só os `hub_space` de vínculo aprovado; em `role_assignments` de escopo Hub o
@@ -848,6 +861,7 @@ Os valores do `.env.example` para os segredos são **só de desenvolvimento**; p
   | `POST /hubs/link-requests` | 10/h por usuário |
   | `POST /hub/link-codes` | 30/h por Hub (`hubIdTracker`) |
   | `GET /hub/sync` | 120/h por Hub (`hubIdTracker`) |
+  | `POST /hub/user-sessions` (login de pessoa pelo Hub) | 10/min por Hub (`hubIdTracker`) **e** 5/min por e-mail normalizado |
   Rota com `@Throttle` próprio tem contador próprio (por rota); `@ThrottleGroup(THROTTLE_GROUPS.x, tracker?)`
   (`throttling.decorators.ts`) faz rotas dividirem um contador (chave = grupo + tracker, sem a rota); cada grupo é
   UMA constante com nome e limite em `THROTTLE_GROUPS` (`rate-limits.ts`), e o decorator recusa o mesmo grupo com

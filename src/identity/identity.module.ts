@@ -23,6 +23,9 @@ import { CurrentAuthProofVerifier } from './application/current-auth-proof-verif
 import { UserDirectory } from './application/user-directory.js';
 import { HubTokenService } from './application/hub-token-service.js';
 import { SessionIssuer } from './application/session-issuer.js';
+import { CredentialCheck } from './application/credential-check.js';
+import { HubSessionIssuer } from './application/hub-session-issuer.js';
+import { HubBoundSessions } from './application/hub-bound-sessions.js';
 import { SessionRepository } from './domain/session.repository.js';
 import { UserRepository } from './domain/user.repository.js';
 import { JoseAccessTokenService } from './infra/crypto/jose-access-token-service.js';
@@ -56,6 +59,9 @@ import { SessionsController } from './infra/http/sessions.controller.js';
     { provide: RefreshTokenCodec, useClass: SodiumRefreshTokenCodec },
     { provide: DecoySaltFactory, useClass: SodiumDecoySaltFactory },
     SessionIssuer,
+    CredentialCheck,
+    HubSessionIssuer,
+    HubBoundSessions,
     PreLoginUseCase,
     RegisterUserUseCase,
     LoginUseCase,
@@ -73,6 +79,14 @@ import { SessionsController } from './infra/http/sessions.controller.js';
     CurrentAuthProofVerifier,
   ],
   // HubTokenService: para o módulo `hubs` (token de Hub com as mesmas chaves do token de usuário).
-  exports: [UserDirectory, CurrentAuthProofVerifier, HubTokenService],
+  // HubSessionIssuer / HubBoundSessions: login de pessoa pelo Hub e revogação das sessões presas a ele (o `hubs`
+  // decide quem tem papel; o identity não o importa).
+  exports: [
+    UserDirectory,
+    CurrentAuthProofVerifier,
+    HubTokenService,
+    HubSessionIssuer,
+    HubBoundSessions,
+  ],
 })
 export class IdentityModule {}

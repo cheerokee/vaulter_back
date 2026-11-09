@@ -29,6 +29,7 @@ import type { HubCodeHasher } from './ports/hub-code-hasher.js';
 import { RejectHubLinkUseCase } from './reject-hub-link.use-case.js';
 import { RequestHubLinkUseCase } from './request-hub-link.use-case.js';
 import { UnlinkHubOrganizationUseCase } from './unlink-hub-organization.use-case.js';
+import type { HubPersonSessions } from './hub-person-sessions.js';
 
 const NOW = new Date('2026-11-01T12:00:00.000Z');
 const HUB_ID = '019a0000-0000-7000-8000-0000000000aa';
@@ -86,6 +87,14 @@ const links = { lockForUpdate: vi.fn(), upsert: vi.fn() };
 const linkCodes = { consume: vi.fn(), expireStale: vi.fn(), create: vi.fn() };
 const codes = { hashLinkCode: vi.fn(), newCode: vi.fn() };
 const audit = { record: vi.fn() };
+const personSessions = {
+  revokeLostAccess: vi.fn(async (hubIds: Iterable<string>) => {
+    calls.push(`revokeLostAccess:${[...hubIds].join(',')}`);
+  }),
+  revokeAll: vi.fn(async (hubId: string) => {
+    calls.push(`revokeAllSessions:${hubId}`);
+  }),
+};
 const cascade = { unlink: vi.fn() };
 const hubSpaces = { removeAllOfOrganization: vi.fn() };
 const hubRoles = { removeUsersWithoutLinkedOrg: vi.fn() };
@@ -183,6 +192,7 @@ describe('approve, reject and unlink never reveal whether a hub exists to a non-
           as<HubRepository>(hubs),
           as<HubOrganizationRepository>(links),
           as<HubLinkCascade>(cascade),
+          as<HubPersonSessions>(personSessions),
           as<UnitOfWork>(uow),
         ),
     ],
@@ -503,6 +513,7 @@ describe('UnlinkHubOrganizationUseCase', () => {
       as<HubRepository>(hubs),
       as<HubOrganizationRepository>(links),
       as<HubLinkCascade>(cascade),
+      as<HubPersonSessions>(personSessions),
       as<UnitOfWork>(uow),
     );
 
@@ -515,6 +526,7 @@ describe('UnlinkHubOrganizationUseCase', () => {
       'lockHub:true',
       'lockLink',
       'cascade:true',
+      `revokeLostAccess:${HUB_ID}`,
     ]);
     expect(cascade.unlink).toHaveBeenCalledWith(link, {
       actorId: OWNER,

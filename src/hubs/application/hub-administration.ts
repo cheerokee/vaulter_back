@@ -13,6 +13,7 @@ import { HubRoleRepository } from '../domain/hub-role.repository.js';
 import { HubSpaceRepository } from '../domain/hub-space.repository.js';
 import { HubRepository } from '../domain/hub.repository.js';
 import { hubNotFound } from './hub-errors.js';
+import { HubPersonSessions } from './hub-person-sessions.js';
 import { ownerAuditOrganization } from './owner-audit.js';
 
 /** What the platform team sees of a hub: no key, nothing encrypted. */
@@ -42,7 +43,9 @@ export type HubAdministrationSummary = {
 //    no RLS de cada organização), com lápide nas cópias do Hub e troca de chave pendente;
 // 5. lápide em todas as atribuições do escopo do Hub, hub_owner e hub_room inclusive;
 // 6. lápide no próprio Hub (o token de Hub passa a ser recusado) e `hub.deregistered` na organização pessoal do
-//    dono; cada organização com vínculo vivo recebe `hub.organization.revoked`.
+//    dono; cada organização com vínculo vivo recebe `hub.organization.revoked`;
+// 7. toda sessão de pessoa presa ao Hub cai (`hub_access_lost`, dono inclusive). Sem advisory: o login pelo Hub
+//    segura o Hub FOR SHARE, que o FOR UPDATE do passo 1 serializa.
 // Locks: Hub (FOR UPDATE) -> vínculos (em ordem de organização) -> hub_space -> espaços (em ordem de id, por
 // organização). Hub inexistente, desregistrado ou id malformado: `hub-not-found`.
 @Injectable()
@@ -55,6 +58,7 @@ export class HubAdministration {
     private readonly room: SpaceRoomService,
     private readonly directory: OrganizationDirectory,
     private readonly audit: AuditLog,
+    private readonly personSessions: HubPersonSessions,
     private readonly uow: UnitOfWork,
   ) {}
 
@@ -97,6 +101,7 @@ export class HubAdministration {
         await this.hubRoles.removeAllOfHub(hubId);
         hub.deregister(now);
         await this.hubs.save(hub);
+        await this.personSessions.revokeAll(hubId);
 
         for (const organizationId of revokedOrgIds) {
           await this.audit.record({

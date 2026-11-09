@@ -76,6 +76,10 @@ import { OrganizationHubLinksController } from './infra/http/organization-hub-li
 import { HubTokenGuard } from './infra/http/hub-token.guard.js';
 import { LinkCodeTypeormRepository } from './infra/db/link-code.typeorm-repository.js';
 
+import { HubUserSessionsController } from './infra/http/hub-user-sessions.controller.js';
+import { HubPersonSessions } from './application/hub-person-sessions.js';
+import { LoginPersonOnHubUseCase } from './application/login-person-on-hub.use-case.js';
+
 @Module({
   imports: [
     // Uma direção só: hubs usa o que identity, organizations e spaces exportam; nenhum deles importa hubs.
@@ -100,6 +104,7 @@ import { LinkCodeTypeormRepository } from './infra/db/link-code.typeorm-reposito
     HubSpacesController,
     HubSyncController,
     HubStorageController,
+    HubUserSessionsController,
     OrganizationHubLinksController,
   ],
   providers: [
@@ -156,6 +161,8 @@ import { LinkCodeTypeormRepository } from './infra/db/link-code.typeorm-reposito
     SyncHubUseCase,
     ReportHubStorageUseCase,
     HubsSpaceQuotaHook,
+    HubPersonSessions,
+    LoginPersonOnHubUseCase,
   ],
   // Para os outros módulos: checagem de acesso ao Hub e as operações administrativas (o `platform` as usa; o `hubs`
   // não o importa).

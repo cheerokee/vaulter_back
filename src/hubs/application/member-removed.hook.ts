@@ -14,6 +14,7 @@ import { HubRoleRepository } from '../domain/hub-role.repository.js';
 import { HubSpaceRepository } from '../domain/hub-space.repository.js';
 import { HubRepository } from '../domain/hub.repository.js';
 import { HubLinkCascade } from './hub-link-cascade.js';
+import { HubPersonSessions } from './hub-person-sessions.js';
 
 const LOCK_HOOK = 'hubs.member-removed.lock';
 const CASCADE_HOOK = 'hubs.member-removed';
@@ -34,6 +35,8 @@ const CASCADE_ORDER = 10;
 //    então todo espaço na Sala é um espaço da pessoa, já tratado em 2; `revokeRoomForOrganization` não trava uma
 //    segunda rodada de espaços (sem risco de 40P01 aqui). Depois, lápide nos papéis de Hub de quem ficou sem
 //    organização vinculada (no contexto do Hub), auditados como `hub.role.changed` nesta organização.
+// 4. por último, as sessões presas aos Hubs tocados (os da pessoa desvinculados e os vinculados a esta organização)
+//    de quem ficou sem papel neles caem (`HubPersonSessions.revokeLostAccess`, advisory em ordem de id do Hub).
 @Injectable()
 export class HubsMemberRemovedHook implements OnModuleInit, OnModuleDestroy {
   constructor(
@@ -44,6 +47,7 @@ export class HubsMemberRemovedHook implements OnModuleInit, OnModuleDestroy {
     private readonly hubRoles: HubRoleRepository,
     private readonly cascade: HubLinkCascade,
     private readonly audit: AuditLog,
+    private readonly personSessions: HubPersonSessions,
     private readonly uow: UnitOfWork,
   ) {}
 
@@ -100,9 +104,9 @@ export class HubsMemberRemovedHook implements OnModuleInit, OnModuleDestroy {
       });
     }
 
-    for (const hubId of await this.links.listApprovedHubIdsOfOrganization(
-      organizationId,
-    )) {
+    const approved =
+      await this.links.listApprovedHubIdsOfOrganization(organizationId);
+    for (const hubId of approved) {
       const removed = await this.uow.withContext({ hubId }, () =>
         this.hubRoles.removeUsersWithoutLinkedOrg(hubId),
       );
@@ -120,5 +124,10 @@ export class HubsMemberRemovedHook implements OnModuleInit, OnModuleDestroy {
         });
       }
     }
+
+    await this.personSessions.revokeLostAccess([
+      ...owned.map((l) => l.hubId),
+      ...approved,
+    ]);
   }
 }

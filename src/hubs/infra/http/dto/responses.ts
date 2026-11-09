@@ -1,3 +1,4 @@
+import type { LoginResult } from '../../../../identity/application/dto/login-result.js';
 import type {
   HubLinkRequestView,
   HubLinkView,
@@ -94,4 +95,29 @@ export function hubRoleResponse(v: {
   roleKey: string;
 }) {
   return { hubId: v.hubId, userId: v.userId, roleKey: v.roleKey };
+}
+
+/** A person's login through the hub: the same shape as `/auth/login` (user, locked keys, session tokens). */
+export function personLoginResponse(r: LoginResult) {
+  return {
+    user: {
+      id: r.user.id,
+      name: r.user.name,
+      email: r.user.email,
+      createdAt: r.user.createdAt.toISOString(),
+    },
+    keys: {
+      publicKey: r.keys.publicKey,
+      encryptedPrivateKey: r.keys.encryptedPrivateKey,
+      kdfSalt: r.keys.kdfSalt,
+      kdfParams: { ...r.keys.kdfParams },
+    },
+    session: {
+      sessionId: r.session.sessionId,
+      accessToken: r.session.accessToken,
+      accessTokenExpiresAt: r.session.accessTokenExpiresAt.toISOString(),
+      refreshToken: r.session.refreshToken,
+      refreshTokenExpiresAt: r.session.refreshTokenExpiresAt.toISOString(),
+    },
+  };
 }

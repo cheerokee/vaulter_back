@@ -56,8 +56,8 @@ export async function enrollBody(
 
 /**
  * The Hub device over HTTP, with the REAL hub crypto (docs/crypto/hub-identity.md): generates its keys, enrolls,
- * polls the enrollment status with signed headers, authenticates (challenge + token), asks for link codes and
- * syncs. The private keys never leave this object. The raw request helpers return the supertest request, so a spec
+ * polls the enrollment status with signed headers, authenticates (challenge + token), asks for link codes, logs
+ * people in (`loginPerson`) and syncs. The private keys never leave this object. The raw request helpers return the supertest request, so a spec
  * can assert errors (opening a sealed copy is `hubsKit().hubOpens`); the flow helpers (`enrolled`, `waitClaimed`, `authenticate`, `syncAll`) throw on a non-2xx.
  */
 export function hubClient(getApp: () => INestApplication) {
@@ -136,6 +136,21 @@ export function hubClient(getApp: () => INestApplication) {
   const linkCode = (accessToken: string) =>
     http().post('/hub/link-codes').set(bearer(accessToken)).send();
 
+  /**
+   * A person logs in through the hub (`POST /hub/user-sessions`, hub token): the session is bound to this hub. Only
+   * someone with a role on the hub gets in; the platform is always `hub` (the body has only the device name).
+   */
+  const loginPerson = (
+    accessToken: string,
+    email: string,
+    authProof: string,
+    deviceName = 'Sala',
+  ) =>
+    http()
+      .post('/hub/user-sessions')
+      .set(bearer(accessToken))
+      .send({ email, authProof, device: { name: deviceName } });
+
   /** Polls the status until it is `claimed` (a few tries; the claim already happened in the tests). */
   const waitClaimed = async (device: EnrolledHub): Promise<ClaimedHub> => {
     for (let i = 0; i < 5; i++) {
@@ -172,6 +187,7 @@ export function hubClient(getApp: () => INestApplication) {
     sync,
     syncAll,
     linkCode,
+    loginPerson,
     enrolled,
     waitClaimed,
     /**

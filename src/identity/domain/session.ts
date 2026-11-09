@@ -7,12 +7,16 @@ export type SessionRevokedReason =
   | 'revoked'
   | 'refresh_reuse'
   | 'password_change'
-  | 'account_recovery';
+  | 'account_recovery'
+  /** A hub-bound session whose person lost every role on that hub (or the hub was deregistered). */
+  | 'hub_access_lost';
 
 export type SessionProps = {
   userId: string;
   deviceName: string;
   devicePlatform: DevicePlatform;
+  /** The hub that opened the session (`POST /hub/user-sessions`); set exactly when the platform is `hub`. */
+  hubId: string | null;
   refreshTokenHash: string;
   refreshExpiresAt: Date;
   lastUsedAt: Date;
@@ -61,6 +65,8 @@ export class Session extends Entity<SessionProps> {
     userId: string;
     deviceName: string;
     devicePlatform: DevicePlatform;
+    /** Only for a session opened by a hub; required then (and only then). */
+    hubId?: string | null;
     refreshTokenHash: string;
     idleDays: number;
     now: Date;
@@ -71,11 +77,20 @@ export class Session extends Entity<SessionProps> {
       name: input.deviceName,
       platform: input.devicePlatform,
     });
+    const hubId = input.hubId ?? null;
+    // Sessão de Hub só nasce pelo Hub (presa a ele); nenhuma outra plataforma leva Hub. Mesmo CHECK no banco.
+    if ((device.platform === 'hub') !== (hubId !== null)) {
+      throw new DomainValidationError(
+        'device-invalid',
+        'The device name or platform is invalid.',
+      );
+    }
     return new Session(
       {
         userId: input.userId,
         deviceName: device.name,
         devicePlatform: device.platform,
+        hubId,
         refreshTokenHash: input.refreshTokenHash,
         refreshExpiresAt: addDays(input.now, input.idleDays),
         lastUsedAt: input.now,
@@ -126,6 +141,9 @@ export class Session extends Entity<SessionProps> {
   }
   get devicePlatform(): DevicePlatform {
     return this.props.devicePlatform;
+  }
+  get hubId(): string | null {
+    return this.props.hubId;
   }
   get refreshTokenHash(): string {
     return this.props.refreshTokenHash;

@@ -73,16 +73,19 @@ CREATE TABLE user_sessions (
   user_id CHAR(36) NOT NULL,
   device_name VARCHAR(100) NOT NULL,
   device_platform ENUM('android', 'ios', 'hub', 'web', 'other') NOT NULL DEFAULT 'other',
+  hub_id CHAR(36) NULL COMMENT 'Hub que abriu a sessão (POST /hub/user-sessions); CHECK: device_platform = hub <=> hub_id preenchido; cai (hub_access_lost) quando a pessoa perde o papel no Hub',
   refresh_token_hash VARCHAR(128) NOT NULL COMMENT 'hash do refresh atual; refresh rotativo, reuso revoga a sessão',
   refresh_expires_at DATETIME NOT NULL COMMENT '30 dias de inatividade, renovado a cada refresh',
   last_used_at DATETIME NOT NULL,
   last_ip VARCHAR(45) NULL,
   user_agent VARCHAR(500) NULL,
   revoked_at DATETIME NULL,
-  revoked_reason ENUM('logout', 'revoked', 'refresh_reuse', 'password_change', 'account_recovery') NULL,
+  revoked_reason ENUM('logout', 'revoked', 'refresh_reuse', 'password_change', 'account_recovery', 'hub_access_lost') NULL,
   PRIMARY KEY (id),
   INDEX ix_user_sessions_user (user_id, revoked_at),
-  CONSTRAINT fk_user_sessions_users FOREIGN KEY (user_id) REFERENCES users (id)
+  INDEX ix_user_sessions_hub (hub_id, user_id) COMMENT 'só sessões vivas presas a um Hub (WHERE hub_id IS NOT NULL AND revoked_at IS NULL no Postgres)',
+  CONSTRAINT fk_user_sessions_users FOREIGN KEY (user_id) REFERENCES users (id),
+  CONSTRAINT fk_user_sessions_hubs FOREIGN KEY (hub_id) REFERENCES hubs (id)
 );
 
 -- Papéis da plataforma (equipe: suporte, financeiro...). Separados dos papéis de cliente (roles), que têm escopo

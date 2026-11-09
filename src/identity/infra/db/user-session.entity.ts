@@ -13,9 +13,18 @@ import type {
 )
 @Check(
   'ck_user_sessions_revoked_reason',
-  `"revoked_reason" IS NULL OR "revoked_reason" IN ('logout', 'revoked', 'refresh_reuse', 'password_change', 'account_recovery')`,
+  `"revoked_reason" IS NULL OR "revoked_reason" IN ('logout', 'revoked', 'refresh_reuse', 'password_change', 'account_recovery', 'hub_access_lost')`,
+)
+// Sessão aberta pelo Hub (`POST /hub/user-sessions`) fica presa a ele, e só ela: plataforma `hub` <=> `hub_id`.
+@Check(
+  'ck_user_sessions_hub_bound',
+  `("device_platform" = 'hub') = ("hub_id" IS NOT NULL)`,
 )
 @Index('ix_user_sessions_user', ['userId', 'revokedAt'])
+// Revogação por Hub: só as sessões vivas presas a ele.
+@Index('ix_user_sessions_hub', ['hubId', 'userId'], {
+  where: '"hub_id" IS NOT NULL AND "revoked_at" IS NULL',
+})
 export class UserSessionTypeormEntity extends BaseTypeormEntity {
   @Column({ type: 'uuid' })
   userId!: string;
@@ -33,6 +42,17 @@ export class UserSessionTypeormEntity extends BaseTypeormEntity {
 
   @Column({ type: 'varchar', length: 20, default: 'other' })
   devicePlatform!: DevicePlatform;
+
+  @Column({ type: 'uuid', nullable: true })
+  hubId!: string | null;
+
+  // Só descreve a FK (por nome: o identity não importa o módulo hubs); o domínio usa apenas hubId.
+  @ManyToOne('HubTypeormEntity')
+  @JoinColumn({
+    name: 'hub_id',
+    foreignKeyConstraintName: 'fk_user_sessions_hubs',
+  })
+  hub?: { id: string };
 
   @Column({ type: 'varchar', length: 128 })
   refreshTokenHash!: string;

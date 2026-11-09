@@ -202,6 +202,23 @@ export class HubTypeormRepository extends HubRepository {
     }
   }
 
+  // Advisory lock de transação (some no COMMIT/ROLLBACK), chave (namespace, Hub) com `hashtext`: uma colisão só
+  // serializa dois Hubs à toa. Não é linha: não conflita com nenhum lock de linha nem com o RLS.
+  async lockPersonSessions(
+    hubId: string,
+    mode: 'shared' | 'exclusive',
+  ): Promise<void> {
+    requireUnitOfWork(this.dataSource, 'HubRepository.lockPersonSessions');
+    const fn =
+      mode === 'shared'
+        ? 'pg_advisory_xact_lock_shared'
+        : 'pg_advisory_xact_lock';
+    await currentManager(this.dataSource).query(
+      `SELECT ${fn}(hashtext('hub-person-sessions'), hashtext($1))`,
+      [hubId],
+    );
+  }
+
   // Só a coluna da capacidade (GRANT de UPDATE por coluna): nunca grava nome/lápide lidos antes.
   async setStorageCapacity(hubId: string, bytes: number): Promise<boolean> {
     if (!validate(hubId)) return false;

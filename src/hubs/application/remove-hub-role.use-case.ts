@@ -8,11 +8,14 @@ import { HubRoleRules } from '../domain/hub-roles.js';
 import { HubRepository } from '../domain/hub.repository.js';
 import { HubAccess } from './hub-access.js';
 import { hubNotFound } from './hub-errors.js';
+import { HubPersonSessions } from './hub-person-sessions.js';
 import { ownerAuditOrganization } from './owner-audit.js';
 
 // Tira o papel de Hub explícito de um membro (`DELETE /hubs/:id/roles/:userId`): só o dono (404/403), nunca o dele
 // (422 `hub-owner-protected`). Idempotente; a pessoa continua `hub_user` implícito enquanto for membro de uma
-// organização vinculada. Auditado na organização pessoal do dono, só quando havia papel.
+// organização vinculada. Auditado na organização pessoal do dono, só quando havia papel. Depois, as sessões presas
+// ao Hub de quem ficou sem papel nenhum caem (`hub_access_lost`); hoje quem tem papel explícito é sempre membro de
+// organização vinculada (segue `hub_user` implícito), então isso só pega o caso de uma invariante quebrada.
 @Injectable()
 export class RemoveHubRoleUseCase {
   constructor(
@@ -21,6 +24,7 @@ export class RemoveHubRoleUseCase {
     private readonly hubs: HubRepository,
     private readonly hubRoles: HubRoleRepository,
     private readonly audit: AuditLog,
+    private readonly personSessions: HubPersonSessions,
     private readonly uow: UnitOfWork,
   ) {}
 
@@ -46,6 +50,7 @@ export class RemoveHubRoleUseCase {
         action: 'hub.role.changed',
         metadata: { hubId, targetUserId: userId, roleKey: null },
       });
+      await this.personSessions.revokeLostAccess([hubId]);
     });
   }
 }

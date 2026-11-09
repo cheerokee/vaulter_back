@@ -7,13 +7,15 @@ import { HubRepository } from '../domain/hub.repository.js';
 import { HubAccess } from './hub-access.js';
 import { hubLinkNotFound, hubNotFound } from './hub-errors.js';
 import { HubLinkCascade } from './hub-link-cascade.js';
+import { HubPersonSessions } from './hub-person-sessions.js';
 import { resolveLinkDecider } from './link-decider.js';
 
 // Desvincular (`DELETE /hubs/:id/organizations/:orgId`, spec §4.6): o dono ou um admin da organização
 // (`org.hubs.approve`), a qualquer momento, de um vínculo aprovado ou pendente (cancelar); senão 409
 // `link-not-active`. Numa transação: Hub (FOR SHARE) -> vínculo (FOR UPDATE, segurado até o fim: a revogação da
 // Sala depende disso) -> a cascata (`HubLinkCascade`: espaços da organização no Hub, Sala e cópias com troca
-// pendente, papéis de Hub de quem ficou sem organização vinculada, auditoria).
+// pendente, papéis de Hub de quem ficou sem organização vinculada, auditoria) -> as sessões presas ao Hub de quem
+// ficou sem papel nele caem (`HubPersonSessions.revokeLostAccess`, por último).
 @Injectable()
 export class UnlinkHubOrganizationUseCase {
   constructor(
@@ -22,6 +24,7 @@ export class UnlinkHubOrganizationUseCase {
     private readonly hubs: HubRepository,
     private readonly links: HubOrganizationRepository,
     private readonly cascade: HubLinkCascade,
+    private readonly personSessions: HubPersonSessions,
     private readonly uow: UnitOfWork,
   ) {}
 
@@ -49,6 +52,7 @@ export class UnlinkHubOrganizationUseCase {
         actorId: actor.userId,
         reason: 'unlinked',
       });
+      await this.personSessions.revokeLostAccess([hubId]);
     });
   }
 }

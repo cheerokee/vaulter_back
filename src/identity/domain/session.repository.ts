@@ -37,4 +37,19 @@ export abstract class SessionRepository {
     now: Date,
     exceptSessionId?: string,
   ): Promise<void>;
+  /** Users with a live (not revoked) session bound to the hub, distinct, in id order. */
+  abstract activeUserIdsOnHub(hubId: string): Promise<string[]>;
+  /** Revokes (first reason wins) the user's live sessions bound to the hub; returns how many. */
+  abstract revokeAllForUserOnHub(
+    userId: string,
+    hubId: string,
+    reason: SessionRevokedReason,
+    now: Date,
+  ): Promise<number>;
+  /** Revokes (first reason wins) every live session bound to the hub; returns how many. */
+  abstract revokeAllOnHub(
+    hubId: string,
+    reason: SessionRevokedReason,
+    now: Date,
+  ): Promise<number>;
 }

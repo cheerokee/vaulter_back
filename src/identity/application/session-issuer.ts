@@ -22,11 +22,13 @@ export class SessionIssuer {
     private readonly config: ConfigService,
   ) {}
 
+  /** `hubId`: only for a session opened by a hub (`HubSessionIssuer`), with the `hub` platform. */
   async start(
     user: User,
     device: DeviceInput,
     client: ClientInfo,
     now: Date,
+    hubId: string | null = null,
   ): Promise<SessionTokens> {
     const sessionId = newId();
     const refresh = await this.refreshCodec.generate(sessionId);
@@ -35,6 +37,7 @@ export class SessionIssuer {
       userId: user.id,
       deviceName: device.name,
       devicePlatform: device.platform,
+      hubId,
       refreshTokenHash: refresh.hash,
       idleDays: refreshIdleDays(this.config),
       now,

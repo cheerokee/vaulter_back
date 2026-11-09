@@ -116,4 +116,50 @@ export class UserSessionTypeormRepository extends SessionRepository {
       qb.andWhere('id <> :exceptSessionId', { exceptSessionId });
     await qb.execute();
   }
+
+  async activeUserIdsOnHub(hubId: string): Promise<string[]> {
+    const rows: { user_id: string }[] = await this.repo
+      .createQueryBuilder('s')
+      .select('DISTINCT s.user_id', 'user_id')
+      .where('s.hub_id = :hubId', { hubId })
+      .andWhere('s.revoked_at IS NULL')
+      .andWhere('s.deleted_at IS NULL')
+      .orderBy('s.user_id')
+      .getRawMany();
+    return rows.map((r) => r.user_id);
+  }
+
+  async revokeAllForUserOnHub(
+    userId: string,
+    hubId: string,
+    reason: SessionRevokedReason,
+    now: Date,
+  ): Promise<number> {
+    const result = await this.repo
+      .createQueryBuilder()
+      .update(UserSessionTypeormEntity)
+      .set({ revokedAt: now, revokedReason: reason })
+      .where('hub_id = :hubId', { hubId })
+      .andWhere('user_id = :userId', { userId })
+      .andWhere('revoked_at IS NULL')
+      .andWhere('deleted_at IS NULL')
+      .execute();
+    return result.affected ?? 0;
+  }
+
+  async revokeAllOnHub(
+    hubId: string,
+    reason: SessionRevokedReason,
+    now: Date,
+  ): Promise<number> {
+    const result = await this.repo
+      .createQueryBuilder()
+      .update(UserSessionTypeormEntity)
+      .set({ revokedAt: now, revokedReason: reason })
+      .where('hub_id = :hubId', { hubId })
+      .andWhere('revoked_at IS NULL')
+      .andWhere('deleted_at IS NULL')
+      .execute();
+    return result.affected ?? 0;
+  }
 }

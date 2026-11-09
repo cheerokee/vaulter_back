@@ -48,6 +48,16 @@ export abstract class HubRepository {
     hubId: string,
     opts?: { nowait?: boolean },
   ): Promise<Hub | null>;
+  /**
+   * Transaction-level advisory lock on the PEOPLE SESSIONS of a hub (not on any row). REQUIRES an active unit of work.
+   * `shared`: a login through the hub, held from the role check until its session commits; `exclusive`: a revocation
+   * sweep, taken right before reading the hub's sessions. So a sweep either sees the new session or the login sees
+   * the lost role. Taken LAST (after every row lock of the caller); a sweep over several hubs takes them in id order.
+   */
+  abstract lockPersonSessions(
+    hubId: string,
+    mode: 'shared' | 'exclusive',
+  ): Promise<void>;
   /** Writes only the reported capacity of an ACTIVE hub (no read-modify-write of the row); false when none. */
   abstract setStorageCapacity(hubId: string, bytes: number): Promise<boolean>;
 }

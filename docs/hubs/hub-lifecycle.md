@@ -263,8 +263,25 @@ Hub, como faria para uma pessoa.
 
 ## 10. Pessoas usando o Hub
 
-- **Online:** a pessoa faz o login normal do `identity` (`/auth/prelogin` + `/auth/login`), com
-  `device.platform = 'hub'`. Não há rota nova.
+- **Online (login pelo Hub):** o Hub pede o salt e os parâmetros da pessoa (`POST /auth/prelogin`, rota comum),
+  deriva a prova da senha (`docs/crypto/user-keys.md`) e faz o login **com o token de Hub**:
+  `POST /hub/user-sessions` com `{ "email", "authProof", "device": { "name" } }` (o `device` só tem o nome; a
+  plataforma é sempre `hub`). Resposta 200 igual à do `/auth/login`: `user`, `keys` (chave privada trancada, salt,
+  parâmetros) e `session` (`sessionId`, `accessToken`, `refreshToken` e as validades). Daí em diante é uma sessão comum
+  de usuário (`/auth/refresh`, `/auth/logout`, rotas de usuário com o `accessToken`).
+  - **Só entra quem tem papel no Hub:** dono, `hub_operator`/`hub_user` explícito ou `hub_user` implícito (membro ativo
+    de organização com vínculo aprovado). Quem não tem papel recebe o **mesmo** 401 `invalid-credentials` da senha
+    errada e do e-mail desconhecido (sem oráculo). O Hub também confere localmente (conhece os membros pela
+    sincronização); o backend é a segunda trava.
+  - **`/auth/login` com `device.platform = 'hub'` dá 401 `invalid-credentials`** (e o cadastro com `hub`, 422
+    `device-invalid`): sessão de Hub só nasce por esta rota.
+  - **A sessão fica presa ao Hub** e cai sozinha (o refresh passa a dar 401 `invalid-refresh-token`; o motivo gravado é
+    `hub_access_lost`) quando a pessoa perde todo papel nele: desvincular a organização que dava o papel, a pessoa sair
+    ou ser removida da organização, o dono tirar o papel explícito de quem não tem outro (hoje quem tem papel
+    explícito segue `hub_user` implícito, então a sessão continua), ou o Hub ser desregistrado (todas as sessões do
+    Hub, inclusive a do dono). Sessões da mesma pessoa em outros aparelhos ou em outros Hubs não mudam. Ao receber 401
+    no refresh, o Hub descarta a sessão e pede a senha de novo (se ainda tiver papel, entra).
+  - Limites: 10/min por Hub e 5/min por e-mail (a mesma regra do `/auth/login`, com o Hub no lugar do IP).
 - **Offline:** o Hub tem o material trancado da pessoa (vindo da sincronização). A senha deriva a chave (Argon2id,
   `docs/crypto/user-keys.md`) e abre a chave privada dela, que abre as cópias da chave dos espaços.
 - **Sala:** sem login, o Hub abre com a própria chave X25519 as cópias trancadas para ele (passo 8).
@@ -294,14 +311,17 @@ Todas são atômicas: se algo falha, nada muda.
   - o vínculo fica revogado;
   - os espaços da organização saem do Hub;
   - a Sala e as cópias desses espaços caem, e a troca de chave fica pendente;
-  - perdem o papel no Hub as pessoas que ficaram sem nenhuma organização vinculada.
+  - perdem o papel no Hub as pessoas que ficaram sem nenhuma organização vinculada;
+  - as sessões presas ao Hub de quem ficou sem papel nele caem (passo 10).
 
   O Hub vê a lápide do vínculo na próxima sincronização e apaga tudo daquela organização.
 - **O dono sai de um espaço:** as liberações desse espaço na Sala dos Hubs dele caem.
-- **Uma pessoa sai da organização:** perde o papel no Hub se ficou sem organização vinculada. Se for o dono do Hub,
-  os Hubs dele são desvinculados dessa organização.
+- **Uma pessoa sai da organização:** perde o papel no Hub se ficou sem organização vinculada, e as sessões dela
+  presas a esse Hub caem. Se for o dono do Hub, os Hubs dele são desvinculados dessa organização (e caem as sessões de
+  quem ficou sem papel neles).
 - **Desregistrar** (`DELETE /hubs/:id`, só o dono): lápide no Hub, em todos os vínculos, espaços e papéis, e a Sala
-  cai em toda organização a que o Hub já foi vinculado. Audita `hub.deregistered`. A partir daí:
+  cai em toda organização a que o Hub já foi vinculado; toda sessão de pessoa aberta pelo Hub cai. Audita
+  `hub.deregistered`. A partir daí:
   - a autenticação do Hub falha (`hub-auth-failed`) e o token em uso deixa de valer (401);
   - o backend não avisa o Hub (não há canal de push ainda) e, de propósito, o erro não diz "desregistrado" (seria um
     oráculo). O Hub que recebe `hub-auth-failed` repetidamente com as próprias chaves intactas deve entender que foi
@@ -336,6 +356,7 @@ Assim nada do dono anterior chega a um dono novo.
 | `POST /hubs/claim` | 30/h e 10/h | IP e usuário |
 | `POST /hubs/link-requests` | 10/h | usuário |
 | `POST /hub/link-codes` | 30/h | Hub |
+| `POST /hub/user-sessions` | 10/min e 5/min | Hub e e-mail |
 | `GET /hub/sync` | 120/h | Hub |
 | demais rotas | 300/min somando todas | IP |
 

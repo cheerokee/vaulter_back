@@ -17,6 +17,7 @@ export function makeSession(
       userId: overrides.userId ?? 'u1',
       deviceName: 'Pixel',
       devicePlatform: 'android',
+      hubId: null,
       refreshTokenHash: overrides.hash ?? hexHash(1),
       refreshExpiresAt: overrides.expiresAt ?? new Date('2026-11-24T12:00:00Z'),
       lastUsedAt: new Date('2026-10-24T11:00:00Z'),

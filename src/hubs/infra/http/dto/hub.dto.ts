@@ -1,13 +1,17 @@
-import { Type } from 'class-transformer';
+import { Transform, Type } from 'class-transformer';
 import {
   ArrayMaxSize,
   ArrayMinSize,
   IsArray,
+  IsDefined,
+  IsEmail,
   IsIn,
   IsInt,
+  IsObject,
   IsOptional,
   IsString,
   IsUUID,
+  Length,
   Matches,
   Max,
   MaxLength,
@@ -179,4 +183,36 @@ export class HubStorageDto {
   @Min(HUB_STORAGE_CAPACITY_MIN_BYTES)
   @Max(HUB_STORAGE_CAPACITY_MAX_BYTES)
   capacityBytes!: number;
+}
+
+/** The device of a person's session opened by the hub: only its name (the platform is always `hub`). */
+export class HubPersonDeviceDto {
+  @IsString()
+  @Length(1, 100)
+  name!: string;
+}
+
+/**
+ * Body of `POST /hub/user-sessions`: same e-mail and auth proof as `/auth/login` (the hub derived the proof from the
+ * password, `docs/crypto/user-keys.md`), same formats as the identity login DTO.
+ */
+export class HubPersonLoginDto {
+  @Transform(({ value }: { value: unknown }) =>
+    typeof value === 'string' ? value.trim() : value,
+  )
+  @IsString()
+  @IsEmail()
+  @MaxLength(255)
+  email!: string;
+
+  @IsString()
+  @Matches(/^[A-Za-z0-9_-]+$/)
+  @MaxLength(256)
+  authProof!: string;
+
+  @IsDefined()
+  @IsObject()
+  @ValidateNested()
+  @Type(() => HubPersonDeviceDto)
+  device!: HubPersonDeviceDto;
 }

@@ -1,10 +1,6 @@
 import { Injectable } from '@nestjs/common';
-import { UnauthenticatedError } from '../../shared/domain/errors.js';
-import { assertAuthProof } from '../domain/crypto-material.js';
-import { normalizeEmail } from '../domain/email.js';
-import { UserRepository } from '../domain/user.repository.js';
+import { CredentialCheck, invalidCredentials } from './credential-check.js';
 import { toLoginResult, type LoginResult } from './dto/login-result.js';
-import { AuthProofHasher } from './ports/auth-proof-hasher.js';
 import {
   SessionIssuer,
   type ClientInfo,
@@ -14,8 +10,7 @@ import {
 @Injectable()
 export class LoginUseCase {
   constructor(
-    private readonly users: UserRepository,
-    private readonly hasher: AuthProofHasher,
+    private readonly credentials: CredentialCheck,
     private readonly sessionIssuer: SessionIssuer,
   ) {}
 
@@ -25,23 +20,10 @@ export class LoginUseCase {
     device: DeviceInput;
     client: ClientInfo;
   }): Promise<LoginResult> {
-    // A non-string e-mail (the DTO normally prevents it) takes the same path as an unknown one.
-    const user =
-      typeof input.email === 'string'
-        ? await this.users.findByEmail(normalizeEmail(input.email))
-        : null;
-    // A malformed proof never matches a stored hash; the verification still runs so that
-    // neither format nor account existence shows in the response time or the error.
-    const wellFormed = isWellFormed(input.authProof);
-    if (!user || !wellFormed) {
-      await this.hasher.verifyAgainstDummy(
-        typeof input.authProof === 'string' ? input.authProof : '',
-      );
-      throw invalidCredentials();
-    }
-    if (!(await this.hasher.verify(user.authHash, input.authProof))) {
-      throw invalidCredentials();
-    }
+    const user = await this.credentials.verify(input.email, input.authProof);
+    // Um Hub só abre sessão de pessoa pela rota dele (`POST /hub/user-sessions`, sessão presa ao Hub). Aqui a
+    // plataforma `hub` dá o mesmo erro da senha errada, depois da mesma verificação (sem oráculo).
+    if (!user || input.device.platform === 'hub') throw invalidCredentials();
     const tokens = await this.sessionIssuer.start(
       user,
       input.device,
@@ -50,21 +32,4 @@ export class LoginUseCase {
     );
     return toLoginResult(user, tokens);
   }
-}
-
-function isWellFormed(authProof: unknown): authProof is string {
-  if (typeof authProof !== 'string') return false;
-  try {
-    assertAuthProof(authProof);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-function invalidCredentials(): UnauthenticatedError {
-  return new UnauthenticatedError(
-    'invalid-credentials',
-    'Invalid e-mail or password.',
-  );
 }

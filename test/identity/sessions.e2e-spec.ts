@@ -33,8 +33,8 @@ describe('Sessions endpoints (e2e)', () => {
       .expect(200);
     const third = await c
       .login('list@example.com', account.authProof, {
-        name: 'Hub',
-        platform: 'hub',
+        name: 'Browser',
+        platform: 'web',
       })
       .expect(200);
     const token = reg.body.session.accessToken;
