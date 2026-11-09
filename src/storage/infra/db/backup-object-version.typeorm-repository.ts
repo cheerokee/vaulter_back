@@ -3,6 +3,7 @@ import { validate } from 'uuid';
 import { DataSource } from 'typeorm';
 import { byteCount } from '../../../shared/infra/db/byte-count.js';
 import { runInOrganizationScope } from '../../../shared/infra/db/organization-scope.js';
+import { runWithContext } from '../../../shared/infra/db/unit-of-work.js';
 import { TRASH_DAYS } from '../../domain/backup-limits.js';
 import {
   BackupObjectVersion,
@@ -179,5 +180,86 @@ export class BackupObjectVersionTypeormRepository extends BackupObjectVersionRep
         ),
     );
     return byteCount(rows[0]?.used ?? '0');
+  }
+
+  async markWriteStarted(
+    orgId: string,
+    versionIds: readonly string[],
+  ): Promise<void> {
+    if (versionIds.length === 0) return;
+    await runInOrganizationScope(this.dataSource, orgId, (m) =>
+      m.query(
+        `UPDATE storage_object_versions SET s3_write_started_at = now()
+          WHERE organization_id = $1 AND id = ANY($2::uuid[])`,
+        [orgId, versionIds],
+      ),
+    );
+  }
+
+  async hasWriteMarks(orgId: string, objectId: string): Promise<boolean> {
+    const rows: unknown[] = await runInOrganizationScope(
+      this.dataSource,
+      orgId,
+      (m) =>
+        m.query(
+          `SELECT 1 FROM storage_object_versions
+            WHERE organization_id = $1 AND object_id = $2 AND s3_write_started_at IS NOT NULL LIMIT 1`,
+          [orgId, objectId],
+        ),
+    );
+    return rows.length > 0;
+  }
+
+  async clearWriteMarks(orgId: string, objectId: string): Promise<void> {
+    await runInOrganizationScope(this.dataSource, orgId, (m) =>
+      m.query(
+        `UPDATE storage_object_versions SET s3_write_started_at = NULL
+          WHERE organization_id = $1 AND object_id = $2 AND s3_write_started_at IS NOT NULL`,
+        [orgId, objectId],
+      ),
+    );
+  }
+
+  async committedS3VersionIds(
+    orgId: string,
+    objectId: string,
+  ): Promise<string[]> {
+    const rows: { s3_version_id: string }[] = await runInOrganizationScope(
+      this.dataSource,
+      orgId,
+      (m) =>
+        m.query(
+          `SELECT s3_version_id FROM storage_object_versions
+            WHERE organization_id = $1 AND object_id = $2 AND status = 'committed'`,
+          [orgId, objectId],
+        ),
+    );
+    return rows.map((r) => r.s3_version_id);
+  }
+
+  async staleWriteMarks(
+    before: Date,
+  ): Promise<{ organizationId: string; spaceId: string; objectId: string }[]> {
+    // Sem organização no contexto: só a policy storage_reconcile_read (linhas marcadas) deixa ler.
+    const rows: {
+      organization_id: string;
+      space_id: string;
+      object_id: string;
+    }[] = await runWithContext(
+      this.dataSource,
+      { storageReconcile: 'on' },
+      (m) =>
+        m.query(
+          `SELECT DISTINCT organization_id, space_id, object_id FROM storage_object_versions
+            WHERE s3_write_started_at IS NOT NULL AND s3_write_started_at < $1
+            ORDER BY organization_id, object_id`,
+          [before],
+        ),
+    );
+    return rows.map((r) => ({
+      organizationId: r.organization_id,
+      spaceId: r.space_id,
+      objectId: r.object_id,
+    }));
   }
 }

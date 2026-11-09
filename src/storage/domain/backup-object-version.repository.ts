@@ -32,4 +32,28 @@ export abstract class BackupObjectVersionRepository {
    * (trash included), plus the pending intents still inside their window (reservations).
    */
   abstract usedBytes(orgId: string, spaceId: string): Promise<number>;
+
+  // Diário das gravações no S3 (`s3_write_started_at`) e reparo do bucket.
+
+  /**
+   * Marks that an S3 write (copy or delete marker) for these versions is about to start. Called through
+   * `UnitOfWork.detached` (autocommit) so the mark survives a rollback of the unit of work.
+   */
+  abstract markWriteStarted(
+    orgId: string,
+    versionIds: readonly string[],
+  ): Promise<void>;
+  /** Whether any version of the object still carries a write mark (an S3 write that may not be in the index). */
+  abstract hasWriteMarks(orgId: string, objectId: string): Promise<boolean>;
+  /** Clears every write mark of the object (its index state is now the truth). */
+  abstract clearWriteMarks(orgId: string, objectId: string): Promise<void>;
+  /** S3 version ids referenced by the committed versions of the object (trash included). */
+  abstract committedS3VersionIds(
+    orgId: string,
+    objectId: string,
+  ): Promise<string[]>;
+  /** Objects (any organization) with a write mark older than `before`: read in the reconcile context. */
+  abstract staleWriteMarks(
+    before: Date,
+  ): Promise<{ organizationId: string; spaceId: string; objectId: string }[]>;
 }

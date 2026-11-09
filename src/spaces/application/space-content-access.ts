@@ -49,10 +49,15 @@ function stateOf(space: Space): SpaceContentState {
 //   leitor, sem Sala, organização sem vínculo aprovado, espaço de outra organização, id malformado: SEMPRE o mesmo
 //   404 `space-not-found` (um Hub nunca descobre que o espaço existe nem recebe 403). A Sala só existe com o espaço
 //   no Hub e o vínculo aprovado (tirar o espaço do Hub, desvincular e desregistrar derrubam a Sala), então ela basta.
-// Trava a linha do espaço `FOR UPDATE` — a MESMA trava do redimensionar, da troca de chave, de pôr membro e de tirar
-// da Sala —, e reconfere o papel sob ela: a reserva de espaço e a confirmação de um envio nunca correm junto com um
-// encolhimento do espaço nem com uma troca de chave, e um Hub tirado da Sala no meio não grava. Nada é travado antes
-// do espaço (as leituras do vínculo do Hub são sem lock), então a ordem Hub -> vínculo -> hub_space -> espaço vale.
+// Trava a linha do espaço e reconfere o papel sob ela. `mode`:
+// - `update` (FOR UPDATE, a MESMA trava do redimensionar, da troca de chave, de pôr/tirar membro e de tirar da Sala):
+//   a intenção de envio, que lê o uso e reserva — duas intenções do mesmo espaço se serializam (senão as duas caberiam
+//   sozinhas e juntas estourariam o tamanho);
+// - `share` (FOR SHARE): confirmação e apagar, que não aumentam o uso (a reserva já está nele) mas fazem chamadas ao
+//   S3 sob a trava. Ainda serializam com tudo que trava FOR UPDATE (um encolhimento ou uma troca de chave esperam o
+//   lote terminar, e vice-versa); entre si, a ordem é pela trava das linhas dos objetos.
+// Um Hub tirado da Sala no meio não grava (tirar da Sala trava FOR UPDATE). Nada é travado antes do espaço (as
+// leituras do vínculo do Hub são sem lock), então a ordem Hub -> vínculo -> hub_space -> espaço vale.
 // MUST run inside `UnitOfWork.run`.
 @Injectable()
 export class SpaceContentAccess {
@@ -66,18 +71,24 @@ export class SpaceContentAccess {
     spaceId: string,
     actor: SpaceContentActor,
     permission: SpacePermission,
+    mode: 'update' | 'share' = 'update',
   ): Promise<SpaceContentState> {
     if (actor.kind === 'user') {
       const { space } = await this.access.lockAsMember(
         spaceId,
         actor.userId,
         permission,
+        undefined,
+        mode,
       );
       return stateOf(space);
     }
     if (!validate(spaceId) || !validate(actor.hubId)) throw spaceNotFound();
     const orgId = await this.organizationOfRoom(spaceId, actor, permission);
-    const space = await this.spaces.lockForUpdate(orgId, spaceId);
+    const space =
+      mode === 'share'
+        ? await this.spaces.lockForShare(orgId, spaceId)
+        : await this.spaces.lockForUpdate(orgId, spaceId);
     if (
       !space ||
       !(await this.roomAllows(orgId, spaceId, actor.hubId, permission))

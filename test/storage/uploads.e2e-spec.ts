@@ -4,6 +4,7 @@ import { PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
 import type request from 'supertest';
 import { newId } from '../../src/shared/domain/id.js';
 import { ObjectStore } from '../../src/storage/application/ports/object-store.js';
+import { ReconcileStorageUseCase } from '../../src/storage/application/reconcile-storage.use-case.js';
 import {
   adminDataSource,
   createTestApp,
@@ -737,6 +738,71 @@ describe('storage uploads (e2e)', () => {
     );
   });
 
+  it('a crash between the S3 write and the COMMIT is repaired: the reconcile sweep (runtime role, RLS) removes what the index does not reference', async () => {
+    const space = await newSpace('Repair');
+    const hub = await roomHub(space, 'space_editor');
+    const obj = await blobFor(space);
+    const [it1] = (
+      await expectStatus(
+        hubPost(hub, `/hub/spaces/${space.spaceId}/uploads`, {
+          items: [obj.item],
+        }),
+        201,
+      )
+    ).body.items as Intent[];
+    await put(it1!, obj.blob);
+    await expectStatus(
+      hubPost(hub, `/hub/spaces/${space.spaceId}/uploads/confirm`, {
+        uploadIds: [it1!.uploadId],
+      }),
+      200,
+    );
+    const committedS3 = (await versionRows(obj.objectId))[0]!.s3_version_id!;
+
+    // What a crashed confirmation leaves: a marked pending version and a newer S3 version at objects/<objectId>.
+    const v2 = await blobFor(space, randomBytes(90), obj.objectId);
+    const [it2] = (
+      await expectStatus(
+        hubPost(hub, `/hub/spaces/${space.spaceId}/uploads`, {
+          items: [{ ...v2.item, replacesVersionId: it1!.uploadId }],
+        }),
+        201,
+      )
+    ).body.items as Intent[];
+    await put(it2!, v2.blob);
+    const store = app.get(ObjectStore);
+    const key = `orgs/${orgId}/spaces/${space.spaceId}/objects/${obj.objectId}`;
+    const stray = await store.copy(
+      `orgs/${orgId}/spaces/${space.spaceId}/uploads/${it2!.uploadId}`,
+      key,
+    );
+    const ds = await adminDataSource();
+    await ds.query(
+      `UPDATE storage_object_versions SET s3_write_started_at = now() - interval '2 hours' WHERE id = $1`,
+      [it2!.uploadId],
+    );
+    expect((await store.head(key))!.versionId).toBe(stray.versionId);
+
+    const result = await app.get(ReconcileStorageUseCase).execute();
+    expect(result).toEqual({ objects: 1, removedVersions: 1 });
+    expect((await store.head(key))!.versionId).toBe(committedS3);
+    const marked = await ds.query(
+      `SELECT 1 FROM storage_object_versions WHERE s3_write_started_at IS NOT NULL`,
+    );
+    expect(marked).toHaveLength(0);
+    // Nothing left to repair; the pending version can still be confirmed normally.
+    expect(await app.get(ReconcileStorageUseCase).execute()).toEqual({
+      objects: 0,
+      removedVersions: 0,
+    });
+    await expectStatus(
+      hubPost(hub, `/hub/spaces/${space.spaceId}/uploads/confirm`, {
+        uploadIds: [it2!.uploadId],
+      }),
+      200,
+    );
+  });
+
   it('the index never has a name, type or path column: only ids, sizes, hashes, versions, uploader and dates', async () => {
     const ds = await adminDataSource();
     const columns = async (table: string) =>
@@ -777,6 +843,7 @@ describe('storage uploads (e2e)', () => {
         'upload_expires_at',
         'uploaded_by_hub_id',
         'uploaded_by_user_id',
+        's3_write_started_at',
       ].sort(),
     );
   });

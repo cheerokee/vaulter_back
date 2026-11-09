@@ -9,9 +9,11 @@ import type { BackupObjectRepository } from '../domain/backup-object.repository.
 import { BackupObjectVersion } from '../domain/backup-object-version.js';
 import type { BackupObjectVersionRepository } from '../domain/backup-object-version.repository.js';
 import { MAX_OBJECT_BYTES } from '../domain/backup-limits.js';
+import { BackupObjectHealer } from './backup-object-healer.js';
 import { ConfirmUploadsUseCase } from './confirm-uploads.use-case.js';
 import { DeleteObjectsUseCase } from './delete-objects.use-case.js';
 import type { ObjectStore } from './ports/object-store.js';
+import { ReconcileStorageUseCase } from './reconcile-storage.use-case.js';
 import { RequestUploadsUseCase } from './request-uploads.use-case.js';
 import type { StorageAccess } from './storage-access.js';
 
@@ -24,7 +26,10 @@ const HUB = { hubId: '01900000-0000-7000-8000-0000000000b1' };
 const SHA = 'c'.repeat(64);
 const GiB = 1024 ** 3;
 
-// In-memory doubles of the contracts (the use cases only see them).
+// In-memory doubles of the contracts (the use cases only see them). The unit of work keeps copies of the rows and
+// restores them when `work` throws (a real rollback); `commitThenReject` keeps them and rejects anyway (a COMMIT the
+// server applied but whose answer was lost). Write marks written through `detached` survive a rollback, like the
+// autocommitted statement. The bucket is a list of versions per key.
 function setup() {
   const trace: string[] = [];
   const state = {
@@ -32,20 +37,35 @@ function setup() {
     currentKeyVersion: 2,
     storageQuotaBytes: 10 * GiB,
   };
-  const objects = new Map<string, BackupObject>();
-  const versions = new Map<string, BackupObjectVersion>();
+  let objects = new Map<string, BackupObject>();
+  let versions = new Map<string, BackupObjectVersion>();
+  let marks = new Set<string>();
   const foreignObjects = new Set<string>();
+  const bucket = new Map<
+    string,
+    { versionId: string; isDeleteMarker: boolean }[]
+  >();
   let usedBytes = 0;
   let s3 = 0;
+  let mode: 'normal' | 'commitThenReject' = 'normal';
   const heads = new Map<
     string,
     { sizeBytes: number; sha256Hex: string | null } | null
   >();
+  const versionsOf = (key: string) => {
+    if (!bucket.has(key)) bucket.set(key, []);
+    return bucket.get(key)!;
+  };
 
   const access = {
     lock: vi.fn(
-      async (_spaceId: string, _actor: unknown, permission: string) => {
-        trace.push(`lock:${permission}`);
+      async (
+        _spaceId: string,
+        _actor: unknown,
+        permission: string,
+        lockMode: string,
+      ) => {
+        trace.push(`lock:${permission}:${lockMode}`);
         return { organizationId: ORG, spaceId: SPACE, ...state };
       },
     ),
@@ -66,29 +86,31 @@ function setup() {
           }),
         );
       }
-      return BackupObject.restore({ ...snapshot(objects.get(id)!) });
+      return cloneObject(objects.get(id)!);
     }),
     lockForUpdate: vi.fn(async (_o: string, _s: string, id: string) => {
       trace.push(`lockObject:${id}`);
       const o = objects.get(id);
-      return o ? BackupObject.restore({ ...snapshot(o) }) : null;
+      return o ? cloneObject(o) : null;
     }),
     save: vi.fn(async (o: BackupObject) => {
       trace.push(`saveObject:${o.id}`);
-      objects.set(o.id, BackupObject.restore(snapshot(o)));
+      objects.set(o.id, cloneObject(o));
     }),
   };
   const versionRepo = {
     create: vi.fn(async (v: BackupObjectVersion) => {
       trace.push(`createVersion:${v.objectId}`);
-      versions.set(v.id, v);
+      versions.set(v.id, cloneVersion(v));
     }),
     save: vi.fn(async (v: BackupObjectVersion) => {
       trace.push(`saveVersion:${v.id}`);
-      versions.set(v.id, v);
+      versions.set(v.id, cloneVersion(v));
     }),
     findByIds: vi.fn(async (_o: string, _s: string, ids: readonly string[]) =>
-      ids.filter((id) => versions.has(id)).map((id) => versions.get(id)!),
+      ids
+        .filter((id) => versions.has(id))
+        .map((id) => cloneVersion(versions.get(id)!)),
     ),
     expirePending: vi.fn(async (_o: string, _s: string, objectId: string) => {
       trace.push(`expirePending:${objectId}`);
@@ -101,6 +123,32 @@ function setup() {
       trace.push('usedBytes');
       return usedBytes;
     }),
+    markWriteStarted: vi.fn(async (_o: string, ids: readonly string[]) => {
+      trace.push(`markWrite:${ids.join(',')}`);
+      for (const id of ids) {
+        marks.add(id);
+        detachedMarks.add(id);
+      }
+    }),
+    hasWriteMarks: vi.fn(async (_o: string, objectId: string) =>
+      [...marks].some((id) => versions.get(id)?.objectId === objectId),
+    ),
+    clearWriteMarks: vi.fn(async (_o: string, objectId: string) => {
+      trace.push(`clearMarks:${objectId}`);
+      marks = new Set(
+        [...marks].filter((id) => versions.get(id)?.objectId !== objectId),
+      );
+    }),
+    committedS3VersionIds: vi.fn(async (_o: string, objectId: string) =>
+      [...versions.values()]
+        .filter((v) => v.objectId === objectId && v.status === 'committed')
+        .map((v) => v.s3VersionId!),
+    ),
+    staleWriteMarks: vi.fn(async () =>
+      [...new Set([...marks].map((id) => versions.get(id)!.objectId))].map(
+        (objectId) => ({ organizationId: ORG, spaceId: SPACE, objectId }),
+      ),
+    ),
   };
   const store = {
     presignPut: vi.fn(async (key: string, input: { sizeBytes: number }) => ({
@@ -124,47 +172,139 @@ function setup() {
     }),
     copy: vi.fn(async (_from: string, to: string) => {
       trace.push(`copy:${to.split('/').pop()}`);
-      return { versionId: `s3-${++s3}` };
+      const versionId = `s3-${++s3}`;
+      versionsOf(to).push({ versionId, isDeleteMarker: false });
+      return { versionId };
     }),
     deleteCurrent: vi.fn(async (key: string) => {
       trace.push(`deleteCurrent:${key.split('/').pop()}`);
-      return { deleteMarkerVersionId: `dm-${++s3}` };
+      const versionId = `dm-${++s3}`;
+      versionsOf(key).push({ versionId, isDeleteMarker: true });
+      return { deleteMarkerVersionId: versionId };
     }),
     deleteVersion: vi.fn(async (key: string, versionId: string) => {
       trace.push(`deleteVersion:${key.split('/').pop()}:${versionId}`);
+      bucket.set(
+        key,
+        versionsOf(key).filter((v) => v.versionId !== versionId),
+      );
     }),
+    listVersions: vi.fn(async (key: string) => [...versionsOf(key)]),
     presignGet: vi.fn(),
   };
+  let detachedMarks = new Set<string>();
   const uow = {
     run: vi.fn(async <T>(work: () => Promise<T>) => {
       trace.push('run');
-      const result = await work();
-      trace.push('commit');
-      return result;
+      const saved = {
+        objects: new Map([...objects].map(([k, o]) => [k, cloneObject(o)])),
+        versions: new Map([...versions].map(([k, v]) => [k, cloneVersion(v)])),
+        marks: new Set(marks),
+      };
+      detachedMarks = new Set();
+      try {
+        const result = await work();
+        if (mode === 'commitThenReject') {
+          mode = 'normal';
+          trace.push('commit-lost');
+          throw new Error('connection lost during COMMIT');
+        }
+        trace.push('commit');
+        return result;
+      } catch (error) {
+        if (!trace.includes('commit-lost') || trace.at(-1) !== 'commit-lost') {
+          objects = saved.objects;
+          versions = saved.versions;
+          marks = new Set([...saved.marks, ...detachedMarks]);
+          trace.push('rollback');
+        }
+        throw error;
+      }
     }),
+    detached: vi.fn(async <T>(work: () => Promise<T>) => work()),
   };
-  const deps = [
-    access as unknown as StorageAccess,
-    objectRepo as unknown as BackupObjectRepository,
-    versionRepo as unknown as BackupObjectVersionRepository,
-    store as unknown as ObjectStore,
-    uow as unknown as UnitOfWork,
-  ] as const;
+  const objectRepoDep = objectRepo as unknown as BackupObjectRepository;
+  const versionRepoDep =
+    versionRepo as unknown as BackupObjectVersionRepository;
+  const storeDep = store as unknown as ObjectStore;
+  const uowDep = uow as unknown as UnitOfWork;
+  const healer = new BackupObjectHealer(
+    objectRepoDep,
+    versionRepoDep,
+    storeDep,
+    uowDep,
+  );
+  const accessDep = access as unknown as StorageAccess;
   return {
     trace,
     state,
-    objects,
-    versions,
+    get objects() {
+      return objects;
+    },
+    get versions() {
+      return versions;
+    },
+    get marks() {
+      return marks;
+    },
+    bucket,
     foreignObjects,
     heads,
     setUsed: (n: number) => {
       usedBytes = n;
     },
+    loseNextCommit: () => {
+      mode = 'commitThenReject';
+    },
     mocks: { access, objectRepo, versionRepo, store, uow },
-    request: new RequestUploadsUseCase(...deps),
-    confirm: new ConfirmUploadsUseCase(...deps),
-    remove: new DeleteObjectsUseCase(...deps),
+    request: new RequestUploadsUseCase(
+      accessDep,
+      objectRepoDep,
+      versionRepoDep,
+      storeDep,
+      uowDep,
+    ),
+    confirm: new ConfirmUploadsUseCase(
+      accessDep,
+      objectRepoDep,
+      versionRepoDep,
+      storeDep,
+      healer,
+      uowDep,
+    ),
+    remove: new DeleteObjectsUseCase(
+      accessDep,
+      objectRepoDep,
+      versionRepoDep,
+      storeDep,
+      healer,
+      uowDep,
+    ),
+    reconcile: new ReconcileStorageUseCase(versionRepoDep, healer),
   };
+}
+
+function cloneObject(o: BackupObject): BackupObject {
+  return BackupObject.restore(snapshot(o));
+}
+
+function cloneVersion(v: BackupObjectVersion): BackupObjectVersion {
+  return BackupObjectVersion.restore({
+    id: v.id,
+    organizationId: v.organizationId,
+    spaceId: v.spaceId,
+    objectId: v.objectId,
+    keyVersion: v.keyVersion,
+    sizeBytes: v.sizeBytes,
+    sha256: v.sha256,
+    status: v.status,
+    replacesVersionId: v.replacesVersionId,
+    s3VersionId: v.s3VersionId,
+    uploader: v.uploader,
+    uploadExpiresAt: v.uploadExpiresAt,
+    committedAt: v.committedAt,
+    supersededAt: v.supersededAt,
+  });
 }
 
 function snapshot(o: BackupObject) {
@@ -203,6 +343,7 @@ describe('RequestUploadsUseCase', () => {
       SPACE,
       HUB,
       'memory.write',
+      'update',
     );
     expect(out.map((o) => o.objectId)).toEqual([OBJ_B, OBJ_A]);
     for (const o of out) {
@@ -313,15 +454,27 @@ describe('ConfirmUploadsUseCase', () => {
     await t.confirm.execute(HUB, SPACE, [second], NOW);
     expect(t.trace).toEqual([
       'run',
-      'lock:memory.write',
+      'lock:memory.write:share',
       `lockObject:${OBJ_A}`,
       `head:${second}`,
+      `markWrite:${second}`,
       `copy:${OBJ_A}`,
       `saveVersion:${second}`,
       `superseded:${first}`,
       `saveObject:${OBJ_A}`,
+      `clearMarks:${OBJ_A}`,
       'commit',
     ]);
+    expect(t.marks.size).toBe(0);
+  });
+
+  it('only the uploader confirms: another hub or a person gets 404 upload-not-found', async () => {
+    const id = await intent(OBJ_A);
+    for (const other of [{ hubId: 'other' }, { userId: 'u' }]) {
+      await expect(
+        t.confirm.execute(other, SPACE, [id], NOW),
+      ).rejects.toMatchObject({ code: 'upload-not-found' });
+    }
   });
 
   it('confirming again is idempotent: one version, no second copy', async () => {
@@ -409,12 +562,15 @@ describe('ConfirmUploadsUseCase', () => {
     ).rejects.toMatchObject({ code: 'upload-not-found' });
   });
 
-  it('a failure after a copy removes the copied S3 versions (the bucket keeps matching the index)', async () => {
+  it('a failure after a copy (rollback) repairs the bucket: the copies no committed row references are removed', async () => {
     const a = await intent(OBJ_A);
     const b = await intent(OBJ_B);
-    t.mocks.store.copy.mockImplementationOnce(async () => ({
-      versionId: 'ok-1',
-    }));
+    t.mocks.store.copy.mockImplementationOnce(
+      async (_f: string, to: string) => {
+        t.bucket.set(to, [{ versionId: 'ok-1', isDeleteMarker: false }]);
+        return { versionId: 'ok-1' };
+      },
+    );
     t.mocks.store.copy.mockImplementationOnce(async () => {
       throw new Error('s3 down');
     });
@@ -425,6 +581,65 @@ describe('ConfirmUploadsUseCase', () => {
       `orgs/${ORG}/spaces/${SPACE}/objects/${OBJ_A}`,
       'ok-1',
     );
+    expect(t.versions.get(a)!.status).toBe('pending');
+    expect(t.marks.size).toBe(0);
+  });
+
+  it('COMMIT applied but run() rejects: the repair deletes nothing the index references', async () => {
+    const first = await intent(OBJ_A);
+    await t.confirm.execute(HUB, SPACE, [first], NOW);
+    const second = await intent(OBJ_A, { replacesVersionId: first });
+    t.loseNextCommit();
+    await expect(t.confirm.execute(HUB, SPACE, [second], NOW)).rejects.toThrow(
+      'connection lost during COMMIT',
+    );
+    expect(t.versions.get(second)!.status).toBe('committed');
+    expect(t.mocks.store.deleteVersion).not.toHaveBeenCalled();
+    expect(
+      t.bucket.get(`orgs/${ORG}/spaces/${SPACE}/objects/${OBJ_A}`),
+    ).toHaveLength(2);
+    // Retried by the hub: idempotent.
+    await expect(
+      t.confirm.execute(HUB, SPACE, [second], NOW),
+    ).resolves.toMatchObject([{ versionId: second }]);
+  });
+
+  it('self-heal on next touch: a stray S3 version left by a crash is removed before the next copy', async () => {
+    const first = await intent(OBJ_A);
+    await t.confirm.execute(HUB, SPACE, [first], NOW);
+    const key = `orgs/${ORG}/spaces/${SPACE}/objects/${OBJ_A}`;
+    // A crashed confirmation: marked, copied, never committed.
+    const lost = await intent(OBJ_A, { replacesVersionId: first });
+    t.marks.add(lost);
+    t.bucket.get(key)!.push({ versionId: 'stray', isDeleteMarker: false });
+
+    const next = await intent(OBJ_A, { replacesVersionId: first });
+    await t.confirm.execute(HUB, SPACE, [next], NOW);
+    expect(t.mocks.store.deleteVersion).toHaveBeenCalledWith(key, 'stray');
+    expect(t.bucket.get(key)!.map((v) => v.versionId)).toEqual([
+      t.versions.get(first)!.s3VersionId,
+      t.versions.get(next)!.s3VersionId,
+    ]);
+    expect(t.marks.size).toBe(0);
+  });
+
+  it('the reconcile sweep repairs objects nobody touches again', async () => {
+    const first = await intent(OBJ_A);
+    await t.confirm.execute(HUB, SPACE, [first], NOW);
+    const key = `orgs/${ORG}/spaces/${SPACE}/objects/${OBJ_A}`;
+    const lost = await intent(OBJ_A, { replacesVersionId: first });
+    t.marks.add(lost);
+    t.bucket.get(key)!.push({ versionId: 'stray', isDeleteMarker: false });
+    t.bucket.get(key)!.push({ versionId: 'stray-dm', isDeleteMarker: true });
+
+    await expect(t.reconcile.execute({}, NOW)).resolves.toEqual({
+      objects: 1,
+      removedVersions: 2,
+    });
+    expect(t.bucket.get(key)!.map((v) => v.versionId)).toEqual([
+      t.versions.get(first)!.s3VersionId,
+    ]);
+    expect(t.marks.size).toBe(0);
   });
 });
 
@@ -448,6 +663,7 @@ describe('DeleteObjectsUseCase', () => {
       SPACE,
       { userId: 'u' },
       'memory.delete',
+      'share',
     );
     expect(t.objects.get(OBJ_A)!.deletedAt).toEqual(NOW);
     expect(t.trace).toContain(`superseded:${v}`);
@@ -463,7 +679,7 @@ describe('DeleteObjectsUseCase', () => {
     expect(t.mocks.store.deleteCurrent).not.toHaveBeenCalled();
   });
 
-  it('another version or an unknown object: 409; a failed batch removes the markers it left', async () => {
+  it('another version or an unknown object: 409; a rolled back batch removes the markers it left', async () => {
     const v = await committed(OBJ_A);
     await expect(
       t.remove.execute(
@@ -487,5 +703,34 @@ describe('DeleteObjectsUseCase', () => {
       ),
     ).rejects.toThrow('db down');
     expect(t.mocks.store.deleteVersion).toHaveBeenCalledTimes(2);
+    for (const id of [OBJ_A, OBJ_B]) {
+      expect(
+        t.bucket
+          .get(`orgs/${ORG}/spaces/${SPACE}/objects/${id}`)!
+          .some((x) => x.isDeleteMarker),
+      ).toBe(false);
+      expect(t.objects.get(id)!.deletedAt).toBeNull();
+    }
+    expect(t.marks.size).toBe(0);
+  });
+
+  it('a delete whose COMMIT was applied but lost keeps its delete marker', async () => {
+    const v = await committed(OBJ_A);
+    t.loseNextCommit();
+    await expect(
+      t.remove.execute(
+        { userId: 'u' },
+        SPACE,
+        [{ objectId: OBJ_A, replacesVersionId: v }],
+        NOW,
+      ),
+    ).rejects.toThrow('connection lost during COMMIT');
+    expect(t.mocks.store.deleteVersion).not.toHaveBeenCalled();
+    expect(t.objects.get(OBJ_A)!.deletedAt).toEqual(NOW);
+    expect(
+      t.bucket
+        .get(`orgs/${ORG}/spaces/${SPACE}/objects/${OBJ_A}`)!
+        .map((x) => x.isDeleteMarker),
+    ).toEqual([false, true]);
   });
 });

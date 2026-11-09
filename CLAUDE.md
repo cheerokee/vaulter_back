@@ -24,6 +24,7 @@ npm run schema:check                   # drift: falha se as entidades divergirem
 npm run lint         # oxlint com checagem de tipos
 npm run typecheck    # tsc --noEmit no projeto todo (src e test); roda no CI
 npm run format       # Prettier em src/ e test/
+npm run storage:reconcile [-- <min>]   # reparo do backup (índice × bucket); depois do build, no container
 ```
 Antes de dizer que algo está pronto: `npm run build && npm test && npm run lint && npm run typecheck` precisam passar
 (e `docker exec vaulter-back-app npm run test:e2e`, dentro do container, quando mexer em módulos/banco).
@@ -700,6 +701,29 @@ ganha acesso a conteúdo (as chaves ficam com os clientes).
   detalhe genérico "The resource was not found.".
 - **Testes:** e2e em `test/platform/` (`catalog`, `staff`, `support-requests`, `lookup`); unitários ao lado do código.
 
+## Módulo `storage` (em construção; seção completa na Task 8 do plano storage-backup)
+`src/storage/`: backup cifrado dos espaços no S3. Spec: `docs/superpowers/specs/2026-11-09-storage-backup-design.md`.
+Depende de `spaces` (`SpaceContentAccess`, a porta `SpaceStorageUsage`, que ele liga) e `hubs` (`HubDirectory`), só
+pelo que exportam; ninguém importa `storage`.
+- **O índice é a verdade; o S3 só guarda bytes.** Toda leitura, listagem e download usa o `s3VersionId` gravado no
+  índice (`storage_object_versions`), **nunca** a versão "atual" do S3 (que pode estar errada por um instante depois de
+  uma queda entre o S3 e o COMMIT). Vale para a Task 7 (listar/baixar) e para tudo que vier.
+- **Travas:** intenção de envio = espaço `FOR UPDATE` (lê o uso e reserva; duas intenções do mesmo espaço se
+  serializam; sem chamada ao S3 sob a trava); confirmação e apagar = espaço `FOR SHARE` (não aumentam o uso) + linhas
+  dos objetos `FOR UPDATE` em ordem de id, com as chamadas ao S3 (HEAD, cópia no servidor, delete marker) **sob** essas
+  travas, para a ordem das versões no S3 ser a do índice. Trade-off aceito: enquanto um lote de confirmação roda (até
+  100 cópias), redimensionar, trocar a chave, pôr/tirar membro, tirar da Sala e o gancho de saída da organização
+  (todos `FOR UPDATE` no espaço) esperam o lote; confirmações e apagamentos do mesmo espaço correm juntos.
+- **Diário + reparo:** antes de gravar no S3, a confirmação/o apagar marcam `s3_write_started_at` nas versões (em
+  autocommit, `UnitOfWork.detached`: sobrevive ao rollback) e limpam a marca na transação que confirma. Marca que
+  sobra = a gravação pode ter ido ao S3 sem o índice. `BackupObjectHealer` (com a linha do objeto travada) apaga do
+  bucket toda versão/marker que nenhuma versão `committed` referencia (objeto apagado: só versões com dado, os markers
+  ficam). Roda: no próximo toque do objeto (confirmação/apagar com marca), logo depois de um unit of work que rejeitou
+  depois de gravar no S3 (inclusive COMMIT de resultado incerto: o que o COMMIT gravou é referenciado e fica), e na
+  varredura `npm run storage:reconcile` (marcas com mais de 60 min; contexto `app.storage_reconcile`, policy
+  `storage_reconcile_read` só das linhas marcadas). **Só o reparo usa `ObjectStore.deleteVersion`.**
+- Confirmar só quem pediu a intenção (o mesmo Hub ou a mesma pessoa); outro: 404 `upload-not-found`.
+
 ## Banco de dados (TypeORM + migrations)
 - **TypeORM 1.x** + `@nestjs/typeorm`, driver `pg`. Config de conexão em `src/database/typeorm.options.ts`,
   compartilhada entre a aplicação (`DatabaseModule`) e o CLI (`src/database/data-source.ts`). Variáveis do
@@ -816,6 +840,9 @@ Os valores do `.env.example` para os segredos são **só de desenvolvimento**; p
   coluna xid8 junto da versão e só servir linhas abaixo de `pg_snapshot_xmin(pg_current_snapshot())`) ou carimbo de
   versão no momento do commit. Mitigação até lá: sincronização completa periódica do Hub.
 - Exclusão de conta (LGPD) precisa revogar as sessões.
+- **Agendar `npm run storage:reconcile`** (1x por dia, fora da aplicação) até o pg-boss entrar; aí vira uma tarefa
+  dele. Sem a varredura, um objeto que ninguém toca de novo depois de uma queda entre o S3 e o COMMIT pode ter a versão
+  do índice expirada pelo ciclo de vida em 30 dias.
 - Plataforma: quarentena/aviso por e-mail ao dono e aos admins quando a equipe age numa organização ou Hub; leitura da
   auditoria da organização pelo cliente (hoje só se grava); endurecer a aprovação dupla (hoje basta outra pessoa com
   `platform.support.approve`); demais permissões de financeiro, tickets e chat (o `platform_finance` só tem `platform.billing.storage_quota`).

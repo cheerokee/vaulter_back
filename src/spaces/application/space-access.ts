@@ -96,19 +96,25 @@ export class SpaceAccess {
    * re-reads the actor's role under the lock (the authoritative check). Returns the LOCKED space.
    * `beforeLock` runs between the pre-check and the space lock, with the organization known: rows that must be
    * locked BEFORE the space (lock order of the removal path: membership row, then spaces) go there.
+   * `mode: 'share'` takes `FOR SHARE` instead: for work that must not run concurrently with any `FOR UPDATE` holder
+   * (resize, key rotation, members) but may run alongside other `FOR SHARE` holders (backup confirmations/deletes).
    */
   async lockAsMember(
     spaceId: string,
     userId: string,
     permission?: SpacePermission,
     beforeLock?: (orgId: string) => Promise<void>,
+    mode: 'update' | 'share' = 'update',
   ): Promise<SpaceMembership> {
     const pre = permission
       ? await this.requireSpacePermission(spaceId, userId, permission)
       : await this.requireSpaceMember(spaceId, userId);
     const orgId = pre.space.organizationId;
     if (beforeLock) await beforeLock(orgId);
-    const space = await this.spaces.lockForUpdate(orgId, spaceId);
+    const space =
+      mode === 'share'
+        ? await this.spaces.lockForShare(orgId, spaceId)
+        : await this.spaces.lockForUpdate(orgId, spaceId);
     const roleKey = space
       ? await this.roles.roleOf(orgId, spaceId, userId)
       : null;

@@ -5,6 +5,7 @@ import {
   DeleteObjectCommand,
   GetObjectCommand,
   HeadObjectCommand,
+  ListObjectVersionsCommand,
   PutObjectCommand,
   S3Client,
   S3ServiceException,
@@ -15,6 +16,7 @@ import {
   type ObjectHead,
   type PresignedPut,
   type PresignPutInput,
+  type StoredVersion,
 } from '../../application/ports/object-store.js';
 
 const SHA256_HEX = /^[0-9a-f]{64}$/;
@@ -158,6 +160,35 @@ export class S3ObjectStore extends ObjectStore implements OnModuleDestroy {
       );
     }
     return { deleteMarkerVersionId: out.VersionId };
+  }
+
+  async listVersions(key: string): Promise<StoredVersion[]> {
+    const out: StoredVersion[] = [];
+    let keyMarker: string | undefined;
+    let versionIdMarker: string | undefined;
+    for (;;) {
+      const page = await this.client.send(
+        new ListObjectVersionsCommand({
+          Bucket: this.bucket,
+          Prefix: key,
+          KeyMarker: keyMarker,
+          VersionIdMarker: versionIdMarker,
+        }),
+      );
+      for (const v of page.Versions ?? []) {
+        if (v.Key === key && v.VersionId) {
+          out.push({ versionId: v.VersionId, isDeleteMarker: false });
+        }
+      }
+      for (const m of page.DeleteMarkers ?? []) {
+        if (m.Key === key && m.VersionId) {
+          out.push({ versionId: m.VersionId, isDeleteMarker: true });
+        }
+      }
+      if (!page.IsTruncated) return out;
+      keyMarker = page.NextKeyMarker;
+      versionIdMarker = page.NextVersionIdMarker;
+    }
   }
 
   async deleteVersion(key: string, versionId: string): Promise<void> {

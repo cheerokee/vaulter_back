@@ -219,6 +219,33 @@ describe('ObjectStore (S3 / LocalStack)', () => {
     expect(await store.head(to)).toMatchObject({ versionId: v1.versionId });
   });
 
+  it('listVersions returns every version and delete marker of exactly that key', async () => {
+    const base = prefix();
+    const objectId = randomUUID();
+    const to = `${base}/objects/${objectId}`;
+    const up = `${base}/uploads/${randomUUID()}`;
+    await upload(store, up, randomBytes(10));
+    const v1 = await store.copy(up, to);
+    const v2 = await store.copy(up, to);
+    const { deleteMarkerVersionId } = await store.deleteCurrent(to);
+    // Another key sharing the prefix of nothing but the space: not listed.
+    await store.copy(up, `${base}/objects/${randomUUID()}`);
+
+    const listed = await store.listVersions(to);
+    expect(
+      listed.sort((a, b) => a.versionId.localeCompare(b.versionId)),
+    ).toEqual(
+      [
+        { versionId: v1.versionId, isDeleteMarker: false },
+        { versionId: v2.versionId, isDeleteMarker: false },
+        { versionId: deleteMarkerVersionId, isDeleteMarker: true },
+      ].sort((a, b) => a.versionId.localeCompare(b.versionId)),
+    );
+    expect(await store.listVersions(`${base}/objects/${randomUUID()}`)).toEqual(
+      [],
+    );
+  });
+
   it('the bucket carries the lifecycle rules of the init script', async () => {
     const lifecycle = await s3.send(
       new GetBucketLifecycleConfigurationCommand({ Bucket: BUCKET }),

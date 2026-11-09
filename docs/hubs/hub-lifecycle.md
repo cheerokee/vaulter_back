@@ -279,7 +279,7 @@ objeto). O backend guarda só o índice (ids, tamanho, sha256 do blob, versão d
 - **2. Bytes:** `PUT` direto no S3 na `url` (vale 15 min) com **exatamente** os `headers` devolvidos (tamanho, checksum
   e a marca do provisório fazem parte da assinatura).
 - **3. Confirmação:** `POST .../uploads/confirm` `{ uploadIds }` (até 100; tudo ou nada; **idempotente**: repetir depois
-  de um timeout devolve a mesma versão) → `{ items: [{ uploadId, versionId, objectId, keyVersion, sizeBytes, sha256,
+  de um timeout devolve a mesma versão; só quem pediu a intenção confirma, com o mesmo token de Hub ou da mesma pessoa) → `{ items: [{ uploadId, versionId, objectId, keyVersion, sizeBytes, sha256,
   uploadedAt }] }`. `versionId` = `uploadId`; guarde-o como a versão atual do objeto.
 - **Apagar:** `POST .../objects/delete` `{ items: [{ objectId, replacesVersionId }] }` → 204 (o objeto fica 30 dias na
   lixeira).
@@ -288,7 +288,7 @@ objeto). O backend guarda só o índice (ids, tamanho, sha256 do blob, versão d
   a versão atual); outro Hub gravou antes → 409 `object-version-conflict` (com `currentVersionId`; resolva, por exemplo,
   gravando uma cópia de conflito como objeto novo); espaço cheio → 422 `space-storage-full` (`missingBytes`); objeto
   acima de 5 GiB → 422 `object-too-large` (divida o arquivo); bytes no S3 diferentes do declarado ou PUT não feito →
-  422 `upload-mismatch`; `uploadId` desconhecido, de outro espaço ou com mais de 1 dia → 404 `upload-not-found`.
+  422 `upload-mismatch`; `uploadId` desconhecido, de outro espaço, de outro remetente ou com mais de 1 dia → 404 `upload-not-found`.
 
 ## 10. Pessoas usando o Hub
 

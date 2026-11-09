@@ -2,9 +2,11 @@ import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { HubsModule } from '../hubs/hubs.module.js';
 import { SpacesModule } from '../spaces/spaces.module.js';
+import { BackupObjectHealer } from './application/backup-object-healer.js';
 import { ConfirmUploadsUseCase } from './application/confirm-uploads.use-case.js';
 import { DeleteObjectsUseCase } from './application/delete-objects.use-case.js';
 import { ObjectStore } from './application/ports/object-store.js';
+import { ReconcileStorageUseCase } from './application/reconcile-storage.use-case.js';
 import { RequestUploadsUseCase } from './application/request-uploads.use-case.js';
 import { BackupSpaceStorageUsage } from './application/space-storage-usage.js';
 import { StorageAccess } from './application/storage-access.js';
@@ -44,6 +46,8 @@ import { S3ObjectStore } from './infra/s3/s3-object-store.js';
     },
     StorageAccess,
     BackupSpaceStorageUsage,
+    BackupObjectHealer,
+    ReconcileStorageUseCase,
     RequestUploadsUseCase,
     ConfirmUploadsUseCase,
     DeleteObjectsUseCase,

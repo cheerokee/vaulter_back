@@ -53,6 +53,9 @@ export interface UnitOfWorkContext {
   // Chave de assinatura de um Hub: abre só o Hub dessa chave (policy hubs_by_signing_key), para a apresentação
   // recusar uma chave já usada (inclusive por Hub desregistrado) antes de haver qualquer contexto.
   hubSigningPublicKey?: string;
+  // Varredura do reparo do backup (`ReconcileStorageUseCase`, só o backend): abre a leitura das versões do índice com
+  // gravação no S3 começada (policy storage_reconcile_read), em todas as organizações. Valor: 'on' ('' desliga).
+  storageReconcile?: string;
 }
 
 const SETTINGS = {
@@ -61,6 +64,7 @@ const SETTINGS = {
   hubId: 'app.hub_id',
   invitationTokenHash: 'app.invitation_token_hash',
   hubSigningPublicKey: 'app.hub_signing_public_key',
+  storageReconcile: 'app.storage_reconcile',
 } as const satisfies Record<keyof UnitOfWorkContext, string>;
 
 // `set_config(..., true)` vale até o fim da transação: não vaza para a próxima da mesma conexão.
@@ -126,7 +130,10 @@ export class UnitOfWork {
   // O hash do convite e a chave de assinatura do Hub ficam fora: cada um só abre uma linha por vez, via
   // `runWithContext`/`withContext`, que restauram o valor anterior — nunca para o resto da transação.
   async setContext(
-    ctx: Omit<UnitOfWorkContext, 'invitationTokenHash' | 'hubSigningPublicKey'>,
+    ctx: Omit<
+      UnitOfWorkContext,
+      'invitationTokenHash' | 'hubSigningPublicKey' | 'storageReconcile'
+    >,
   ): Promise<void> {
     const manager = activeManager(this.dataSource);
     if (!manager) {
@@ -136,6 +143,14 @@ export class UnitOfWork {
     }
     const { organizationId, userId, hubId } = ctx;
     await setTransactionContext(manager, { organizationId, userId, hubId });
+  }
+
+  // Roda `work` FORA da transação ativa: o que os repositórios fizerem lá vai em autocommit (ou na própria transação
+  // de `run`/`withContext` chamados dentro), e fica gravado mesmo que a transação de fora seja desfeita. Para diários
+  // de efeitos externos (ex.: "a gravação no S3 começou"). Nunca grave aí uma linha que a transação de fora já travou:
+  // a outra conexão esperaria por ela para sempre.
+  detached<T>(work: () => Promise<T>): Promise<T> {
+    return ambient.exit(work);
   }
 
   // Roda `work` com o contexto dado e restaura o anterior ao terminar (abre transação se não houver).

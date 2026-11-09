@@ -15,6 +15,12 @@ export interface PresignedPut {
   headers: Record<string, string>;
 }
 
+/** One stored version of a key (an object version or a delete marker). */
+export interface StoredVersion {
+  versionId: string;
+  isDeleteMarker: boolean;
+}
+
 export interface ObjectHead {
   sizeBytes: number;
   /** Hex sha256 stored by S3 for the current version; null when S3 has no full-object sha256 (e.g. multipart). */
@@ -53,8 +59,11 @@ export abstract class ObjectStore {
 
   /**
    * Permanently removes ONE version (or delete marker) of the key; the previous version becomes current again.
-   * Only for compensation: undoing a copy or a delete marker whose index transaction did not commit, so the bucket's
-   * current version keeps matching the index (a noncurrent version expires in 30 days).
+   * Only for repair (`BackupObjectHealer`): removing a copy or a delete marker that no committed index row references,
+   * so the bucket's current version keeps matching the index (a noncurrent version expires in 30 days).
    */
   abstract deleteVersion(key: string, versionId: string): Promise<void>;
+
+  /** Every version and delete marker of exactly this key (any order). */
+  abstract listVersions(key: string): Promise<StoredVersion[]>;
 }

@@ -127,6 +127,23 @@ describe('SpaceContentAccess.lockForContent (hub)', () => {
     ).rejects.toMatchObject(NOT_FOUND);
   });
 
+  it('share mode takes FOR SHARE on the space (person and hub)', async () => {
+    kit.roomBySpace.get(SPACE_ID)!.set(HUB, 'space_editor');
+    await content.lockForContent(
+      SPACE_ID,
+      { kind: 'user', userId: EDITOR },
+      'memory.write',
+      'share',
+    );
+    await content.lockForContent(SPACE_ID, hub(), 'memory.write', 'share');
+    expect(
+      kit.trace.filter((t) => t.startsWith('spaces.lockForShare')),
+    ).toHaveLength(2);
+    expect(kit.trace.some((t) => t.startsWith('spaces.lockForUpdate'))).toBe(
+      false,
+    );
+  });
+
   it('the manager also writes as a person', async () => {
     await expect(
       content.lockForContent(

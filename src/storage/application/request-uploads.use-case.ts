@@ -21,8 +21,9 @@ import {
 
 // Intenção de envio (spec storage-backup §4.2, passo 1), tudo ou nada por pedido (até 100 objetos):
 // 1. formato: cada objeto uma vez (422 `duplicate-object`), até 5 GiB (422 `object-too-large`), antes de travar nada;
-// 2. no unit of work: trava o espaço (`StorageAccess.lock`, `memory.write`; FOR UPDATE: a mesma trava do
-//    redimensionar e da troca de chave), confere troca de chave pendente / versão da chave (409), trava cada objeto em
+// 2. no unit of work: trava o espaço (`StorageAccess.lock`, `memory.write`; FOR UPDATE, a mesma trava do
+//    redimensionar e da troca de chave: duas intenções do mesmo espaço se serializam, senão cada uma caberia sozinha
+//    e juntas estourariam o tamanho; nenhuma chamada ao S3 acontece sob ela), confere troca de chave pendente / versão da chave (409), trava cada objeto em
 //    ordem de id (criando a linha do objeto novo; id de outro espaço = 409), confere `replacesVersionId` (409
 //    `object-version-conflict`), encerra as intenções anteriores do mesmo objeto por quem envia, lê o uso (com as
 //    reservas) e confere que tudo cabe (422 `space-storage-full` com `missingBytes`); grava as versões `pending`;
@@ -50,7 +51,12 @@ export class RequestUploadsUseCase {
     const uploader = uploaderOf(actor);
 
     const created = await this.uow.run(async () => {
-      const space = await this.access.lock(spaceId, actor, 'memory.write');
+      const space = await this.access.lock(
+        spaceId,
+        actor,
+        'memory.write',
+        'update',
+      );
       const orgId = space.organizationId;
       for (const i of items) BackupRules.assertWritable(space, i.keyVersion);
       const sorted = [...items].sort((a, b) =>

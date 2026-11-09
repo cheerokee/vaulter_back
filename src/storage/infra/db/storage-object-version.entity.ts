@@ -39,6 +39,10 @@ import type { StorageObjectTypeormEntity } from './storage-object.entity.js';
 @Index('fk_storage_object_versions_users_idx', ['uploadedByUserId'])
 // Uso do espaço (soma por status) e a lista de versões do espaço.
 @Index('ix_storage_object_versions_space_status', ['spaceId', 'status'])
+// Diário das gravações no S3 (a varredura do reparo procura as marcadas antigas).
+@Index('ix_storage_object_versions_s3_write_started', ['s3WriteStartedAt'], {
+  where: `"s3_write_started_at" IS NOT NULL`,
+})
 export class StorageObjectVersionTypeormEntity extends BaseTypeormEntity {
   @Column({ type: 'uuid' })
   organizationId!: string;
@@ -149,4 +153,9 @@ export class StorageObjectVersionTypeormEntity extends BaseTypeormEntity {
 
   @Column({ type: 'timestamptz', nullable: true })
   supersededAt!: Date | null;
+
+  // Uma gravação no S3 (cópia ou delete marker) começou e o índice ainda não confirmou (ver migration
+  // StorageWriteJournal); limpo na transação que confirma ou pelo reparo.
+  @Column({ type: 'timestamptz', nullable: true })
+  s3WriteStartedAt!: Date | null;
 }

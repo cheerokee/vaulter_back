@@ -23,8 +23,8 @@ export function uploaderOf(actor: StorageActor): BackupUploader {
 //   organizações candidatas são as de vínculo APROVADO do Hub (`HubDirectory`, lidas sem lock).
 // - Pessoa: `SpaceAccess` (404 não membro, 403 sem a permissão), com qualquer sessão (decisão da Task 5: o conteúdo
 //   é cifrado no cliente e o membro já tem a chave).
-// Trava a linha do espaço FOR UPDATE (a mesma do redimensionar e da troca de chave) e reconfere sob ela. MUST run
-// inside `UnitOfWork.run`.
+// Trava a linha do espaço (FOR UPDATE na intenção, FOR SHARE na confirmação e no apagar; veja `SpaceContentAccess`) e
+// reconfere sob ela. MUST run inside `UnitOfWork.run`.
 @Injectable()
 export class StorageAccess {
   constructor(
@@ -32,16 +32,19 @@ export class StorageAccess {
     private readonly hubs: HubDirectory,
   ) {}
 
+  /** `mode`: `update` for the upload intent (reserves usage), `share` for confirmations and deletes. */
   async lock(
     spaceId: string,
     actor: StorageActor,
     permission: StoragePermission,
+    mode: 'update' | 'share' = 'update',
   ): Promise<SpaceContentState> {
     if ('userId' in actor) {
       return this.content.lockForContent(
         spaceId,
         { kind: 'user', userId: actor.userId },
         permission,
+        mode,
       );
     }
     return this.content.lockForContent(
@@ -52,6 +55,7 @@ export class StorageAccess {
         organizationIds: await this.hubs.approvedOrganizationIds(actor.hubId),
       },
       permission,
+      mode,
     );
   }
 }

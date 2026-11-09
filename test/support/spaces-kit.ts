@@ -99,6 +99,7 @@ export function makeSpaceKit() {
     save: vi.fn(),
     findById: vi.fn(),
     lockForUpdate: vi.fn(),
+    lockForShare: vi.fn(),
     listForMember: vi.fn(),
     listAll: vi.fn(),
   };
@@ -294,6 +295,12 @@ export function makeSpaceKit() {
     spaces.lockForUpdate.mockImplementation(
       async (orgId: string, id: string) => {
         tag('spaces.lockForUpdate');
+        return reload(spaceIn(orgId, id));
+      },
+    );
+    spaces.lockForShare.mockImplementation(
+      async (orgId: string, id: string) => {
+        tag('spaces.lockForShare');
         return reload(spaceIn(orgId, id));
       },
     );

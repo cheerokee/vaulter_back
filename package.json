@@ -28,7 +28,8 @@
     "migration:show": "npm run typeorm -- migration:show",
     "schema:check": "sh scripts/schema-check.sh",
     "typecheck": "tsc --noEmit -p tsconfig.json",
-    "platform:grant-admin": "node scripts/platform-grant-admin.ts"
+    "platform:grant-admin": "node scripts/platform-grant-admin.ts",
+    "storage:reconcile": "node dist/storage/infra/cli/reconcile-storage.js"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1164.0",
