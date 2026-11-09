@@ -454,8 +454,7 @@ exportam); nenhum dos dois importa `spaces`.
   -> linha do espaço (`FOR UPDATE`) -> atribuições de Gestor (`lockSpaceManagers`, em ordem de id). O gancho de saída
   trava vários espaços em ordem de id. Mutações do módulo passam por `SpaceAccess.lockAsMember` /
   `lockWithOrgPermission`.
-- **Pendências (não feito ainda):** storage/backup no S3 (hoje só a
-  chave e o kit); nuvem ativa (`cloud_mode = active_cloud`, só o campo existe); excluir espaço; papéis próprios de
+- **Pendências (não feito ainda):** nuvem ativa (`cloud_mode = active_cloud`, só o campo existe); excluir espaço; papéis próprios de
   espaço (só os de fábrica); notificações (pendência e troca de chave hoje só aparecem por consulta).
 - **e2e com a cripto real do cliente:** os helpers de espaço ficam em `test/support/identity-client.ts`
   (`c.spaces`: criar com kit, pôr membro selando todas as versões, trocar a chave, retrancar, abrir as cópias) e
@@ -701,13 +700,40 @@ ganha acesso a conteúdo (as chaves ficam com os clientes).
   detalhe genérico "The resource was not found.".
 - **Testes:** e2e em `test/platform/` (`catalog`, `staff`, `support-requests`, `lookup`); unitários ao lado do código.
 
-## Módulo `storage` (em construção; seção completa na Task 8 do plano storage-backup)
-`src/storage/`: backup cifrado dos espaços no S3. Spec: `docs/superpowers/specs/2026-11-09-storage-backup-design.md`.
-Depende de `spaces` (`SpaceContentAccess`, a porta `SpaceStorageUsage`, que ele liga) e `hubs` (`HubDirectory`), só
-pelo que exportam; ninguém importa `storage`.
+## Módulo `storage`
+`src/storage/` (índice do backup, envio, apagar, listar, baixar, reparo). Backup cifrado dos espaços no S3. Spec:
+`docs/superpowers/specs/2026-11-09-storage-backup-design.md`; formato do blob cifrado em `docs/crypto/space-backup.md`;
+o lado do aparelho em `docs/hubs/hub-lifecycle.md` (§9, §10; mudou rota, corpo, erro ou limite do backup, atualize-o no
+mesmo commit).
+- **Fronteiras:** `storage` depende de `spaces` (`SpaceContentAccess`, e a porta `SpaceStorageUsage`, que ele liga) e de
+  `hubs` (`HubDirectory`: organizações de vínculo aprovado do Hub), só pelo que exportam; ninguém importa `storage`.
+  Leituras entre módulos, todas documentadas onde nascem: o `organizations` soma `spaces.storage_quota_bytes` em SQL
+  (franquia; veja "Franquia de nuvem" em `organizations`), o `hubs` lê `spaces.storage_quota_bytes` em SQL ao instalar
+  (veja "Capacidade do Hub" em `hubs`) e a sincronização do Hub já era exceção. `SpaceStorageUsage` (porta do `spaces`,
+  sem fonte = 0) tem `use(source)` (o `storage` liga em `onModuleInit`) e `replace(source)`, a costura de teste que
+  devolve a função de restauração. Tamanho do espaço e franquia: veja "Tamanho do espaço" em `spaces`.
+- **Regras de tamanho** (`domain/backup-limits.ts`; mudar qualquer valor é decisão de produto): espaço 10 GiB por padrão
+  (1 GiB..5 TiB), franquia da organização 50 GiB (só o financeiro da plataforma altera: `PUT /platform/organizations/:orgId/
+  storage-quota`, veja `platform`), objeto até 5 GiB (422 `object-too-large`), lote de 100 itens por pedido
+  (intenção, confirmação, apagar), URL assinada 15 min, reserva da intenção 24 h, lixeira 30 dias (conta no uso), página
+  de listagem até 1000. O uso do espaço = versões `committed` + lixeira + reservas vivas; não cabe: 422
+  `space-storage-full` (`missingBytes`). Capacidade do Hub: instalar/aumentar além do SSD informado = 422
+  `hub-storage-full`; corrida entre instalações no mesmo Hub = 409 `hub-storage-busy` (repetir).
+- **Enviar, confirmar, apagar** (rotas do Hub `/hub/spaces/:spaceId/...` e da pessoa `/spaces/:spaceId/backup/...`, os
+  mesmos casos de uso por `StorageAccess`; limites na tabela de rate limit): intenção `POST .../uploads` (reserva o
+  tamanho, assina um PUT por objeto no prefixo provisório `uploads/<uploadId>`, tag `stage=upload`), PUT direto no S3,
+  confirmação `POST .../uploads/confirm` (HEAD confere tamanho/sha256, cópia no servidor para a chave final, versão
+  `committed`; idempotente) e `POST .../objects/delete` (delete marker, lápide, 30 dias de lixeira; idempotente).
+  **Quem pode:** enviar = `memory.write` (Hub com o espaço na Sala como `space_editor`; pessoa `space_editor`/`space_manager`
+  de qualquer sessão); apagar = `memory.delete` (só pessoa Gestora: Sala nenhuma tem, o Hub recebe 404); ler = `memory.read`
+  (veja Listar e baixar). Hub fora da Sala ou sem permissão e não membro: 404 `space-not-found`. Erros: 409
+  `space-key-rotation-required` (envio novo recusado enquanto a troca de chave estiver pendente; **apagar continua
+  valendo**), 409 `space-key-version-stale`, 409 `object-version-conflict` (`currentVersionId`), 409 `storage-busy`,
+  422 `duplicate-object` (objeto repetido no pedido), 404 `upload-not-found` (inexistente, de outro espaço/remetente, vencida),
+  422 `upload-mismatch` (bytes diferentes do declarado ou PUT não feito). Confirmar só quem pediu a intenção.
 - **O índice é a verdade; o S3 só guarda bytes.** Toda leitura, listagem e download usa o `s3VersionId` gravado no
   índice (`storage_object_versions`), **nunca** a versão "atual" do S3 (que pode estar errada por um instante depois de
-  uma queda entre o S3 e o COMMIT). Vale para a Task 7 (listar/baixar) e para tudo que vier.
+  uma queda entre o S3 e o COMMIT). Vale para listar, baixar e tudo que vier.
 - **Travas:** intenção de envio = espaço `FOR UPDATE` (lê o uso e reserva; duas intenções do mesmo espaço se
   serializam; sem chamada ao S3 sob a trava); confirmação e apagar = espaço `FOR SHARE` (não aumentam o uso) + linhas
   dos objetos `FOR UPDATE` em ordem de id, com as chamadas ao S3 (HEAD, cópia no servidor, delete marker) **sob** essas
@@ -720,7 +746,7 @@ pelo que exportam; ninguém importa `storage`.
   quem age (intenções do próprio remetente; a versão viva que o apagar indica), **renovando** para `now()`. Sob a trava
   do objeto, antes de gravar no S3, a tentativa reconfere a própria marca (sumiu = a varredura limpou enquanto o pedido
   estava parado: 409 `storage-busy`, repetível); **nenhuma gravação no S3 sem marca**. A marca **nunca** é limpa no
-  commit: só a varredura `npm run storage:reconcile` a limpa, e só as mais antigas que 60 min (relógio do banco),
+  commit: só a varredura `npm run storage:reconcile` (CLI `src/storage/infra/cli/reconcile-storage.ts`, depois do `build`, no container; argumento opcional = minutos, padrão 60) a limpa, e só as mais antigas que 60 min (relógio do banco),
   depois de reparar o objeto sob a trava. `BackupObjectHealer` (objeto travado) apaga do bucket toda versão/marker que
   nenhuma versão `committed` referencia (objeto apagado: só versões com dado, os markers ficam). Roda: no próximo
   toque do objeto (marca mais antiga que a da tentativa), logo depois de um unit of work que rejeitou depois de gravar
@@ -749,6 +775,28 @@ pelo que exportam; ninguém importa `storage`.
   .../objects/:objectId/versions/:versionId/download` → `{ url, expiresAt }` (15 min, não revogável: quem perde o
   acesso guarda só a URL que já tinha); versão desconhecida, pendente, de outro objeto ou fora da lixeira: 404
   `version-not-found`.
+
+- **Hub e login de pessoa** (detalhe em `hubs`, "Login de pessoa pelo Hub"): `POST /hub/user-sessions` (token de Hub) abre uma
+  sessão de usuário presa ao Hub (`user_sessions.hub_id`, `device_platform = 'hub'`); com ela a pessoa usa as rotas
+  `/spaces/:spaceId/backup/...`, inclusive em espaço fora da Sala (leitura). A sessão cai (`hub_access_lost`) quando a
+  pessoa perde todo papel no Hub (tirar papel, desvincular, sair da organização, desregistro). `/auth/login`,
+  cadastro e recuperação com `platform: 'hub'` são recusados **antes de qualquer prova** (401 `invalid-credentials` no
+  login; 422 `device-invalid` nos outros): sessão de Hub só nasce por essa rota.
+- **S3 (LocalStack em dev, produção):** o LocalStack roda com `S3_SKIP_SIGNATURE_VALIDATION=0` (confere a assinatura
+  das URLs, como o S3; veja Docker), guarda as regras de ciclo de vida mas **não as executa** (a expiração de 30 dias e
+  de 1 dia não acontece em dev; o reparo e os e2e não dependem dela). O PUT provisório leva a tag `stage=upload`
+  (a regra de 1 dia casa a tag, porque o filtro de prefixo só vale para o começo da chave). **Produção precisa de:**
+  (1) as mesmas regras de ciclo de vida no bucket real (`.docker/localstack/init/ready.d/01-buckets.sh` é a fonte);
+  (2) o papel IAM da API com `s3:ListBucket`, `s3:GetObject`, `s3:GetObjectVersion`, `s3:PutObject`,
+  `s3:PutObjectTagging`, `s3:DeleteObject`, `s3:DeleteObjectVersion` e `s3:ListBucketVersions` no bucket; (3) uma
+  configuração de **endpoint S3 público** para dispositivos reais em dev: as URLs assinadas saem com o host de
+  `AWS_ENDPOINT_URL` (`aws:4566`), que só resolve dentro do Docker; ainda **não existe** (veja Pendências).
+- **Testes:** e2e em `test/storage/` (`object-store`, `quotas`, `uploads`, `downloads`) com o S3 do LocalStack;
+  unitários ao lado do código com `ObjectStore` simulado. Helpers de Hub em `test/support/hub-client.ts` e
+  `hubs-kit.ts`. Pendências do módulo: veja "Pendências antes de produção" (snapshot pago, contratação de franquia,
+  classes de armazenamento mais baratas, troca de chave pelo Hub editor da Sala, visitante em Hub alheio, configuração
+  inicial por Bluetooth/idioma do Hub, índice `(space_id, updated_at)`, rota de download em lote, limpeza física do
+  índice, agendar `storage:reconcile`, aviso de franquia perto do fim, endpoint S3 público).
 
 ## Banco de dados (TypeORM + migrations)
 - **Pool:** o do driver `pg` (máximo padrão 10 conexões) com `connectionTimeoutMillis` = `DB_POOL_CONNECTION_TIMEOUT_MS`
@@ -874,6 +922,14 @@ Os valores do `.env.example` para os segredos são **só de desenvolvimento**; p
   5 min (`limitRemainingTime`), dentro da folga de 1 h do `since`.
 - **Índice `storage_objects (space_id, updated_at)`** para o `since` da listagem do backup (hoje filtra sem índice, pelo
   índice do espaço + PK); entra numa migration quando os espaços crescerem.
+- **Storage/backup:** snapshot pago (versão do espaço inteiro numa data); contratação de franquia pela organização com
+  cobrança automática (hoje só o financeiro da plataforma ajusta `storage_quota_bytes`); classes de armazenamento mais
+  baratas (ex.: Infrequent Access/Glacier para a lixeira e versões antigas); **troca de chave feita pelo Hub editor da
+  Sala** (opção b da spec: hoje só um membro pelo app troca, e o Hub guarda os envios numa fila local enquanto a troca
+  está pendente); visitante em Hub alheio (pessoa de outra organização usando o Hub); configuração inicial do Hub por
+  Bluetooth e idioma; rota de download em lote (hoje uma URL por versão); limpeza física do índice
+  (`storage_objects`/`storage_object_versions` depois da lixeira; o runtime não tem `DELETE`); aviso de franquia perto
+  do fim (notificação); endpoint S3 público configurável para dispositivos reais em dev.
 - Exclusão de conta (LGPD) precisa revogar as sessões.
 - **Agendar `npm run storage:reconcile`** (1x por dia, fora da aplicação) até o pg-boss entrar; aí vira uma tarefa
   dele. Sem a varredura, um objeto que ninguém toca de novo depois de uma queda entre o S3 e o COMMIT pode ter a versão
@@ -893,8 +949,8 @@ Os valores do `.env.example` para os segredos são **só de desenvolvimento**; p
 - Espaços: quem sai do espaço e volta também mantém o `joinedAt` original (a atribuição em `role_assignments` é
   reativada, não recriada); **assinar cada versão da chave** com a Ed25519 de quem fez a troca e o app conferir as
   chaves públicas dos membros antes de trancar (proteção contra um servidor malicioso ativo, que hoje poderia
-  injetar uma chave pública ou uma versão forjada); o **storage deve recusar gravação enquanto
-  `keyRotationRequired`** (conteúdo novo não pode sair cifrado com uma versão que quem saiu conhece).
+  injetar uma chave pública ou uma versão forjada). (O storage já recusa envio
+  enquanto `keyRotationRequired`: 409 `space-key-rotation-required`.)
 - Limites residuais conhecidos do rate limit (veja a seção abaixo): janela fixa (rajada de até 2x na virada),
   dependência da ordem dos guards, falha fechada com o Postgres fora do ar e bloqueio do e-mail da vítima.
 

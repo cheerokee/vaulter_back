@@ -23,6 +23,7 @@ quem implementa o lado do Hub (`vaulter-hub-back`) e o app.
                                                                         7. espaços no Hub
                                                                         8. liberar na Sala
  9. GET /hub/sync (a cada 5 min) ─────▶ dados das organizações vinculadas
+    envio do backup (a cada 5 min) ───▶ índice + S3; listagem completa 1x por dia
 10. pessoas usam o Hub (login online ou senha offline)
                                                                        11. troca de chave do espaço (inclui o Hub)
                                                                        12. desvincular / desregistrar
@@ -435,3 +436,7 @@ Estourou: 429 `too-many-requests` com `Retry-After` (segundos).
 - **Transferência de Hub:** não existe. Hoje o caminho é desregistrar e fazer reset de fábrica.
 - **Ordem de commit × `sync_version`:** uma sincronização pode pular de vez uma linha cujo commit chegou atrasado.
   Até a correção (horizonte seguro), a sincronização completa periódica corrige o estado.
+- **Backup (storage):** snapshot pago, troca de chave feita pelo Hub editor da Sala (hoje o Hub guarda os envios numa
+  fila local até um membro trocar a chave pelo app), visitante em Hub alheio, configuração inicial por Bluetooth e
+  idioma, download em lote, endpoint S3 público para aparelhos em desenvolvimento (a URL assinada hoje aponta para o
+  host interno do Docker). Lista completa em `CLAUDE.md`, "Pendências antes de produção".

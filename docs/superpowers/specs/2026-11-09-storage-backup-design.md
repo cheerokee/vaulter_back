@@ -1,6 +1,6 @@
 # Storage e backup cifrado no S3 — design
 
-Data: 09/11/2026 · Status: **aprovada em 09/11/2026** · Repositório: `vaulter_back` (módulo novo `storage`)
+Data: 09/11/2026 · Status: **aprovada em 09/11/2026 (implementada)** · Repositório: `vaulter_back` (módulo novo `storage`)
 
 Nasce de uma conversa do Jonas com o Claude. Parte da spec de produto
 `../valter-valt-ai/docs/superpowers/specs/2026-10-24-organizacoes-espacos-e-nuvem-design.md` (§6 modo de nuvem por

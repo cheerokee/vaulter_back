@@ -701,6 +701,70 @@ CREATE TABLE invitation_space_intents (
   CONSTRAINT fk_invitation_space_intents_requested_by FOREIGN KEY (requested_by_user_id) REFERENCES users (id)
 );
 
+-- Índice do backup cifrado dos espaços (módulo storage; spec storage-backup §4.1). O S3 só guarda bytes: o índice é a
+-- verdade (toda leitura usa s3_version_id). Só ids, tamanho, sha256 do blob cifrado, versão da chave e datas: nunca
+-- nome, tipo ou caminho de arquivo. Não entra na sincronização do Hub (sem sync_version; ele lista pelo endpoint do
+-- índice). As duas tabelas se referenciam (current_version_id): as FKs entram depois das tabelas.
+-- RLS por organização; o runtime não tem DELETE (limpeza física depois da lixeira é rotina futura com o dono).
+CREATE TABLE storage_objects (
+  id CHAR(36) NOT NULL COMMENT 'objectId gerado pelo Hub (uuid v7), sem default',
+  created_at DATETIME NOT NULL,
+  updated_at DATETIME NULL COMMENT 'carimbado com o relógio do banco depois do trabalho no S3: base do since da listagem',
+  deleted_at DATETIME NULL COMMENT 'lápide = apagado; a última versão fica em current_version_id (lixeira de 30 dias)',
+  organization_id CHAR(36) NOT NULL,
+  space_id CHAR(36) NOT NULL,
+  current_version_id CHAR(36) NULL COMMENT 'última versão confirmada (committed)',
+  PRIMARY KEY (id),
+  UNIQUE INDEX uq_storage_objects_id_organization (id, organization_id) COMMENT 'alvo das FKs compostas (filho_id, organization_id)',
+  INDEX fk_storage_objects_organizations_idx (organization_id),
+  INDEX fk_storage_objects_spaces_idx (space_id),
+  INDEX fk_storage_objects_current_version_idx (current_version_id),
+  CONSTRAINT fk_storage_objects_organizations FOREIGN KEY (organization_id) REFERENCES organizations (id),
+  CONSTRAINT fk_storage_objects_spaces FOREIGN KEY (space_id, organization_id) REFERENCES spaces (id, organization_id),
+  CONSTRAINT fk_storage_objects_current_version FOREIGN KEY (current_version_id, organization_id) REFERENCES storage_object_versions (id, organization_id)
+);
+
+-- Uma linha por intenção de envio (id = uploadId): pending (reserva o tamanho até upload_expires_at), committed (com
+-- s3_version_id) ou expired. superseded_at = foi para a lixeira (30 dias). Quem enviou: um Hub OU uma pessoa
+-- (CHECK num_nonnulls = 1). CHECKs no Postgres: status, size_bytes > 0, key_version >= 1, sha256 ~ '^[0-9a-f]{64}$',
+-- (status = 'committed') = (s3_version_id e committed_at preenchidos).
+CREATE TABLE storage_object_versions (
+  id CHAR(36) NOT NULL COMMENT 'uuid v7 do servidor = uploadId',
+  created_at DATETIME NOT NULL,
+  updated_at DATETIME NULL,
+  deleted_at DATETIME NULL,
+  organization_id CHAR(36) NOT NULL,
+  space_id CHAR(36) NOT NULL,
+  object_id CHAR(36) NOT NULL,
+  key_version INT NOT NULL COMMENT 'versão da chave do espaço com que o blob foi cifrado',
+  size_bytes BIGINT NOT NULL COMMENT 'tamanho do blob cifrado (até 5 GiB)',
+  sha256 CHAR(64) NOT NULL COMMENT 'hash do blob cifrado, hexadecimal minúsculo',
+  status ENUM('pending', 'committed', 'expired') NOT NULL DEFAULT 'pending',
+  replaces_version_id CHAR(36) NULL COMMENT 'versão que esta substitui (controle de conflito)',
+  s3_version_id VARCHAR(1024) NULL COMMENT 'id da versão no S3; toda leitura usa este',
+  uploaded_by_hub_id CHAR(36) NULL,
+  uploaded_by_user_id CHAR(36) NULL,
+  upload_expires_at DATETIME NOT NULL COMMENT 'fim da reserva e da janela de confirmação (24 h)',
+  committed_at DATETIME NULL,
+  superseded_at DATETIME NULL COMMENT 'foi para a lixeira (30 dias)',
+  s3_write_started_at DATETIME NULL COMMENT 'diário: uma gravação no S3 começou neste instante ou depois (relógio do banco); só a varredura storage:reconcile limpa, depois de 60 min',
+  PRIMARY KEY (id),
+  UNIQUE INDEX uq_storage_object_versions_id_organization (id, organization_id) COMMENT 'alvo das FKs compostas (filho_id, organization_id)',
+  INDEX fk_storage_object_versions_organizations_idx (organization_id),
+  INDEX fk_storage_object_versions_objects_idx (object_id),
+  INDEX fk_storage_object_versions_replaces_idx (replaces_version_id),
+  INDEX fk_storage_object_versions_hubs_idx (uploaded_by_hub_id),
+  INDEX fk_storage_object_versions_users_idx (uploaded_by_user_id),
+  INDEX ix_storage_object_versions_space_status (space_id, status) COMMENT 'uso do espaço (soma por status)',
+  INDEX ix_storage_object_versions_s3_write_started (s3_write_started_at) COMMENT 'só linhas marcadas (WHERE s3_write_started_at IS NOT NULL no Postgres)',
+  CONSTRAINT fk_storage_object_versions_organizations FOREIGN KEY (organization_id) REFERENCES organizations (id),
+  CONSTRAINT fk_storage_object_versions_spaces FOREIGN KEY (space_id, organization_id) REFERENCES spaces (id, organization_id),
+  CONSTRAINT fk_storage_object_versions_objects FOREIGN KEY (object_id, organization_id) REFERENCES storage_objects (id, organization_id),
+  CONSTRAINT fk_storage_object_versions_replaces FOREIGN KEY (replaces_version_id, organization_id) REFERENCES storage_object_versions (id, organization_id),
+  CONSTRAINT fk_storage_object_versions_hubs FOREIGN KEY (uploaded_by_hub_id) REFERENCES hubs (id),
+  CONSTRAINT fk_storage_object_versions_users FOREIGN KEY (uploaded_by_user_id) REFERENCES users (id)
+);
+
 -- Permissões que o app pode pedir. À instalação só se concede a interseção (app declarou x papel concedido).
 CREATE TABLE app_permission (
   app_id CHAR(36) NOT NULL,
