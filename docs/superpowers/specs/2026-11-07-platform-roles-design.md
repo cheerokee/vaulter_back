@@ -143,8 +143,29 @@ nº 123"), quem pediu, estado e quem aprovou/recusou.
 - O `organizations` exporta uma operação que dá `org_admin` (criando o vínculo se preciso), com o
   `lockMembershipContext` de hoje, e audita `member.role_changed` / `member.joined` com `metadata` marcando a
   plataforma e o id do pedido. Visível para os admins da organização.
-- O novo admin remove a conta perdida pelo fluxo normal, se quiser. A ação **não** mexe em espaços nem em chaves: para
-  reabrir espaços órfãos, ele usa o kit da empresa (fluxo atual).
+- O novo admin remove a conta perdida pelo fluxo normal, se quiser (depois da janela de proteção abaixo). A ação **não**
+  mexe em espaços nem em chaves: para reabrir espaços órfãos, ele usa o kit da empresa (fluxo atual).
+
+#### Proteção depois da nomeação (decisão do Jonas, 09/11/2026)
+- **Risco:** um admin nomeado pela plataforma poderia trocar o kit de recuperação por um que ele controla, esperar os
+  apps dos membros retrancarem, remover os membros (os espaços viram órfãos) e ler as chaves pelas cópias do kit.
+  Um `platform_admin` sozinho faria isso com uma conta própria. Restringir só o nomeado não basta: ele promoveria uma
+  segunda conta a admin.
+- **(a) Janela de proteção da organização inteira:** quando a nomeação **grava** (o alvo ainda não era admin), a
+  organização guarda `platform_appointed_user_id`, `platform_appointed_at` e `protected_until = now + 7 dias`
+  (`PLATFORM_APPOINTMENT_PROTECTION_DAYS`). Uma nomeação nova sobrescreve os três e reinicia a janela; nomear de novo
+  quem já é admin não grava nada e não reinicia. Enquanto `now < protected_until`, **ninguém** da organização registra
+  ou troca o kit nem remove membro: 422 `organization-under-protection`, com `protectedUntil` como membro de extensão
+  do RFC 9457. A checagem roda na transação, depois da reconferência da permissão e antes de qualquer gravação.
+  Continuam permitidos: sair da organização, mudar papéis, convites, reabrir espaço órfão com o kit **atual** e o resto.
+  Sem liberação antecipada (nenhuma rota nem ação da equipe).
+- **(c) Dados para o aviso no app:** a organização guarda quem trocou o kit e quando (`recovery_key_changed_by_user_id`,
+  `recovery_key_changed_at`). A visão da organização (todo membro) traz `recoveryKeyChangedAt`,
+  `recoveryKeyChangedByUserId` e `platformAppointment: { appointedUserId, appointedAt, protectedUntil } | null`
+  (visível até `protectedUntil` + 30 dias, depois `null`). O app avisa todos os membros enquanto `platformAppointment`
+  estiver presente e, antes de retrancar para um kit novo, mostra quem trocou e quando e pede confirmação. Nada disso
+  vai para a sincronização do Hub.
+- Opção "b" (aprovação externa da troca do kit) não foi adotada.
 
 ### 4.5 Auditoria da plataforma
 - Trilha própria (`platform_audit_logs`, *append-only*: runtime só `INSERT/SELECT`), com quem fez, ação, alvo, id do

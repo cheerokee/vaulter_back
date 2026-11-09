@@ -204,7 +204,7 @@ src/
   `requestId` (e, em validação, a lista de campos inválidos). Um erro de domínio 4xx com `details` leva esses campos
   como **membros de extensão** do RFC 9457 (nunca sobrepõem os padrão), ex.: `key-rotation-mismatch` com
   `expectedHubIds`/`missingHubIds`/`unexpectedHubIds`/`duplicatedHubIds` (e o mesmo para `...UserIds`) ou
-  `expectedVersion`. Só ids que quem chamou já pode ver. Erros 4xx do body-parser (413 corpo grande,
+  `expectedVersion`, e `organization-under-protection` (422) com `protectedUntil`. Só ids que quem chamou já pode ver. Erros 4xx do body-parser (413 corpo grande,
   400 JSON malformado) também saem como problem+json. Stack trace, SQL e mensagem crua do banco vão só
   para o log, nunca para a resposta.
 - O modelo de dados e as regras de negócio vêm da spec
@@ -313,7 +313,28 @@ src/organizations/
 - **Chave de recuperação da organização:** `PUT /organizations/:id/recovery-key` só **substitui** (nunca apaga),
   exige `org.members.manage` **e** reautenticação (`currentAuthProof`, verificada por `CurrentAuthProofVerifier`, com o
   rate limit de reautenticação compartilhado com `PUT /me/password`) e é auditada (`registered`/`replaced`, sem a
-  prova nem a chave privada).
+  prova nem a chave privada). Grava **quem e quando** trocou (`recovery_key_changed_by_user_id`/`_at`).
+- **Proteção depois da nomeação pela plataforma** (decisão do Jonas, 09/11/2026; spec platform-roles §4.4): quando
+  `OrganizationAdministration.appointAdmin` **grava** (o alvo ainda não era admin), a organização ganha
+  `platform_appointed_user_id`, `platform_appointed_at` e `protected_until = now + 7 dias`
+  (`PLATFORM_APPOINTMENT_PROTECTION_DAYS`, domínio; uma nomeação nova sobrescreve os três e reinicia a janela; nomear de novo
+  quem já é admin não reinicia). Enquanto `now < protected_until`, **ninguém** da organização (o nomeado, quem ele
+  promover, os admins antigos) registra/troca o kit (`PUT .../recovery-key`) nem remove membro (`DELETE .../members/:userId`):
+  422 `organization-under-protection` com `protectedUntil` (ISO) como membro de extensão. A regra é do agregado
+  (`Organization.assertNotUnderProtection`/`recordPlatformAppointment`), conferida na transação depois da reconferência
+  da permissão e antes de qualquer gravação (a ordem formato -> permissão -> reautenticação -> transação continua).
+  Continuam permitidos: sair, mudar papel, convites, reabrir espaço órfão com o kit **atual** e o resto. Sem
+  liberação antecipada (nenhuma rota nem ação da equipe). Motivo: um admin nomeado (ou uma conta dele) trocaria o kit,
+  esperaria os apps retrancarem, removeria os membros e leria as chaves pelos espaços órfãos.
+  **Locks:** toda leitura-modificação-gravação da linha da organização (kit, `PATCH`, nomeação) lê com
+  `OrganizationRepository.lockForUpdate` (`FOR NO KEY UPDATE`, não bloqueia inserções de filhos), porque o `save` grava
+  a linha inteira; a nomeação trava `org_admin` -> organização; a remoção já serializa com ela pelo `org_admin`.
+- **Visão da organização** (`toOrganizationView`, em `GET /organizations`, `GET/PATCH /organizations/:id`, e devolvida
+  pelo caso de uso do kit) traz `recoveryKeyChangedAt`, `recoveryKeyChangedByUserId` e `platformAppointment:
+  { appointedUserId, appointedAt, protectedUntil } | null` (mostrada até `protectedUntil` + 30 dias,
+  `PLATFORM_APPOINTMENT_NOTICE_DAYS`; depois `null`), para todo membro. **Nada disso vai para a sincronização do Hub.**
+  **Recomendação para o app:** avisar **todos os membros** enquanto `platformAppointment` estiver presente e, **antes de
+  retrancar** um espaço para um kit novo, mostrar quem trocou o kit e quando e pedir confirmação.
 - **Auditoria (`audit_logs`):** *append-only* — o papel de runtime tem só `INSERT`/`SELECT` (sem `UPDATE`/`DELETE`),
   via `AuditLog.record` dentro da mesma transação da ação. Ações: `organization.created`, `organization.updated`,
   `organization.recovery_key.registered|replaced`, `member.joined`, `member.left`, `member.removed`,
@@ -605,8 +626,11 @@ ganha acesso a conteúdo (as chaves ficam com os clientes).
   `{ kind: 'user', userId }` ou `{ kind: 'platform', supportRequestId }`; `auditActorFields` dá o `userId` e a metadata
   de cada gravação): `HubAdministration.deregister(hubId, actor)` (mesmo efeito e mesma ordem de locks do
   `DeregisterHubUseCase`, sem exigir o dono) e `OrganizationAdministration.appointAdmin(orgId, userId, actor, now)`
-  (replica a ordem de locks do `lockMembershipContext`, sem membro ator: `org_admin` travados antes de ler o alvo).
-  Cada uma tem também `summary` (consulta mínima das buscas).
+  (replica a ordem de locks do `lockMembershipContext`, sem membro ator: `org_admin` travados antes de ler o alvo, depois
+  a linha da organização). Quando grava, `appointAdmin` abre a **janela de proteção de 7 dias** da organização (sem
+  troca de kit nem remoção de membro para ninguém; 422 `organization-under-protection`; veja "Proteção depois da
+  nomeação pela plataforma" no módulo `organizations`), e a nomeação aparece para todos os membros em
+  `platformAppointment`. Cada uma tem também `summary` (consulta mínima das buscas).
 - **Auditoria:** trilha própria `platform_audit_logs` (*append-only*; `platform.role.granted|revoked`,
   `platform.request.created|approved|rejected|executed|failed|expired`, `platform.lookup.user|hub|organization`), em
   `PlatformAudit.record` dentro da mesma transação. **Toda busca é auditada** (rastro LGPD de quem da equipe olhou dado

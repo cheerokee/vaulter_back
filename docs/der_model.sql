@@ -152,12 +152,21 @@ CREATE TABLE organizations (
   -- Kit de recuperação: a parte privada é mostrada uma vez ao cliente; aqui só a pública, para trancar as
   -- chaves dos espaços (space_keys.recovery_wrapped_key). Nulo até o primeiro espaço ou ação explícita.
   recovery_public_key TEXT NULL,
+  recovery_key_changed_at DATETIME NULL COMMENT 'última troca do kit (registro ou substituição); anda junto com recovery_key_changed_by_user_id',
+  recovery_key_changed_by_user_id CHAR(36) NULL COMMENT 'quem trocou o kit por último; o app mostra antes de retrancar',
+  -- Proteção depois de um admin nomeado pela plataforma (spec platform-roles §4.4): os três andam juntos; enquanto
+  -- now < protected_until ninguém troca o kit nem remove membro. Uma nomeação nova sobrescreve os três.
+  platform_appointed_user_id CHAR(36) NULL COMMENT 'último admin nomeado pela plataforma',
+  platform_appointed_at DATETIME NULL COMMENT 'quando foi a última nomeação pela plataforma',
+  protected_until DATETIME NULL COMMENT 'fim da janela de proteção (nomeação + 7 dias)',
   personal_owner_user_id CHAR(36) NULL COMMENT 'dono da organização pessoal; nulo nas demais; garante uma pessoal por conta',
   sync_version BIGINT NOT NULL COMMENT 'versão de sincronização: sequência global do servidor, muda a cada insert/update/exclusão',
   PRIMARY KEY (id),
   UNIQUE INDEX uq_organizations_personal_owner (personal_owner_user_id),
   INDEX ix_organizations_sync_version (sync_version),
-  CONSTRAINT fk_organizations_personal_owner FOREIGN KEY (personal_owner_user_id) REFERENCES users (id)
+  CONSTRAINT fk_organizations_personal_owner FOREIGN KEY (personal_owner_user_id) REFERENCES users (id),
+  CONSTRAINT fk_organizations_recovery_key_changed_by FOREIGN KEY (recovery_key_changed_by_user_id) REFERENCES users (id),
+  CONSTRAINT fk_organizations_platform_appointed_user FOREIGN KEY (platform_appointed_user_id) REFERENCES users (id)
 );
 
 -- Ser membro da organização. O que o membro pode fazer vem de role_assignments (escopo organização).
