@@ -161,6 +161,18 @@ describe('OrganizationAdministration', () => {
       });
     });
 
+    it('a user actor appointment does not open the protection window', async () => {
+      await admin().appointAdmin(
+        ORG_ID,
+        MEMBER,
+        { kind: 'user', userId: ADMIN },
+        NOW,
+      );
+      expect(kit.mocks.roles.assignOrgRole).toHaveBeenCalled();
+      expect(kit.mocks.orgs.lockForUpdate).not.toHaveBeenCalled();
+      expect(kit.mocks.orgs.save).not.toHaveBeenCalled();
+    });
+
     it('a registered non-member appointed also starts the window', async () => {
       await admin().appointAdmin(ORG_ID, STRANGER, PLATFORM, NOW);
       const saved = kit.mocks.orgs.save.mock.calls[0]![0] as Organization;

@@ -54,7 +54,7 @@ export class OrganizationAdministration {
    * membership, `member.joined`); then the role and `member.role_changed`. Already admin: nothing is written.
    * Personal organization: 422 `personal-organization-protected`; unknown organization or user: 404.
    * Locks like the other membership changes: org_admin assignments (`lockOrgAdmins`) before reading the target,
-   * then the organization row. When it writes, it (re)starts the organization's protection window
+   * then the organization row. When it writes for a `platform` actor, it (re)starts the organization's protection window
    * (`recordPlatformAppointment`: no kit change and no member removal for anyone for 7 days).
    */
   appointAdmin(
@@ -119,11 +119,14 @@ export class OrganizationAdministration {
             to: 'org_admin',
           },
         });
-        // Janela de proteção (decisão do Jonas, 09/11/2026): só quando a nomeação grava; uma nova a reinicia. A linha
-        // é relida travada (org_admin -> organização), para não gravar campos velhos sobre um kit trocado no meio.
-        const locked = await lockOrganization(this.orgs, orgId);
-        locked.recordPlatformAppointment(userId, now);
-        await this.orgs.save(locked);
+        // Janela de proteção (decisão do Jonas, 09/11/2026): só numa nomeação da plataforma que grava; uma nova a
+        // reinicia. A linha é relida travada (org_admin -> organização), para não gravar campos velhos sobre um kit
+        // trocado no meio.
+        if (actor.kind === 'platform') {
+          const locked = await lockOrganization(this.orgs, orgId);
+          locked.recordPlatformAppointment(userId, now);
+          await this.orgs.save(locked);
+        }
         return { joined: !existing };
       }),
     );

@@ -134,12 +134,13 @@ export class Organization extends Entity<OrganizationProps> {
 
   /**
    * Registers the first key or replaces the current one, recording who and when; validates before touching state.
-   * The protection window is the caller's check (`assertNotUnderProtection`), so the rule reads in the use case.
+   * Refused while the organization is under protection (`assertNotUnderProtection`), so no caller can bypass it.
    */
   setRecoveryKey(
     publicKey: string,
     by: { userId: string; now: Date },
   ): 'registered' | 'replaced' {
+    this.assertNotUnderProtection(by.now);
     const key = assertRecoveryPublicKey(publicKey);
     const outcome = this.props.recoveryPublicKey ? 'replaced' : 'registered';
     this.props = {

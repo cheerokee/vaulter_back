@@ -315,7 +315,7 @@ src/organizations/
   rate limit de reautenticação compartilhado com `PUT /me/password`) e é auditada (`registered`/`replaced`, sem a
   prova nem a chave privada). Grava **quem e quando** trocou (`recovery_key_changed_by_user_id`/`_at`).
 - **Proteção depois da nomeação pela plataforma** (decisão do Jonas, 09/11/2026; spec platform-roles §4.4): quando
-  `OrganizationAdministration.appointAdmin` **grava** (o alvo ainda não era admin), a organização ganha
+  `OrganizationAdministration.appointAdmin` **grava** (o alvo ainda não era admin) com ator `platform`, a organização ganha
   `platform_appointed_user_id`, `platform_appointed_at` e `protected_until = now + 7 dias`
   (`PLATFORM_APPOINTMENT_PROTECTION_DAYS`, domínio; uma nomeação nova sobrescreve os três e reinicia a janela; nomear de novo
   quem já é admin não reinicia). Enquanto `now < protected_until`, **ninguém** da organização (o nomeado, quem ele
@@ -332,7 +332,9 @@ src/organizations/
 - **Visão da organização** (`toOrganizationView`, em `GET /organizations`, `GET/PATCH /organizations/:id`, e devolvida
   pelo caso de uso do kit) traz `recoveryKeyChangedAt`, `recoveryKeyChangedByUserId` e `platformAppointment:
   { appointedUserId, appointedAt, protectedUntil } | null` (mostrada até `protectedUntil` + 30 dias,
-  `PLATFORM_APPOINTMENT_NOTICE_DAYS`; depois `null`), para todo membro. **Nada disso vai para a sincronização do Hub.**
+  `PLATFORM_APPOINTMENT_NOTICE_DAYS`; depois `null`), para todo membro. `recoveryKeyChangedAt`/`recoveryKeyChangedByUserId`
+  **nulos com kit registrado** significam **"desconhecido"** (kit registrado antes de esse registro existir), nunca
+  "nunca trocado": o app não deve tratar como kit original confiável. **Nada disso vai para a sincronização do Hub.**
   **Recomendação para o app:** avisar **todos os membros** enquanto `platformAppointment` estiver presente e, **antes de
   retrancar** um espaço para um kit novo, mostrar quem trocou o kit e quando e pedir confirmação.
 - **Auditoria (`audit_logs`):** *append-only* — o papel de runtime tem só `INSERT`/`SELECT` (sem `UPDATE`/`DELETE`),
@@ -627,7 +629,7 @@ ganha acesso a conteúdo (as chaves ficam com os clientes).
   de cada gravação): `HubAdministration.deregister(hubId, actor)` (mesmo efeito e mesma ordem de locks do
   `DeregisterHubUseCase`, sem exigir o dono) e `OrganizationAdministration.appointAdmin(orgId, userId, actor, now)`
   (replica a ordem de locks do `lockMembershipContext`, sem membro ator: `org_admin` travados antes de ler o alvo, depois
-  a linha da organização). Quando grava, `appointAdmin` abre a **janela de proteção de 7 dias** da organização (sem
+  a linha da organização). Quando grava com ator `platform`, `appointAdmin` abre a **janela de proteção de 7 dias** da organização (sem
   troca de kit nem remoção de membro para ninguém; 422 `organization-under-protection`; veja "Proteção depois da
   nomeação pela plataforma" no módulo `organizations`), e a nomeação aparece para todos os membros em
   `platformAppointment`. Cada uma tem também `summary` (consulta mínima das buscas).

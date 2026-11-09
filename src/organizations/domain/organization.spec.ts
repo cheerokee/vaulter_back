@@ -159,6 +159,24 @@ describe('Organization protection after a platform appointment', () => {
     }
   });
 
+  it('setRecoveryKey itself refuses during the window (no caller can bypass it), keeping the old key', () => {
+    const org = Organization.create({ name: 'A', now });
+    org.setRecoveryKey(key, { userId: 'u1', now });
+    org.recordPlatformAppointment('u9', now);
+    for (const k of [key2, 'xx']) {
+      expect(() =>
+        org.setRecoveryKey(k, { userId: 'u9', now: plus(now, DAY) }),
+      ).toThrow(
+        expect.objectContaining({ code: 'organization-under-protection' }),
+      );
+    }
+    expect(org.recoveryPublicKey).toBe(key);
+    expect(org.recoveryKeyChangedByUserId).toBe('u1');
+    expect(
+      org.setRecoveryKey(key2, { userId: 'u9', now: plus(now, 7 * DAY) }),
+    ).toBe('replaced');
+  });
+
   it('a new appointment restarts the window (overwrites the three fields)', () => {
     const org = Organization.create({ name: 'A', now });
     org.recordPlatformAppointment('u9', now);
