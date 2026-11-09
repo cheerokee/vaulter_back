@@ -132,6 +132,45 @@ export class OrganizationAdministration {
     );
   }
 
+  /**
+   * Sets the cloud storage quota (finance adjusts it; the plan decides the value, not this method). Locks the
+   * organization row (`lockForUpdate`, the same lock that creating or growing a space takes before reading the
+   * reserved sum), so a concurrent reservation cannot slip past: `quotaBytes` below the reserved sum of the live
+   * spaces is 422 `storage-quota-below-reserved` (with `reservedBytes`); unknown organization: 404. Setting the same
+   * value writes and audits nothing. Audits `organization.storage_quota_changed` (`fromBytes`, `toBytes`).
+   */
+  setStorageQuota(
+    orgId: string,
+    quotaBytes: number,
+    actor: AuditActor,
+    _now: Date,
+  ): Promise<{ fromBytes: number; toBytes: number }> {
+    if (!validate(orgId)) return Promise.reject(organizationNotFound());
+    const origin = auditActorFields(actor);
+    return this.uow.run(async () => {
+      const org = await lockOrganization(this.orgs, orgId);
+      const { fromBytes, toBytes } = org.setStorageQuota(quotaBytes);
+      const reservedBytes = await this.orgs.reservedStorageBytes(orgId);
+      if (toBytes < reservedBytes) {
+        throw new DomainValidationError(
+          'storage-quota-below-reserved',
+          'The storage quota cannot be lower than the size already reserved by the spaces.',
+          { reservedBytes },
+        );
+      }
+      if (toBytes !== fromBytes) {
+        await this.orgs.save(org);
+        await this.audit.record({
+          organizationId: orgId,
+          userId: origin.userId,
+          action: 'organization.storage_quota_changed',
+          metadata: { ...origin.metadata, fromBytes, toBytes },
+        });
+      }
+      return { fromBytes, toBytes };
+    });
+  }
+
   /** Read-only view of an organization; null when unknown or malformed. */
   async summary(
     orgId: string,

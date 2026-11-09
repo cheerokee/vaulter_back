@@ -337,11 +337,11 @@ describe('GetPlatformMeUseCase', () => {
     });
   });
 
-  it('a finance member (no permissions) still sees their role', async () => {
+  it('a finance member sees their role and its one permission', async () => {
     assigned.set(CUSTOMER, new Set(['platform_finance']));
     await expect(me.execute(actor(CUSTOMER))).resolves.toEqual({
       roles: ['platform_finance'],
-      permissions: [],
+      permissions: ['platform.billing.storage_quota'],
     });
   });
 

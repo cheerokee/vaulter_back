@@ -112,6 +112,19 @@ export class Organization extends Entity<OrganizationProps> {
     return new Organization(props, id);
   }
 
+  /** Sets the cloud quota; the caller has already checked it against the reserved sum (under the row lock). */
+  setStorageQuota(bytes: number): { fromBytes: number; toBytes: number } {
+    if (!Number.isSafeInteger(bytes) || bytes <= 0) {
+      throw new DomainValidationError(
+        'storage-quota-invalid',
+        'The storage quota must be a positive number of bytes.',
+      );
+    }
+    const fromBytes = this.props.storageQuotaBytes;
+    this.props = { ...this.props, storageQuotaBytes: bytes };
+    return { fromBytes, toBytes: bytes };
+  }
+
   rename(name: string): void {
     this.props = { ...this.props, name: assertName(name) };
   }

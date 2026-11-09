@@ -283,11 +283,14 @@ describe('Platform staff and roles (e2e)', () => {
     expect(await platformAuditRows()).toHaveLength(1);
   });
 
-  it('a finance member (role without permissions) sees GET /platform/me', async () => {
+  it('a finance member (only the storage quota permission) sees GET /platform/me', async () => {
     const fin = await signUp('fin@example.com', 'Fin');
     await grantRoleInDb(fin.userId, 'platform_finance');
     const res = await p.me(fin.token).expect(200);
-    expect(res.body).toEqual({ roles: ['platform_finance'], permissions: [] });
+    expect(res.body).toEqual({
+      roles: ['platform_finance'],
+      permissions: ['platform.billing.storage_quota'],
+    });
     await p.staff(fin.token).expect(404);
   });
 

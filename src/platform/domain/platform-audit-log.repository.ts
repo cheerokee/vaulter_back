@@ -9,7 +9,8 @@ export type PlatformAuditAction =
   | 'platform.request.expired'
   | 'platform.lookup.user'
   | 'platform.lookup.hub'
-  | 'platform.lookup.organization';
+  | 'platform.lookup.organization'
+  | 'platform.organization.storage_quota_changed';
 
 import type {
   CursorPage,

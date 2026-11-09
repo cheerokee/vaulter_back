@@ -5,10 +5,11 @@ import {
 } from './platform-catalog.js';
 
 describe('platform catalog', () => {
-  it('has the five platform permissions', () => {
+  it('has the six platform permissions', () => {
     expect([...PLATFORM_PERMISSIONS].sort()).toEqual(
       [
         'platform.audit.read',
+        'platform.billing.storage_quota',
         'platform.roles.manage',
         'platform.support.approve',
         'platform.support.execute_alone',
@@ -30,8 +31,10 @@ describe('platform catalog', () => {
     ]);
   });
 
-  it('platform_finance has no permissions', () => {
-    expect(PLATFORM_ROLES.platform_finance.permissions).toEqual([]);
+  it('platform_finance has only the storage quota permission', () => {
+    expect(PLATFORM_ROLES.platform_finance.permissions).toEqual([
+      'platform.billing.storage_quota',
+    ]);
   });
 
   it('every role has a display name and only known permissions', () => {

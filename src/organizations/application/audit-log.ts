@@ -7,6 +7,7 @@ export type AuditAction =
   | 'organization.updated'
   | 'organization.recovery_key.registered'
   | 'organization.recovery_key.replaced'
+  | 'organization.storage_quota_changed'
   | 'member.joined'
   | 'member.left'
   | 'member.removed'

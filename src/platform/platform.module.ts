@@ -20,6 +20,7 @@ import {
 } from './application/lookup.use-cases.js';
 import { PlatformAccess } from './application/platform-access.js';
 import { PlatformAudit } from './application/platform-audit.js';
+import { SetOrganizationStorageQuotaUseCase } from './application/set-organization-storage-quota.use-case.js';
 import { RevokePlatformRoleUseCase } from './application/revoke-platform-role.use-case.js';
 import { PlatformAuditLogRepository } from './domain/platform-audit-log.repository.js';
 import { PlatformRoleRepository } from './domain/platform-role.repository.js';
@@ -36,6 +37,7 @@ import { UserPlatformRoleTypeormEntity } from './infra/db/user-platform-role.ent
 import { PlatformAuditController } from './infra/http/platform-audit.controller.js';
 import { PlatformLookupController } from './infra/http/platform-lookup.controller.js';
 import { PlatformMeController } from './infra/http/platform-me.controller.js';
+import { PlatformOrganizationsController } from './infra/http/platform-organizations.controller.js';
 import { PlatformPermissionGuard } from './infra/http/platform-permission.guard.js';
 import { PlatformStaffController } from './infra/http/platform-staff.controller.js';
 import { SupportRequestsController } from './infra/http/support-requests.controller.js';
@@ -49,6 +51,7 @@ import { SupportRequestsController } from './infra/http/support-requests.control
     SupportRequestsController,
     PlatformLookupController,
     PlatformAuditController,
+    PlatformOrganizationsController,
   ],
   imports: [
     // UserDirectory (nome/e-mail da equipe) e CurrentAuthProofVerifier (reautenticação).
@@ -96,6 +99,7 @@ import { SupportRequestsController } from './infra/http/support-requests.control
     LookupHubUseCase,
     LookupOrganizationUseCase,
     ListPlatformAuditUseCase,
+    SetOrganizationStorageQuotaUseCase,
   ],
   exports: [PlatformAccess, PlatformAudit],
 })

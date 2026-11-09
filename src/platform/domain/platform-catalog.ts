@@ -7,6 +7,7 @@ export const PLATFORM_PERMISSIONS = [
   'platform.support.approve',
   'platform.support.execute_alone',
   'platform.audit.read',
+  'platform.billing.storage_quota',
 ] as const;
 
 export type PlatformPermission = (typeof PLATFORM_PERMISSIONS)[number];
@@ -22,7 +23,7 @@ export const PLATFORM_ROLES = {
   },
   platform_finance: {
     name: 'Financeiro',
-    permissions: [],
+    permissions: ['platform.billing.storage_quota'],
   },
 } as const satisfies Record<
   string,

@@ -609,8 +609,12 @@ ganha acesso a conteúdo (as chaves ficam com os clientes).
 - **Papéis e permissões** (`domain/platform-catalog.ts`, fonte da verdade em código; semeado pela migration
   `CreatePlatformRoles`, imutável: mudar o catálogo = nova migration; o e2e confere banco == catálogo; `resetDatabase`
   dos testes restaura o catálogo como faz com o RBAC). Permissões: `platform.roles.manage`, `platform.support.request`,
-  `platform.support.approve`, `platform.support.execute_alone`, `platform.audit.read`. Papéis: `platform_admin` (todas),
-  `platform_support` (`support.request` + `audit.read`), `platform_finance` (nenhuma por ora). Conta normal do `identity`
+  `platform.support.approve`, `platform.support.execute_alone`, `platform.audit.read`, `platform.billing.storage_quota`
+  (migration `PlatformStorageQuotaPermission`). Papéis: `platform_admin` (todas), `platform_support` (`support.request`
+  + `audit.read`), `platform_finance` (só `billing.storage_quota`). **Franquia de nuvem:** `PUT /platform/organizations/:orgId/storage-quota`
+  `{ quotaBytes, reason, currentAuthProof }` (financeiro ou admin; `@ThrottleReauth`): `OrganizationAdministration.setStorageQuota`
+  trava a organização, 422 `storage-quota-below-reserved` abaixo do reservado, audita `organization.storage_quota_changed`
+  (ator `AuditActor` `platform_staff`, sem pedido de suporte, `user_id` nulo) e `platform.organization.storage_quota_changed`. Conta normal do `identity`
   com um papel por cima (`user_platform_role`); atribuição em tabelas próprias, só a equipe.
 - **Fronteira:** o `platform` depende de `identity`, `organizations` e `hubs` só pelo que exportam; nenhum deles importa
   `platform`. Exporta `PlatformAccess` e `PlatformAudit`. O papel da plataforma nunca aparece em resposta de cliente nem
@@ -799,7 +803,7 @@ Os valores do `.env.example` para os segredos são **só de desenvolvimento**; p
 - Exclusão de conta (LGPD) precisa revogar as sessões.
 - Plataforma: quarentena/aviso por e-mail ao dono e aos admins quando a equipe age numa organização ou Hub; leitura da
   auditoria da organização pelo cliente (hoje só se grava); endurecer a aprovação dupla (hoje basta outra pessoa com
-  `platform.support.approve`); permissões de financeiro, tickets e chat (o papel `platform_finance` não tem nenhuma).
+  `platform.support.approve`); demais permissões de financeiro, tickets e chat (o `platform_finance` só tem `platform.billing.storage_quota`).
 - Recuperação de conta, limites conhecidos: (a) as escritas em `users` são por campo (`updatePasswordMaterial`,
   `updateRecoveryCode`) e a recuperação reconfere a prova sob `FOR UPDATE` (`findByIdForUpdate`), então trocar o código
   durante uma recuperação nunca é desfeito; mas `PUT /me/password` não trava a linha, e um que passou na reautenticação
