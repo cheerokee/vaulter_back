@@ -406,7 +406,7 @@ exportam); nenhum dos dois importa `spaces`.
   `PUT /spaces/:id/storage-quota` (`ResizeSpaceStorageUseCase`, Gestor): diminuir nunca abaixo do uso (422
   `space-storage-quota-below-usage`); aumentar confere a franquia e os ganchos **`SpaceQuotaHooks`**
   (`src/shared/application/`, global: `lock` antes do lock do espaço, `assertIncrease` depois; o `hubs` confere a
-  capacidade de cada Hub onde o espaço está, 422 `hub-storage-full` com `hubId`/`missingBytes`); auditado
+  capacidade de cada Hub onde o espaço está, 422 `hub-storage-full` com `hubId`, e `missingBytes` só para o dono do Hub); auditado
   `space.storage_quota_changed`. O **uso** vem da porta `SpaceStorageUsage` (exportada; sem fonte, 0): o `storage` liga
   a implementação real com `use(source)` em `onModuleInit` (e `release` no destroy). `SpaceStorage.lockQuota` (exportado)
   lê o tamanho com o espaço `FOR SHARE` (instalação no Hub). `GET /spaces/:id`, a criação e o resize trazem
@@ -525,7 +525,8 @@ consulta só de leitura (veja Sincronização).
   `hub_space` (share) -> espaço (`SpaceStorage.lockQuota`, share); com capacidade, soma dos tamanhos instalados em
   **todas** as organizações (`HubSpaceRepository.reservedBytes`, cada organização no próprio escopo; lê
   `spaces.storage_quota_bytes` em SQL, como `add` já lê `spaces`) + o novo ≤ capacidade, senão 422 `hub-storage-full`
-  (`missingBytes`); espaço já instalado não conta de novo. Aumento de espaço (`HubsSpaceQuotaHook`, em `SpaceQuotaHooks`):
+  (`missingBytes` **só para o dono do Hub**: a soma conta as outras organizações; quem não é dono recebe o erro sem
+  números, só o `hubId` no aumento); espaço já instalado não conta de novo. Aumento de espaço (`HubsSpaceQuotaHook`, em `SpaceQuotaHooks`):
   trava os Hubs do espaço antes do espaço; depois relê e trava com `NOWAIT` um Hub que apareceu no meio (409
   `hub-storage-busy`, raro). `GET /hubs/:id` traz `storage: { capacityBytes, reservedBytes }` (o dono soma tudo; os
   outros, só as organizações de que são membros ativos). e2e em `test/storage/quotas.e2e-spec.ts`.

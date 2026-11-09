@@ -3,6 +3,8 @@ import { Injectable } from '@nestjs/common';
 export type SpaceQuotaContext = { organizationId: string; spaceId: string };
 
 export type SpaceQuotaIncrease = SpaceQuotaContext & {
+  /** Who resizes: a hook may hide figures the caller must not see (e.g. bytes reserved by other organizations). */
+  actorUserId: string;
   fromBytes: number;
   toBytes: number;
 };

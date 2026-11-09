@@ -310,6 +310,70 @@ describe('storage quotas (e2e)', () => {
       expect(view.body.storage.reservedBytes).toBe(20 * GiB);
     });
 
+    it('hub-storage-full shows byte figures only to the hub owner (they count other organizations)', async () => {
+      // Ana's organization, olivia's hub (also holding a space of another organization of olivia's): ana is the
+      // space Gestor, not the hub owner.
+      const anas = await s.orgWithKit(ana, 'DaAna');
+      await s.joinOrg(ana, anas.orgId, olivia);
+      const other = await org('OutraDaOlivia');
+      const hub = await h.onboard(olivia.token, 'Vizinho');
+      await link(hub.hubId, anas.orgId);
+      await link(hub.hubId, other.orgId);
+      await expectStatus(reportCapacity(hub, 20 * GiB), 204);
+      const foreign = await space(
+        other.orgId,
+        other.kit.publicKey,
+        'F',
+        12 * GiB,
+      );
+      await expectStatus(install(hub.hubId, foreign.spaceId), 201);
+
+      const big = await s.create(
+        ana,
+        anas.orgId,
+        anas.kit.publicKey,
+        'Grande',
+        {
+          storageQuotaBytes: 10 * GiB,
+        },
+      );
+      await expectStatus(Promise.resolve(big.res), 201);
+      const refused = expectProblem(
+        await install(hub.hubId, big.spaceId, ana),
+        422,
+        'hub-storage-full',
+      );
+      expect(refused).not.toHaveProperty('missingBytes');
+      // The owner, installing a space of hers on the same hub, gets the figures.
+      const own = await space(other.orgId, other.kit.publicKey, 'G', 10 * GiB);
+      expect(
+        expectProblem(
+          await install(hub.hubId, own.spaceId, olivia),
+          422,
+          'hub-storage-full',
+        ),
+      ).toMatchObject({ missingBytes: 2 * GiB });
+
+      const small = await s.create(
+        ana,
+        anas.orgId,
+        anas.kit.publicKey,
+        'Pequeno',
+        {
+          storageQuotaBytes: 5 * GiB,
+        },
+      );
+      await expectStatus(Promise.resolve(small.res), 201);
+      await expectStatus(install(hub.hubId, small.spaceId, ana), 201);
+      const grow = expectProblem(
+        await resize(small.spaceId, 10 * GiB, ana),
+        422,
+        'hub-storage-full',
+      );
+      expect(grow).toMatchObject({ hubId: hub.hubId });
+      expect(grow).not.toHaveProperty('missingBytes');
+    });
+
     it('concurrent installs on the same hub never exceed its capacity', async () => {
       const o = await org('Race');
       const hub = await h.onboard(olivia.token, 'Corrida');

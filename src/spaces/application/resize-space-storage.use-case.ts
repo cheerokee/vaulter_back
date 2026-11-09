@@ -17,7 +17,7 @@ import { SpaceStorageUsage } from './space-storage-usage.js';
 // Muda o tamanho reservado do espaço (`PUT /spaces/:id/storage-quota`, Gestor: `space.members.manage`; spec
 // storage-backup §4.4). Diminuir: nunca abaixo do uso (lixeira inclusa), 422 `space-storage-quota-below-usage`.
 // Aumentar: cabe na franquia da organização (422 `organization-storage-quota-exceeded`) e na capacidade de cada Hub
-// onde o espaço está instalado (os ganchos `SpaceQuotaHooks`: 422 `hub-storage-full` com `hubId`).
+// onde o espaço está instalado (os ganchos `SpaceQuotaHooks`: 422 `hub-storage-full` com `hubId`; `missingBytes` só para o dono do Hub).
 // Locks, nesta ordem: os Hubs do espaço (gancho `lock`, antes do espaço: ordem Hub -> vínculo -> hub_space -> espaço)
 // -> o espaço (FOR UPDATE, `lockAsMember`) -> a linha da organização (FOR NO KEY UPDATE, folha; só no aumento).
 @Injectable()
@@ -65,6 +65,7 @@ export class ResizeSpaceStorageUseCase {
         await this.hooks.assertIncrease({
           organizationId,
           spaceId: space.id,
+          actorUserId: actor.userId,
           fromBytes,
           toBytes,
         });

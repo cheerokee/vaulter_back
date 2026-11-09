@@ -175,6 +175,7 @@ describe('ResizeSpaceStorageUseCase', () => {
     expect(hooks.assertIncrease).toHaveBeenCalledWith({
       organizationId: ORG_ID,
       spaceId: SPACE_ID,
+      actorUserId: MANAGER,
       fromBytes: 10 * GiB,
       toBytes: 20 * GiB,
     });

@@ -192,9 +192,10 @@ o backup.
   se for membro de uma organização com vínculo aprovado. Sem vínculo aprovado: 422 `organization-not-linked`.
   **Capacidade** ("como um console"): com a capacidade informada (§5), a soma dos tamanhos reservados
   (`storageQuotaBytes`) dos espaços já instalados, de **todas** as organizações, mais o novo, precisa caber; senão 422
-  `hub-storage-full` com `missingBytes`. Pôr de novo um espaço que já está no Hub não conta duas vezes.
+  `hub-storage-full` (com `missingBytes` só para o dono do Hub: a soma conta outras organizações; quem não é dono recebe
+  o erro sem números). Pôr de novo um espaço que já está no Hub não conta duas vezes.
 - **Aumentar o tamanho** de um espaço instalado (`PUT /spaces/:id/storage-quota`, Gestor) também confere cada Hub onde
-  ele está: 422 `hub-storage-full` com `hubId` e `missingBytes`. Raro: 409 `hub-storage-busy` quando outra instalação
+  ele está: 422 `hub-storage-full` com `hubId` (e `missingBytes` só para o dono do Hub). Raro: 409 `hub-storage-busy` quando outra instalação
   no mesmo Hub acontece no mesmo instante (repetir).
 - **Ver:** `GET /hubs/:id` traz `storage: { capacityBytes, reservedBytes }` (`capacityBytes` nulo até o Hub informar;
   o reservado conta os espaços que quem consulta vê: o dono, todos).

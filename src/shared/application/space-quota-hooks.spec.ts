@@ -2,7 +2,7 @@ import { SpaceQuotaHooks } from './space-quota-hooks.js';
 
 describe('SpaceQuotaHooks', () => {
   const ctx = { organizationId: 'o', spaceId: 's' };
-  const increase = { ...ctx, fromBytes: 1, toBytes: 2 };
+  const increase = { ...ctx, actorUserId: 'u', fromBytes: 1, toBytes: 2 };
 
   it('runs every hook in registration order; an error stops the rest', async () => {
     const hooks = new SpaceQuotaHooks();

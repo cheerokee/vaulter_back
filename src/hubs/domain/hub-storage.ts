@@ -27,20 +27,26 @@ export type HubStorageState = {
 
 /**
  * Installing (or growing) `extraBytes` more must keep the installed spaces within the capacity: 422
- * `hub-storage-full` with `missingBytes` (and `hubId` when given: a resize can hit any of several hubs). A capacity
- * below what is already reserved (SSD swapped) only refuses what comes next.
+ * `hub-storage-full`. A capacity below what is already reserved (SSD swapped) only refuses what comes next.
+ * Details: `hubId` when given (a resize can hit any of several hubs) and `missingBytes` only with `showBytes`: the
+ * reserved sum covers EVERY organization on the hub, so only the hub owner may see figures derived from it; anyone
+ * else gets the error without bytes (never learns how much other organizations reserved).
  */
 export function assertHubCapacityFits(
   state: HubStorageState,
   extraBytes: number,
-  hubId?: string,
+  opts: { hubId?: string; showBytes: boolean },
 ): void {
   if (state.capacityBytes === null) return;
   const missingBytes = state.reservedBytes + extraBytes - state.capacityBytes;
   if (missingBytes <= 0) return;
+  const details: Record<string, unknown> = {
+    ...(opts.hubId ? { hubId: opts.hubId } : {}),
+    ...(opts.showBytes ? { missingBytes } : {}),
+  };
   throw new DomainValidationError(
     'hub-storage-full',
     'The hub does not have room for this space.',
-    hubId ? { hubId, missingBytes } : { missingBytes },
+    Object.keys(details).length > 0 ? details : undefined,
   );
 }

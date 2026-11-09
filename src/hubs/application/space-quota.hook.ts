@@ -67,7 +67,8 @@ export class HubsSpaceQuotaHook implements OnModuleInit, OnModuleDestroy {
           reservedBytes: await this.hubSpaces.reservedBytes(hubId),
         },
         extra,
-        hubId,
+        // Os bytes somam todas as organizações do Hub: só o dono os vê; os outros recebem só o `hubId`.
+        { hubId, showBytes: hub.ownerUserId === ctx.actorUserId },
       );
     }
   }

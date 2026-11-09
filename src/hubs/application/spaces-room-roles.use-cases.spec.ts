@@ -286,6 +286,18 @@ describe('AddHubSpaceUseCase', () => {
     expect(hubSpaces.add).toHaveBeenCalledTimes(1);
   });
 
+  it('a Gestor who is not the hub owner gets hub-storage-full without byte figures (other organizations count in them)', async () => {
+    withCapacity(20 * GiB - 1);
+    const error = await useCase()
+      .execute(actor(GESTOR), { hubId: HUB_ID, spaceId: SPACE })
+      .catch((e: unknown) => e);
+    expect(error).toMatchObject({
+      constructor: DomainValidationError,
+      code: 'hub-storage-full',
+    });
+    expect((error as DomainValidationError).details).toBeUndefined();
+  });
+
   it('a space already on the hub is not counted twice', async () => {
     withCapacity(GiB);
     hubSpaces.lockForShare.mockImplementation(log('shareHubSpace', ref));

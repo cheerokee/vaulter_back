@@ -22,8 +22,8 @@ import {
 // `space-not-found`; membro sem ser Gestor (e sem ser dono): 403 (`SpaceAccess`). Só entra espaço de organização
 // com vínculo aprovado: 422 `organization-not-linked` (a FK composta para hub_organization é a segunda trava).
 // Capacidade (spec storage-backup §4.5): com capacidade informada, a soma dos tamanhos reservados dos espaços
-// instalados (todas as organizações) + o novo cabe nela, senão 422 `hub-storage-full` com `missingBytes`; capacidade
-// nula: sem conferência; espaço que já estava no Hub não conta de novo.
+// instalados (todas as organizações) + o novo cabe nela, senão 422 `hub-storage-full` (com `missingBytes` só para o
+// dono do Hub: a soma conta outras organizações); capacidade nula: sem conferência; espaço que já estava no Hub não conta de novo.
 // Locks: Hub (FOR NO KEY UPDATE: duas instalações no mesmo Hub se serializam, e um aumento de espaço trava os Hubs
 // dele) -> vínculo (FOR SHARE: um desvincular concorrente espera e então tira o espaço) -> hub_space vivo (FOR SHARE)
 // -> espaço (FOR SHARE: um aumento em curso termina antes, e a soma usa o tamanho novo).
@@ -78,6 +78,8 @@ export class AddHubSpaceUseCase {
             reservedBytes: await this.hubSpaces.reservedBytes(hubId),
           },
           quotaBytes,
+          // Os bytes somam todas as organizações do Hub: só o dono os vê.
+          { showBytes: hub.ownerUserId === actor.userId },
         );
       }
       const ref = {

@@ -34,14 +34,19 @@ describe('hub storage capacity', () => {
       assertHubCapacityFits(
         { capacityBytes: null, reservedBytes: 999 * GiB },
         999 * GiB,
+        { showBytes: true },
       ),
     ).not.toThrow();
   });
 
   it('fits exactly; one byte more is 422 with what is missing', () => {
     const state = { capacityBytes: 20 * GiB, reservedBytes: 10 * GiB };
-    expect(() => assertHubCapacityFits(state, 10 * GiB)).not.toThrow();
-    expect(() => assertHubCapacityFits(state, 10 * GiB + 1)).toThrow(
+    expect(() =>
+      assertHubCapacityFits(state, 10 * GiB, { showBytes: true }),
+    ).not.toThrow();
+    expect(() =>
+      assertHubCapacityFits(state, 10 * GiB + 1, { showBytes: true }),
+    ).toThrow(
       expect.objectContaining({
         constructor: DomainValidationError,
         code: 'hub-storage-full',
@@ -55,12 +60,33 @@ describe('hub storage capacity', () => {
       assertHubCapacityFits(
         { capacityBytes: 10 * GiB, reservedBytes: 15 * GiB },
         5 * GiB,
-        HUB,
+        { hubId: HUB, showBytes: true },
       ),
     ).toThrow(
       expect.objectContaining({
         details: { hubId: HUB, missingBytes: 10 * GiB },
       }),
     );
+  });
+
+  // The reserved sum covers every organization on the hub: only its owner may see byte figures derived from it.
+  it('without showBytes (caller is not the hub owner) the error carries no byte figures, only the hub', () => {
+    const state = { capacityBytes: 10 * GiB, reservedBytes: 15 * GiB };
+    expect(() =>
+      assertHubCapacityFits(state, 5 * GiB, { hubId: HUB, showBytes: false }),
+    ).toThrow(
+      expect.objectContaining({
+        code: 'hub-storage-full',
+        details: { hubId: HUB },
+      }),
+    );
+    let thrown: unknown;
+    try {
+      assertHubCapacityFits(state, 5 * GiB, { showBytes: false });
+    } catch (e) {
+      thrown = e;
+    }
+    expect(thrown).toMatchObject({ code: 'hub-storage-full' });
+    expect((thrown as DomainValidationError).details).toBeUndefined();
   });
 });
