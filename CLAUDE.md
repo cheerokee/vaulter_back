@@ -1121,6 +1121,10 @@ Os valores do `.env.example` para os segredos são **só de desenvolvimento**; p
   - Sentry na **região dos EUA**, junto com o resto; a proteção é a limpeza acima, não a região. **GlitchTip**
     (compatível com o SDK do Sentry) se um dia precisar hospedar.
 
+## O que o app precisa fazer
+O app é prototipado **depois** que o backend estiver fechado. Todo pedido ao app que nascer aqui (aviso, fluxo, campo
+novo a usar) entra em [`docs/app/pendencias-do-app.md`](docs/app/pendencias-do-app.md) na mesma entrega.
+
 ## Documentação da API (interna × externa)
 Dois públicos, nunca misturados: o **time** e os **integradores** (apps como Orion e Salte). A externa não pode
 expor nada interno (cifra, infraestrutura, conexão do hub, endpoints de app/hub).
