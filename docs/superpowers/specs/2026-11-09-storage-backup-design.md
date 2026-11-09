@@ -116,7 +116,10 @@ Hub da Sala só com `space_reader` não envia; o índice derivado é regenerado 
 - Lote: a intenção e a confirmação aceitam vários objetos por pedido (o Hub envia o que mudou a cada 5 min) *(o builder
   fixa o tamanho do lote)*.
 - **Apagar:** o Hub manda a lápide do objeto; o backend grava lápide no índice e um *delete marker* no S3. O objeto fica
-  na lixeira 30 dias.
+  na lixeira 30 dias. **Quem apaga** *(decisão da revisão final)*: os mesmos que enviam (`memory.write`: Hub editor da
+  Sala com o próprio token, pessoa `space_editor`/`space_manager`), porque um editor já apagaria o conteúdo
+  substituindo-o (a versão antiga vai do mesmo jeito para a lixeira) e, sem isso, o que o Hub criou e apagou voltaria
+  vivo numa restauração.
 - Na v1 só o **Hub** envia (com o próprio token ou com o da pessoa logada nele); o app não envia.
 
 ### 4.3 Baixar

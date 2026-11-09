@@ -724,8 +724,9 @@ mesmo commit).
   tamanho, assina um PUT por objeto no prefixo provisório `uploads/<uploadId>`, tag `stage=upload`), PUT direto no S3,
   confirmação `POST .../uploads/confirm` (HEAD confere tamanho/sha256, cópia no servidor para a chave final, versão
   `committed`; idempotente) e `POST .../objects/delete` (delete marker, lápide, 30 dias de lixeira; idempotente).
-  **Quem pode:** enviar = `memory.write` (Hub com o espaço na Sala como `space_editor`; pessoa `space_editor`/`space_manager`
-  de qualquer sessão); apagar = `memory.delete` (só pessoa Gestora: Sala nenhuma tem, o Hub recebe 404); ler = `memory.read`
+  **Quem pode:** enviar e apagar = `memory.write` (Hub com o espaço na Sala como `space_editor`; pessoa
+  `space_editor`/`space_manager` de qualquer sessão; apagar exige o mesmo que substituir, decisão da revisão final: senão o
+  que o Hub criou e apagou voltaria numa restauração); ler = `memory.read`
   (veja Listar e baixar). Hub fora da Sala ou sem permissão e não membro: 404 `space-not-found`. Erros: 409
   `space-key-rotation-required` (envio novo recusado enquanto a troca de chave estiver pendente; **apagar continua
   valendo**), 409 `space-key-version-stale`, 409 `object-version-conflict` (`currentVersionId`), 409 `storage-busy`,

@@ -19,8 +19,8 @@ export function uploaderOf(actor: StorageActor): BackupUploader {
 
 // Quem mexe no backup de um espaço (spec storage-backup §4.2), o mesmo para as rotas com token de Hub e com token de
 // usuário:
-// - Hub: o espaço na Sala dele, com um papel que tenha a permissão (enviar = `memory.write`, só `space_editor`; apagar
-//   = `memory.delete`, que Sala nenhuma tem). Qualquer recusa = 404 `space-not-found`, sem revelar o espaço. As
+// - Hub: o espaço na Sala dele, com um papel que tenha a permissão (enviar e apagar = `memory.write`, só
+//   `space_editor`). Qualquer recusa = 404 `space-not-found`, sem revelar o espaço. As
 //   organizações candidatas são as de vínculo APROVADO do Hub (`HubDirectory`, lidas sem lock).
 // - Pessoa: `SpaceAccess` (404 não membro, 403 sem a permissão), com qualquer sessão (decisão da Task 5: o conteúdo
 //   é cifrado no cliente e o membro já tem a chave).

@@ -35,8 +35,8 @@ import {
 } from './dto/responses.js';
 
 // Backup com o token de uma PESSOA (o Hub em nome de quem está logado nele; qualquer sessão do membro vale, decisão
-// da Task 5): enviar com `memory.write` (`space_editor`/`space_manager`), apagar com `memory.delete`
-// (`space_manager`), listar e baixar com `memory.read` (todo membro do espaço, inclusive num Hub fora da Sala). `SpaceAccess`: 404 para não membro, 403 para membro sem a permissão. Mesmos casos de uso das
+// da Task 5): enviar e apagar com `memory.write` (`space_editor`/`space_manager`; apagar = a mesma permissão de
+// substituir), listar e baixar com `memory.read` (todo membro do espaço, inclusive num Hub fora da Sala). `SpaceAccess`: 404 para não membro, 403 para membro sem a permissão. Mesmos casos de uso das
 // rotas do Hub; limites por usuário.
 @ApiTags('storage')
 @Controller('spaces/:spaceId/backup')

@@ -13,10 +13,12 @@ import { assertStillMarked } from './journal.js';
 import { objectVersionConflict } from './storage-errors.js';
 import { StorageAccess, type StorageActor } from './storage-access.js';
 
-// Apagar objetos (spec storage-backup §4.2, "Apagar"), tudo ou nada por pedido, idempotente. Exige `memory.delete`:
-// na prática só uma pessoa Gestora do espaço (Sala nenhuma tem a permissão: o Hub com o próprio token recebe 404).
+// Apagar objetos (spec storage-backup §4.2, "Apagar"), tudo ou nada por pedido, idempotente. Exige `memory.write`, a
+// mesma permissão de substituir (decisão da revisão final: um editor já apagaria o conteúdo substituindo-o, e a versão
+// antiga vai do mesmo jeito para a lixeira de 30 dias): Hub com o espaço na Sala como `space_editor` e pessoa
+// `space_editor`/`space_manager`. Sem isso, o que o Hub criou e apagou localmente voltaria vivo numa restauração.
 // O diário (marca, relógio do banco, na versão viva que cada item diz apagar) é gravado ANTES, numa transação curta
-// própria, depois da checagem de `memory.delete`. Depois, com o espaço travado FOR SHARE (apagar não aumenta o uso),
+// própria, depois da checagem de `memory.write`. Depois, com o espaço travado FOR SHARE (apagar não aumenta o uso),
 // trava os objetos em ordem de id (reparando antes o que tiver marca mais antiga que a deste pedido) e confere
 // `replacesVersionId` contra a versão viva (409 `object-version-conflict`; apagar de novo com a mesma versão não faz
 // nada). Reconfere a marca (409 `storage-busy` se sumiu), então: delete marker no S3 (a versão fica na lixeira 30
@@ -43,12 +45,12 @@ export class DeleteObjectsUseCase {
     BackupRules.assertDistinctObjects(items.map((i) => i.objectId));
     const writing: ObjectRef[] = [];
     // Diário ANTES do unit of work (transação curta própria, relógio do banco; veja ConfirmUploadsUseCase), depois da
-    // checagem de `memory.delete`: marca a versão que cada item diz apagar, se for a viva.
+    // checagem de `memory.write`: marca a versão que cada item diz apagar, se for a viva.
     const marks = await this.uow.run(async () => {
       const space = await this.access.lock(
         spaceId,
         actor,
-        'memory.delete',
+        'memory.write',
         'share',
       );
       return this.versions.markLiveWrites(
@@ -65,7 +67,7 @@ export class DeleteObjectsUseCase {
         const space = await this.access.lock(
           spaceId,
           actor,
-          'memory.delete',
+          'memory.write',
           'share',
         );
         const orgId = space.organizationId;

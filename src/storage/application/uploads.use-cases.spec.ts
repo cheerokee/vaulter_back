@@ -768,7 +768,7 @@ describe('DeleteObjectsUseCase', () => {
     return id;
   };
 
-  it('needs memory.delete; tombstones the object, supersedes the version and leaves a delete marker', async () => {
+  it('needs memory.write (like replacing); tombstones the object, supersedes the version and leaves a delete marker', async () => {
     const v = await committed(OBJ_A);
     await t.remove.execute(
       { userId: 'u' },
@@ -779,7 +779,7 @@ describe('DeleteObjectsUseCase', () => {
     expect(t.mocks.access.lock).toHaveBeenLastCalledWith(
       SPACE,
       { userId: 'u' },
-      'memory.delete',
+      'memory.write',
       'share',
     );
     expect(t.objects.get(OBJ_A)!.deletedAt).toEqual(NOW);

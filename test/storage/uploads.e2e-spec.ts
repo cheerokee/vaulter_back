@@ -565,7 +565,7 @@ describe('storage uploads (e2e)', () => {
     );
   });
 
-  it('a reader Room, a hub outside the Room and a hub deleting are 404 space-not-found (never 403)', async () => {
+  it('a reader Room and a hub outside the Room are 404 space-not-found (never 403), for uploads and deletes', async () => {
     const space = await newSpace('Readers');
     const reader = await roomHub(space, 'space_reader');
     const editor = await roomHub(space, 'space_editor');
@@ -586,13 +586,15 @@ describe('storage uploads (e2e)', () => {
       404,
       'space-not-found',
     );
-    expectProblem(
-      await hubPost(editor, `/hub/spaces/${space.spaceId}/objects/delete`, {
-        items: [{ objectId: obj.objectId, replacesVersionId: newId() }],
-      }),
-      404,
-      'space-not-found',
-    );
+    for (const hub of [reader, outsider]) {
+      expectProblem(
+        await hubPost(hub, `/hub/spaces/${space.spaceId}/objects/delete`, {
+          items: [{ objectId: obj.objectId, replacesVersionId: newId() }],
+        }),
+        404,
+        'space-not-found',
+      );
+    }
     expectProblem(
       await hubPost(editor, `/hub/spaces/${newId()}/uploads`, {
         items: [obj.item],
@@ -617,7 +619,52 @@ describe('storage uploads (e2e)', () => {
     ).toBe(401);
   });
 
-  it('a person uploads with a user token (editor), a reader gets 403, a non-member 404; only the manager deletes', async () => {
+  it('a Room editor hub deletes its own content (memory.write): the object goes to the trash and stays listed there', async () => {
+    const space = await newSpace('HubDelete');
+    const hub = await roomHub(space, 'space_editor');
+    const obj = await blobFor(space);
+    const intent = await expectStatus(
+      hubPost(hub, `/hub/spaces/${space.spaceId}/uploads`, {
+        items: [obj.item],
+      }),
+      201,
+    );
+    const [it1] = intent.body.items as Intent[];
+    await put(it1!, obj.blob);
+    await expectStatus(
+      hubPost(hub, `/hub/spaces/${space.spaceId}/uploads/confirm`, {
+        uploadIds: [it1!.uploadId],
+      }),
+      200,
+    );
+    await expectStatus(
+      hubPost(hub, `/hub/spaces/${space.spaceId}/objects/delete`, {
+        items: [{ objectId: obj.objectId, replacesVersionId: it1!.uploadId }],
+      }),
+      204,
+    );
+    const row = await objectRow(obj.objectId);
+    expect(row!.deleted_at).not.toBeNull();
+    const token = await h.authenticate(hub);
+    const trash = await expectStatus(
+      c
+        .http()
+        .get(`/hub/spaces/${space.spaceId}/objects`)
+        .query({ include: 'trash' })
+        .set(h.bearer(token)),
+      200,
+    );
+    expect(
+      (trash.body.items as { objectId: string }[]).map((i) => i.objectId),
+    ).toEqual([obj.objectId]);
+    const current = await expectStatus(
+      c.http().get(`/hub/spaces/${space.spaceId}/objects`).set(h.bearer(token)),
+      200,
+    );
+    expect(current.body.items).toEqual([]);
+  });
+
+  it('a person uploads and deletes with a user token (editor), a reader gets 403, a non-member 404', async () => {
     const space = await newSpace('People');
     const obj = await blobFor(space);
     const base = `/spaces/${space.spaceId}/backup`;
@@ -652,18 +699,23 @@ describe('storage uploads (e2e)', () => {
       items: [{ objectId: obj.objectId, replacesVersionId: it1!.uploadId }],
     };
     expectProblem(
-      await userPost(ana, `${base}/objects/delete`, del),
+      await userPost(rita, `${base}/objects/delete`, del),
       403,
       'permission-denied',
     );
     expectProblem(
-      await userPost(olivia, `${base}/objects/delete`, {
+      await userPost(zeca, `${base}/objects/delete`, del),
+      404,
+      'space-not-found',
+    );
+    expectProblem(
+      await userPost(ana, `${base}/objects/delete`, {
         items: [{ objectId: obj.objectId, replacesVersionId: newId() }],
       }),
       409,
       'object-version-conflict',
     );
-    await expectStatus(userPost(olivia, `${base}/objects/delete`, del), 204);
+    await expectStatus(userPost(ana, `${base}/objects/delete`, del), 204);
     const row = await objectRow(obj.objectId);
     expect(row!.deleted_at).not.toBeNull();
     expect(row!.current_version_id).toBe(it1!.uploadId);

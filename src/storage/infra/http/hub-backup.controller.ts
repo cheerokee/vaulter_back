@@ -35,9 +35,9 @@ import {
   uploadIntentResponse,
 } from './dto/responses.js';
 
-// Backup com o token do PRÓPRIO Hub (spec storage-backup §4.2–4.3): enviar só nos espaços da Sala dele com
-// `space_editor`; listar e baixar com qualquer papel de Sala (`memory.read`; é assim que um Hub reinstalado restaura);
-// qualquer outro caso é 404 `space-not-found`. Apagar exige `memory.delete`, que Sala nenhuma tem (404). Rotas
+// Backup com o token do PRÓPRIO Hub (spec storage-backup §4.2–4.3): enviar e apagar só nos espaços da Sala dele com
+// `space_editor` (`memory.write`); listar e baixar com qualquer papel de Sala (`memory.read`; é assim que um Hub
+// reinstalado restaura); qualquer outro caso é 404 `space-not-found`. Rotas
 // internas (sem a tag `public`), limites por Hub (`hubIdTracker`: o HubTokenGuard roda antes do throttler).
 @ApiTags('storage')
 @Controller('hub/spaces/:spaceId')
@@ -91,7 +91,7 @@ export class HubBackupController {
     return { items: items.map(committedVersionResponse) };
   }
 
-  /** Deletes objects (needs memory.delete: never a Room, so always 404 here; kept for symmetry). */
+  /** Deletes objects (needs memory.write, like replacing: a Room `space_editor`; anything else is 404). */
   @Throttle({
     default: { ...RATE_LIMITS.backupDelete, getTracker: hubIdTracker },
   })

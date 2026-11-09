@@ -269,10 +269,11 @@ O Hub envia as mudanças dos espaços **a cada 5 min**, na mesma passada da sinc
 (`docs/crypto/space-backup.md`); o `objectId` (UUID v7) é do Hub e estável (arquivo atualizado = versão nova do mesmo
 objeto). O backend guarda só o índice (ids, tamanho, sha256 do blob, versão da chave), nunca nome de arquivo.
 
-- **Quem envia:** com o token do Hub, só nos espaços da **Sala** dele com papel `space_editor`
-  (`/hub/spaces/:spaceId/...`); com o token da pessoa logada nele (`/spaces/:spaceId/backup/...`), nos espaços em que ela
-  é `space_editor`/`space_manager`. Sala de leitor, espaço fora da Sala ou apagar com o token do Hub: 404
-  `space-not-found`. Apagar exige `memory.delete` (Gestor; só pelo token da pessoa).
+- **Quem envia e apaga** (`memory.write`; apagar é a mesma permissão de substituir): com o token do Hub, só nos espaços
+  da **Sala** dele com papel `space_editor` (`/hub/spaces/:spaceId/...`); com o token da pessoa logada nele
+  (`/spaces/:spaceId/backup/...`), nos espaços em que ela é `space_editor`/`space_manager`. Sala de leitor ou espaço fora
+  da Sala: 404 `space-not-found`; pessoa leitora: 403. **Apague no backup o que o Hub apagou localmente** (conversas,
+  eventos, pedaços do índice): o que não for apagado volta vivo numa restauração.
 - **1. Intenção:** `POST .../uploads` `{ items: [{ objectId, keyVersion, sizeBytes, sha256, replacesVersionId }] }`
   (até 100; tudo ou nada) → `{ items: [{ objectId, uploadId, url, headers, expiresAt }] }`. `replacesVersionId` é a
   versão que o envio substitui (`null` para objeto novo ou apagado). A intenção reserva o tamanho no espaço por 1 dia;
