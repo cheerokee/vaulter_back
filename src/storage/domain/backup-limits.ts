@@ -14,3 +14,5 @@ export const PRESIGNED_URL_TTL_SECONDS = 15 * 60;
 export const UPLOAD_WINDOW_MS = 24 * 60 * 60 * 1000;
 /** Old and deleted versions stay recoverable (and counted in the usage) this long. */
 export const TRASH_DAYS = 30;
+/** Biggest page of an index listing (a restoring hub lists the whole space). */
+export const MAX_LIST_LIMIT = 1000;

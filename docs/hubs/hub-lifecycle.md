@@ -291,6 +291,29 @@ objeto). O backend guarda só o índice (ids, tamanho, sha256 do blob, versão d
   422 `upload-mismatch`; `uploadId` desconhecido, de outro espaço, de outro remetente ou com mais de 1 dia → 404 `upload-not-found`;
   409 `storage-busy` (raro) → repita o mesmo pedido.
 
+### Backup dos espaços (listar, baixar, restaurar)
+
+- **Quem lê:** com o token do Hub, os espaços da **Sala** dele com **qualquer** papel (`/hub/spaces/:spaceId/...`);
+  com o token da pessoa logada nele, qualquer espaço de que ela é membro, **mesmo fora da Sala**
+  (`/spaces/:spaceId/backup/...`). Fora disso: 404 `space-not-found`.
+- **Listar:** `GET .../objects?include=current&since=&cursor=&limit=` (`limit` até 1000, padrão 100) →
+  `{ items: [{ objectId, deleted, deletedAt, currentVersion: { versionId, keyVersion, sizeBytes, sha256, uploadedAt } | null }], nextCursor, asOf }`.
+  Sem `since`: só os objetos vivos. Com `since` (ISO 8601): o que mudou desde então, **inclusive apagados**
+  (`deleted: true`, `currentVersion: null`: apague localmente). Siga `nextCursor` até `null`; guarde o `asOf` da
+  **primeira** página e use **`asOf` menos 1 hora** como o próximo `since` (o horário gravado é o do início da gravação,
+  que pode demorar); repetir um item é inofensivo. Faça uma listagem completa (sem `since`) de vez em quando, junto da
+  sincronização completa.
+- **Lixeira:** `include=trash` (apagados há menos de 30 dias, com a última versão em `currentVersion`) e
+  `include=versions&objectId=<id>` (as versões guardadas do objeto, a mais antiga primeiro, com `supersededAt` e
+  `current`). Restaurar da lixeira = baixar a versão e **reenviar** como versão nova (não existe "desapagar").
+- **Baixar:** `POST .../objects/:objectId/versions/:versionId/download` → `{ url, expiresAt }`: `GET` direto no S3 na
+  `url` (15 min); abra com a chave da versão `keyVersion` do espaço (`docs/crypto/space-backup.md`) e confira o
+  `sha256` do blob. Versão desconhecida, pendente ou fora da lixeira: 404 `version-not-found`.
+- **Restaurar = reinstalar:** Hub queimado → reivindicar o novo, vincular, pôr os espaços e liberar na Sala (§8). O
+  Hub recebe a cópia da chave de cada versão pela sincronização (`space_key_grant` com o próprio `hubId`), lista
+  tudo (`limit=1000`, sem `since`) e baixa cada versão atual. Respeite os limites (abaixo); com 429, espere o
+  `Retry-After`.
+
 ## 10. Pessoas usando o Hub
 
 - **Online (login pelo Hub):** o Hub pede o salt e os parâmetros da pessoa (`POST /auth/prelogin`, rota comum),
@@ -392,6 +415,8 @@ Assim nada do dono anterior chega a um dono novo.
 | `POST /hub/spaces/:spaceId/uploads` | 600/h | Hub |
 | `POST /hub/spaces/:spaceId/uploads/confirm` | 600/h | Hub |
 | `POST /hub/spaces/:spaceId/objects/delete` | 120/h | Hub |
+| `GET /hub/spaces/:spaceId/objects` | 1200/h | Hub |
+| `POST /hub/spaces/:spaceId/objects/:objectId/versions/:versionId/download` | 12 mil/h | Hub |
 | demais rotas | 300/min somando todas | IP |
 
 Estourou: 429 `too-many-requests` com `Retry-After` (segundos).

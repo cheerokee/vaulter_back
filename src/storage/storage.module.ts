@@ -5,6 +5,9 @@ import { SpacesModule } from '../spaces/spaces.module.js';
 import { BackupObjectHealer } from './application/backup-object-healer.js';
 import { ConfirmUploadsUseCase } from './application/confirm-uploads.use-case.js';
 import { DeleteObjectsUseCase } from './application/delete-objects.use-case.js';
+import { GetDownloadUrlUseCase } from './application/get-download-url.use-case.js';
+import { ListObjectsUseCase } from './application/list-objects.use-case.js';
+import { BackupIndexReader } from './application/ports/backup-index-reader.js';
 import { ObjectStore } from './application/ports/object-store.js';
 import { ReconcileStorageUseCase } from './application/reconcile-storage.use-case.js';
 import { RequestUploadsUseCase } from './application/request-uploads.use-case.js';
@@ -12,6 +15,7 @@ import { BackupSpaceStorageUsage } from './application/space-storage-usage.js';
 import { StorageAccess } from './application/storage-access.js';
 import { BackupObjectRepository } from './domain/backup-object.repository.js';
 import { BackupObjectVersionRepository } from './domain/backup-object-version.repository.js';
+import { BackupIndexSqlReader } from './infra/db/backup-index.sql-reader.js';
 import { BackupObjectTypeormRepository } from './infra/db/backup-object.typeorm-repository.js';
 import { BackupObjectVersionTypeormRepository } from './infra/db/backup-object-version.typeorm-repository.js';
 import { StorageObjectVersionTypeormEntity } from './infra/db/storage-object-version.entity.js';
@@ -44,6 +48,7 @@ import { S3ObjectStore } from './infra/s3/s3-object-store.js';
       provide: BackupObjectVersionRepository,
       useClass: BackupObjectVersionTypeormRepository,
     },
+    { provide: BackupIndexReader, useClass: BackupIndexSqlReader },
     StorageAccess,
     BackupSpaceStorageUsage,
     BackupObjectHealer,
@@ -51,6 +56,8 @@ import { S3ObjectStore } from './infra/s3/s3-object-store.js';
     RequestUploadsUseCase,
     ConfirmUploadsUseCase,
     DeleteObjectsUseCase,
+    ListObjectsUseCase,
+    GetDownloadUrlUseCase,
   ],
 })
 export class StorageModule {}

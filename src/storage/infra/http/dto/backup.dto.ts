@@ -4,16 +4,23 @@ import {
   ArrayMinSize,
   ArrayUnique,
   IsArray,
+  IsIn,
   IsInt,
+  IsISO8601,
+  IsOptional,
   IsString,
   IsUUID,
   Matches,
   Max,
+  MaxLength,
   Min,
   ValidateIf,
   ValidateNested,
 } from 'class-validator';
-import { MAX_BATCH_ITEMS } from '../../../domain/backup-limits.js';
+import {
+  MAX_BATCH_ITEMS,
+  MAX_LIST_LIMIT,
+} from '../../../domain/backup-limits.js';
 
 const SHA256_HEX = /^[0-9a-f]{64}$/;
 const INT32_MAX = 2_147_483_647;
@@ -81,4 +88,35 @@ export class DeleteObjectsDto {
   @ValidateNested({ each: true })
   @Type(() => DeleteObjectItemDto)
   items!: DeleteObjectItemDto[];
+}
+
+export const OBJECT_LISTINGS = ['current', 'trash', 'versions'] as const;
+
+/** `GET .../objects`: cursor by id; `since` (ISO 8601) only with current/trash; `objectId` only with versions. */
+export class ListObjectsQueryDto {
+  @IsOptional()
+  @IsIn(OBJECT_LISTINGS)
+  include: (typeof OBJECT_LISTINGS)[number] = 'current';
+
+  /** Objects whose index row changed at or after this instant (use the `asOf` of a previous listing, minus a margin). */
+  @IsOptional()
+  @IsISO8601({ strict: true, strictSeparator: true })
+  since?: string;
+
+  /** The object whose stored versions to list (`include=versions`). */
+  @IsOptional()
+  @IsUUID()
+  objectId?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(200)
+  cursor?: string;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(MAX_LIST_LIMIT)
+  limit: number = 100;
 }

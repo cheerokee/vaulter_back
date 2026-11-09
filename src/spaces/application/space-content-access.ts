@@ -98,6 +98,30 @@ export class SpaceContentAccess {
     return stateOf(space);
   }
 
+  /**
+   * The same checks as `lockForContent`, WITHOUT any lock (reads of the backup: listing and download URLs). Person: 404
+   * non-member, 403 without the permission; hub: always the same 404. Needs no unit of work.
+   */
+  async requireForContent(
+    spaceId: string,
+    actor: SpaceContentActor,
+    permission: SpacePermission,
+  ): Promise<SpaceContentState> {
+    if (actor.kind === 'user') {
+      const { space } = await this.access.requireSpacePermission(
+        spaceId,
+        actor.userId,
+        permission,
+      );
+      return stateOf(space);
+    }
+    if (!validate(spaceId) || !validate(actor.hubId)) throw spaceNotFound();
+    const orgId = await this.organizationOfRoom(spaceId, actor, permission);
+    const space = await this.spaces.findById(orgId, spaceId);
+    if (!space) throw spaceNotFound();
+    return stateOf(space);
+  }
+
   /** Pre-check without lock: the linked organization holding the space, with a Room role that allows it. */
   private async organizationOfRoom(
     spaceId: string,

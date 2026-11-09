@@ -69,6 +69,14 @@ export const RATE_LIMITS = {
   backupUploads: { limit: 600, ttl: HOUR },
   backupConfirm: { limit: 600, ttl: HOUR },
   backupDelete: { limit: 120, ttl: HOUR },
+  /**
+   * Leitura do backup (listar o índice e pedir URL de download), as mesmas duas formas, contador próprio por rota.
+   * Dimensionados para restaurar (reinstalar um Hub): listar com `limit=1000` são ~50 páginas para 50 mil objetos (a
+   * passada normal de 5 min usa `since` e cabe numa página), e uma URL por versão: 12 mil/h (200/min) baixam 50 mil
+   * objetos em ~4 h. Cada pedido é só leitura do índice + assinatura local, sem chamada ao S3.
+   */
+  backupList: { limit: 1200, ttl: HOUR },
+  backupDownload: { limit: 12_000, ttl: HOUR },
 } as const;
 
 /** Nome do throttler extra, cobrado só nas rotas marcadas com @ThrottleByEmail(). */

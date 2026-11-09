@@ -731,6 +731,20 @@ pelo que exportam; ninguém importa `storage`.
   aberto): com o pool cheio de transações esperando travas, a espera pela conexão não tem fim e o Postgres não vê o
   impasse. Grave antes, numa transação própria.
 - Confirmar só quem pediu a intenção (o mesmo Hub ou a mesma pessoa); outro: 404 `upload-not-found`.
+- **Listar e baixar** (`ListObjectsUseCase`, `GetDownloadUrlUseCase`, leitor `BackupIndexReader` em SQL): `memory.read`
+  = Hub com o espaço na Sala (qualquer papel; é assim que um Hub reinstalado restaura) ou qualquer membro do espaço
+  (qualquer sessão, inclusive a de um Hub fora da Sala); o resto 404 `space-not-found`. **Sem trava**
+  (`StorageAccess.require` / `SpaceContentAccess.requireForContent`) e sem chamada ao S3 além da assinatura.
+  `GET .../objects?include=current|trash|versions&since=&objectId=&cursor=&limit=` (cursor por id, `limit` 1..1000,
+  padrão 100) → `{ items, nextCursor, asOf }`: `current` = vivos com a versão atual (com `since`, o que mudou desde
+  então pelo `updated_at` do objeto, lápides com `currentVersion: null`); `trash` = apagados há menos de 30 dias com a
+  última versão; `versions&objectId=` = versões guardadas (viva + lixeira), com `supersededAt` e `current`. Intenção
+  nunca confirmada não aparece. `asOf` = `now()` do banco na consulta; como o `updated_at` é o início da transação que
+  mudou o objeto (que pode ter copiado no S3 por minutos), o próximo `since` deve ter folga (`asOf` - 1 h) e o Hub
+  faz uma listagem completa periódica (mesmo limite da sincronização, veja Pendências). `POST
+  .../objects/:objectId/versions/:versionId/download` → `{ url, expiresAt }` (15 min, não revogável: quem perde o
+  acesso guarda só a URL que já tinha); versão desconhecida, pendente, de outro objeto ou fora da lixeira: 404
+  `version-not-found`.
 
 ## Banco de dados (TypeORM + migrations)
 - **Pool:** o do driver `pg` (máximo padrão 10 conexões) com `connectionTimeoutMillis` = `DB_POOL_CONNECTION_TIMEOUT_MS`
@@ -848,7 +862,9 @@ Os valores do `.env.example` para os segredos são **só de desenvolvimento**; p
   que confirma depois de outra com versão maior pode ser pulada para sempre pelo `nextSince` da sincronização do Hub
   (o `REPEATABLE READ` só deixa cada página coerente). Opções: horizonte seguro (guardar `pg_current_xact_id()` numa
   coluna xid8 junto da versão e só servir linhas abaixo de `pg_snapshot_xmin(pg_current_snapshot())`) ou carimbo de
-  versão no momento do commit. Mitigação até lá: sincronização completa periódica do Hub.
+  versão no momento do commit. Mitigação até lá: sincronização completa periódica do Hub. O mesmo vale para o `since`
+  da listagem do backup (`updated_at` = início da transação): mitigado pela folga de 1 h e pela listagem completa
+  periódica.
 - Exclusão de conta (LGPD) precisa revogar as sessões.
 - **Agendar `npm run storage:reconcile`** (1x por dia, fora da aplicação) até o pg-boss entrar; aí vira uma tarefa
   dele. Sem a varredura, um objeto que ninguém toca de novo depois de uma queda entre o S3 e o COMMIT pode ter a versão
@@ -904,6 +920,8 @@ Os valores do `.env.example` para os segredos são **só de desenvolvimento**; p
   | `POST /hub/spaces/:spaceId/uploads` e `POST /spaces/:spaceId/backup/uploads` (intenção de envio do backup) | 600/h por Hub (`hubIdTracker`) / por usuário (`userIdTracker`), contador próprio por rota |
   | `POST .../uploads/confirm` (confirmação do envio, as mesmas duas formas) | 600/h por Hub / por usuário |
   | `POST .../objects/delete` (apagar objetos do backup, as mesmas duas formas) | 120/h por Hub / por usuário |
+  | `GET /hub/spaces/:spaceId/objects` e `GET /spaces/:spaceId/backup/objects` (listar o índice do backup) | 1200/h por Hub (`hubIdTracker`) / por usuário (`userIdTracker`), contador próprio por rota (restaurar: ~50 páginas de 1000 para 50 mil objetos) |
+  | `POST .../objects/:objectId/versions/:versionId/download` (URL de download, as mesmas duas formas) | 12 mil/h por Hub / por usuário (uma URL por versão: 50 mil objetos em ~4 h) |
   Rota com `@Throttle` próprio tem contador próprio (por rota); `@ThrottleGroup(THROTTLE_GROUPS.x, tracker?)`
   (`throttling.decorators.ts`) faz rotas dividirem um contador (chave = grupo + tracker, sem a rota); cada grupo é
   UMA constante com nome e limite em `THROTTLE_GROUPS` (`rate-limits.ts`), e o decorator recusa o mesmo grupo com

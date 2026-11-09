@@ -154,3 +154,58 @@ describe('SpaceContentAccess.lockForContent (hub)', () => {
     ).resolves.toMatchObject({ spaceId: SPACE_ID });
   });
 });
+
+describe('SpaceContentAccess.requireForContent (reads, no lock)', () => {
+  const hub = (organizationIds: string[] = [OTHER_ORG, ORG_ID]) => ({
+    kind: 'hub' as const,
+    hubId: HUB,
+    organizationIds,
+  });
+  const locked = () => kit.trace.some((t) => t.startsWith('spaces.lockFor'));
+
+  it('a reader reads as a person and any Room role reads as a hub, without locking the space', async () => {
+    await expect(
+      content.requireForContent(
+        SPACE_ID,
+        { kind: 'user', userId: READER },
+        'memory.read',
+      ),
+    ).resolves.toMatchObject({ organizationId: ORG_ID, spaceId: SPACE_ID });
+    kit.roomBySpace.get(SPACE_ID)!.set(HUB, 'space_reader');
+    await expect(
+      content.requireForContent(SPACE_ID, hub(), 'memory.read'),
+    ).resolves.toMatchObject({ organizationId: ORG_ID, spaceId: SPACE_ID });
+    expect(locked()).toBe(false);
+  });
+
+  it('person: 404 non-member, 403 without the permission; hub: always 404', async () => {
+    await expect(
+      content.requireForContent(
+        SPACE_ID,
+        { kind: 'user', userId: OUTSIDER },
+        'memory.read',
+      ),
+    ).rejects.toMatchObject(NOT_FOUND);
+    await expect(
+      content.requireForContent(
+        SPACE_ID,
+        { kind: 'user', userId: READER },
+        'memory.write',
+      ),
+    ).rejects.toMatchObject(DENIED);
+    await expect(
+      content.requireForContent(SPACE_ID, hub(), 'memory.read'),
+    ).rejects.toMatchObject(NOT_FOUND); // no Room
+    kit.roomBySpace.get(SPACE_ID)!.set(HUB, 'space_reader');
+    await expect(
+      content.requireForContent(SPACE_ID, hub([OTHER_ORG]), 'memory.read'),
+    ).rejects.toMatchObject(NOT_FOUND); // organization not linked
+    await expect(
+      content.requireForContent(SPACE_ID, hub(), 'memory.write'),
+    ).rejects.toMatchObject(NOT_FOUND); // reader Room writing
+    await expect(
+      content.requireForContent('nope', hub(), 'memory.read'),
+    ).rejects.toMatchObject(NOT_FOUND);
+    expect(locked()).toBe(false);
+  });
+});
