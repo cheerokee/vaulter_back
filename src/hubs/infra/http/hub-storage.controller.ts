@@ -5,7 +5,7 @@ import {
   CurrentHub,
   HubAuth,
   type HubAuthContext,
-} from './hub-auth.decorators.js';
+} from '../../../shared/infra/http/hub-auth.decorators.js';
 import { HubStorageDto } from './dto/hub.dto.js';
 
 // Rota interna do Hub (sem a tag `public`): só token de Hub.

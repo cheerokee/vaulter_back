@@ -95,8 +95,11 @@ describe('storage quotas (e2e)', () => {
     await app?.close();
   });
 
+  // Fakes the usage through the test seam and puts the real source (the `storage` index) back after each test.
+  let restoreUsage: (() => void) | undefined;
   afterEach(() => {
-    app.get(SpaceStorageUsage).release();
+    restoreUsage?.();
+    restoreUsage = undefined;
   });
 
   describe('organization quota', () => {
@@ -176,7 +179,9 @@ describe('storage quotas (e2e)', () => {
         'permission-denied',
       );
 
-      app.get(SpaceStorageUsage).use({ usedBytes: async () => 3 * GiB });
+      restoreUsage = app
+        .get(SpaceStorageUsage)
+        .replace({ usedBytes: async () => 3 * GiB });
       expect(
         expectProblem(
           await resize(sp.spaceId, 2 * GiB),

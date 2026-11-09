@@ -159,6 +159,16 @@ export class S3ObjectStore extends ObjectStore implements OnModuleDestroy {
     }
     return { deleteMarkerVersionId: out.VersionId };
   }
+
+  async deleteVersion(key: string, versionId: string): Promise<void> {
+    await this.client.send(
+      new DeleteObjectCommand({
+        Bucket: this.bucket,
+        Key: key,
+        VersionId: versionId,
+      }),
+    );
+  }
 }
 
 function sha256FromChecksum(checksum: string | undefined): string | null {

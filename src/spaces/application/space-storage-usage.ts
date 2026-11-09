@@ -7,7 +7,7 @@ export type SpaceStorageUsageSource = {
 
 // Porta do uso de um espaço, exportada pelo `spaces`. O índice dos objetos é do `storage` (que depende do `spaces`,
 // nunca o contrário), então o `storage` LIGA a implementação real em `onModuleInit` (`use`) e a desliga no destroy
-// (`release`). Sem fonte ligada (antes do `storage`, ou em testes), o uso é 0 — provisório desde a Task 3.
+// (`release`). Sem fonte ligada (unitários sem o `storage`), o uso é 0.
 @Injectable()
 export class SpaceStorageUsage {
   private source: SpaceStorageUsageSource | null = null;
@@ -21,6 +21,19 @@ export class SpaceStorageUsage {
 
   release(): void {
     this.source = null;
+  }
+
+  /**
+   * Test seam: swaps whatever is bound (the real `storage` source in the app) for `source` and returns the function
+   * that puts the previous one back. Specs that fake the usage call it and restore in `afterEach`, so the real source
+   * stays bound for the rest of the suite.
+   */
+  replace(source: SpaceStorageUsageSource): () => void {
+    const previous = this.source;
+    this.source = source;
+    return () => {
+      this.source = previous;
+    };
   }
 
   usedBytes(organizationId: string, spaceId: string): Promise<number> {

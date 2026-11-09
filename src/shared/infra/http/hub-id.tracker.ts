@@ -1,4 +1,4 @@
-import { ipTracker } from '../../../shared/infra/http/ip-tracker.js';
+import { ipTracker } from './ip-tracker.js';
 
 /**
  * Rate-limit tracker for hub routes (`@HubAuth()`): the hub from `request.hub`, set by the HubTokenGuard, which

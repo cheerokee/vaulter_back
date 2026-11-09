@@ -576,7 +576,8 @@ consulta só de leitura (veja Sincronização).
   as organizações de quem não é dono; helper `pageFrom` em `shared/domain/pagination.ts`). Toda resposta passa por um
   mapper explícito (`dto/responses.ts`). DTOs: códigos `^[0-9]{8}$`, chaves 43 caracteres base64url, assinatura 86,
   nonce 22, desafio 43, cópia trancada 108 (formatos próprios do módulo em `dto/hub.dto.ts`).
-- **Rotas de Hub:** `@HubAuth()` (`src/hubs/infra/http/hub-auth.decorators.ts`) marca a rota como `@Public()` para o
+- **Rotas de Hub:** `@HubAuth()` (`src/shared/infra/http/hub-auth.decorators.ts`, em `shared` para outros módulos, como o
+  `storage`, marcarem as próprias rotas de Hub sem importar `hubs/infra`) marca a rota como `@Public()` para o
   guard de usuário e o `HubTokenGuard` (APP_GUARD do `HubsModule`, que vem **antes** do `ThrottlingModule`) exige o
   token de Hub (`typ: hub+jwt`) de um Hub existente e não desregistrado; `@CurrentHub()` lê `{ hubId }`. Token de
   usuário em rota de Hub e token de Hub em rota de usuário: 401.
@@ -863,6 +864,9 @@ Os valores do `.env.example` para os segredos são **só de desenvolvimento**; p
   | `POST /hub/link-codes` | 30/h por Hub (`hubIdTracker`) |
   | `GET /hub/sync` | 120/h por Hub (`hubIdTracker`) |
   | `POST /hub/user-sessions` (login de pessoa pelo Hub) | 10/min por Hub (`hubIdTracker`) **e** 5/min por e-mail normalizado (contador **próprio** da rota, separado do `/auth/login`) |
+  | `POST /hub/spaces/:spaceId/uploads` e `POST /spaces/:spaceId/backup/uploads` (intenção de envio do backup) | 600/h por Hub (`hubIdTracker`) / por usuário (`userIdTracker`), contador próprio por rota |
+  | `POST .../uploads/confirm` (confirmação do envio, as mesmas duas formas) | 600/h por Hub / por usuário |
+  | `POST .../objects/delete` (apagar objetos do backup, as mesmas duas formas) | 120/h por Hub / por usuário |
   Rota com `@Throttle` próprio tem contador próprio (por rota); `@ThrottleGroup(THROTTLE_GROUPS.x, tracker?)`
   (`throttling.decorators.ts`) faz rotas dividirem um contador (chave = grupo + tracker, sem a rota); cada grupo é
   UMA constante com nome e limite em `THROTTLE_GROUPS` (`rate-limits.ts`), e o decorator recusa o mesmo grupo com
@@ -870,7 +874,7 @@ Os valores do `.env.example` para os segredos são **só de desenvolvimento**; p
   `USER_THROTTLER`) ao `default` da rota, que fica livre para outro contador (ex.: reivindicação, por IP no `default` e
   por usuário no `user`, como o login faz com IP + e-mail). O tracker padrão (da biblioteca) já agrupa IPv6 no /64, como o `ipTracker` (fixado em
   `app-throttler.guard.spec.ts`). Limite por Hub usa
-  `hubIdTracker` (`src/hubs/infra/http/hub-id.tracker.ts`, lê `request.hub`): o `HubTokenGuard` precisa rodar antes do
+  `hubIdTracker` (`src/shared/infra/http/hub-id.tracker.ts`, lê `request.hub`): o `HubTokenGuard` precisa rodar antes do
   throttler (`HubsModule` antes do `ThrottlingModule`; fixado por `test/hubs/rate-limit.e2e-spec.ts`). Os contadores por e-mail não vão em cabeçalho.
   **Reautenticação:** toda rota que confere a prova da senha atual (`currentAuthProof`) leva `@ThrottleReauth()`
   (`throttling.decorators.ts`): throttler nomeado `reauth` (`REAUTH_THROTTLER`, `RATE_LIMITS.reauth`), chaveado só

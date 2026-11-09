@@ -195,6 +195,30 @@ describe('ObjectStore (S3 / LocalStack)', () => {
     expect(Buffer.from(await res.arrayBuffer())).toEqual(bytes);
   });
 
+  it('deleteVersion undoes a copy or a delete marker: the previous version is current again', async () => {
+    const base = prefix();
+    const to = `${base}/objects/${randomUUID()}`;
+    const first = randomBytes(30);
+    const second = randomBytes(40);
+    const up1 = `${base}/uploads/${randomUUID()}`;
+    const up2 = `${base}/uploads/${randomUUID()}`;
+    await upload(store, up1, first);
+    await upload(store, up2, second);
+    const v1 = await store.copy(up1, to);
+    const v2 = await store.copy(up2, to);
+
+    await store.deleteVersion(to, v2.versionId);
+    expect(await store.head(to)).toMatchObject({
+      sizeBytes: 30,
+      versionId: v1.versionId,
+    });
+
+    const { deleteMarkerVersionId } = await store.deleteCurrent(to);
+    expect(await store.head(to)).toBeNull();
+    await store.deleteVersion(to, deleteMarkerVersionId);
+    expect(await store.head(to)).toMatchObject({ versionId: v1.versionId });
+  });
+
   it('the bucket carries the lifecycle rules of the init script', async () => {
     const lifecycle = await s3.send(
       new GetBucketLifecycleConfigurationCommand({ Bucket: BUCKET }),

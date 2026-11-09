@@ -2,10 +2,10 @@ import { Injectable } from '@nestjs/common';
 import { HubTokenService } from '../../identity/application/hub-token-service.js';
 import { UnitOfWork } from '../../shared/infra/db/unit-of-work.js';
 import { HubRepository } from '../domain/hub.repository.js';
+import type { HubAuthContext } from '../../shared/application/hub-auth-context.js';
 import { invalidHubToken } from './hub-auth-errors.js';
 
-/** The authenticated Hub of a request (set by the hub token guard). */
-export type HubAuthContext = { hubId: string };
+export type { HubAuthContext };
 
 // A cada requisição de rota de Hub: assinatura, `typ: hub+jwt`, emissor, audiência e validade (HubTokenService),
 // e o Hub ainda existe e não foi desregistrado (lido no contexto do próprio Hub). Toda falha: 401

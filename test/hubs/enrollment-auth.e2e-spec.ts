@@ -11,7 +11,7 @@ import {
   CurrentHub,
   HubAuth,
   type HubAuthContext,
-} from '../../src/hubs/infra/http/hub-auth.decorators.js';
+} from '../../src/shared/infra/http/hub-auth.decorators.js';
 import { HubTokenService } from '../../src/identity/application/hub-token-service.js';
 import { OrganizationDirectory } from '../../src/organizations/application/organization-directory.js';
 import {

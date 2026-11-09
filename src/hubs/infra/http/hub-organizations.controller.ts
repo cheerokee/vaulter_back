@@ -34,8 +34,8 @@ import {
   CurrentHub,
   HubAuth,
   type HubAuthContext,
-} from './hub-auth.decorators.js';
-import { hubIdTracker } from './hub-id.tracker.js';
+} from '../../../shared/infra/http/hub-auth.decorators.js';
+import { hubIdTracker } from '../../../shared/infra/http/hub-id.tracker.js';
 
 // Vínculos Hub <-> organização (dois consentimentos: dono do Hub e, se a política exigir, admin da organização).
 // Rotas internas do app (sem a tag `public`), só token de usuário.

@@ -62,6 +62,15 @@ describe('SpaceStorageUsage (provisional port, bound by storage later)', () => {
     fresh.release();
     await expect(fresh.usedBytes(ORG_ID, SPACE_ID)).resolves.toBe(0);
   });
+
+  it('replace (test seam) swaps the bound source and the restore function puts the previous one back', async () => {
+    const fresh = new SpaceStorageUsage();
+    fresh.use({ usedBytes: async () => 7 });
+    const restore = fresh.replace({ usedBytes: async () => 42 });
+    await expect(fresh.usedBytes(ORG_ID, SPACE_ID)).resolves.toBe(42);
+    restore();
+    await expect(fresh.usedBytes(ORG_ID, SPACE_ID)).resolves.toBe(7);
+  });
 });
 
 describe('CreateSpaceUseCase storage', () => {

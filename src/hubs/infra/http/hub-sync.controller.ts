@@ -8,9 +8,9 @@ import {
   CurrentHub,
   HubAuth,
   type HubAuthContext,
-} from './hub-auth.decorators.js';
+} from '../../../shared/infra/http/hub-auth.decorators.js';
 import { HubSyncQuery } from './dto/sync.dto.js';
-import { hubIdTracker } from './hub-id.tracker.js';
+import { hubIdTracker } from '../../../shared/infra/http/hub-id.tracker.js';
 
 // `sync_version` comes from a bigint sequence; as a JSON number it is exact up to 2^53 (far beyond any real count).
 function toJsonNumber(value: bigint): number {

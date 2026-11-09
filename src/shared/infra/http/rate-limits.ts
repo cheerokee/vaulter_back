@@ -60,6 +60,15 @@ export const RATE_LIMITS = {
   hubPersonLogin: { limit: 10, ttl: MINUTE },
   /** Sincronização do Hub (`GET /hub/sync`): por Hub. */
   hubSync: { limit: 120, ttl: HOUR },
+  /**
+   * Backup de um espaço (módulo `storage`): por Hub (`hubIdTracker`) nas rotas `/hub/spaces/:spaceId/...` e por usuário
+   * (`userIdTracker`) nas `/spaces/:spaceId/backup/...`, contador próprio por rota. O Hub envia a cada 5 min (12
+   * passadas por hora) em lotes de até 100 objetos: 600/h = até 50 lotes por passada (5 mil objetos a cada 5 min, o que
+   * cobre o primeiro backup de um espaço grande em poucas horas). Apagar é raro: 120/h (10 lotes por passada).
+   */
+  backupUploads: { limit: 600, ttl: HOUR },
+  backupConfirm: { limit: 600, ttl: HOUR },
+  backupDelete: { limit: 120, ttl: HOUR },
 } as const;
 
 /** Nome do throttler extra, cobrado só nas rotas marcadas com @ThrottleByEmail(). */

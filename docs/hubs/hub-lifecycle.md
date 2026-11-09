@@ -261,6 +261,35 @@ Hub, como faria para uma pessoa.
 - **Intervalo:** incremental a cada **5 min**, com jitter de ±20% (12 por hora), sempre com `limit=500`. Com 429,
   espere o `Retry-After`; nunca repita em laço apertado.
 
+### Backup dos espaços (envio)
+
+O Hub envia as mudanças dos espaços **a cada 5 min**, na mesma passada da sincronização (spec
+`docs/superpowers/specs/2026-11-09-storage-backup-design.md` §4.2). Cada objeto é um blob cifrado com a chave do espaço
+(`docs/crypto/space-backup.md`); o `objectId` (UUID v7) é do Hub e estável (arquivo atualizado = versão nova do mesmo
+objeto). O backend guarda só o índice (ids, tamanho, sha256 do blob, versão da chave), nunca nome de arquivo.
+
+- **Quem envia:** com o token do Hub, só nos espaços da **Sala** dele com papel `space_editor`
+  (`/hub/spaces/:spaceId/...`); com o token da pessoa logada nele (`/spaces/:spaceId/backup/...`), nos espaços em que ela
+  é `space_editor`/`space_manager`. Sala de leitor, espaço fora da Sala ou apagar com o token do Hub: 404
+  `space-not-found`. Apagar exige `memory.delete` (Gestor; só pelo token da pessoa).
+- **1. Intenção:** `POST .../uploads` `{ items: [{ objectId, keyVersion, sizeBytes, sha256, replacesVersionId }] }`
+  (até 100; tudo ou nada) → `{ items: [{ objectId, uploadId, url, headers, expiresAt }] }`. `replacesVersionId` é a
+  versão que o envio substitui (`null` para objeto novo ou apagado). A intenção reserva o tamanho no espaço por 1 dia;
+  uma intenção nova do mesmo objeto pelo mesmo Hub encerra a anterior.
+- **2. Bytes:** `PUT` direto no S3 na `url` (vale 15 min) com **exatamente** os `headers` devolvidos (tamanho, checksum
+  e a marca do provisório fazem parte da assinatura).
+- **3. Confirmação:** `POST .../uploads/confirm` `{ uploadIds }` (até 100; tudo ou nada; **idempotente**: repetir depois
+  de um timeout devolve a mesma versão) → `{ items: [{ uploadId, versionId, objectId, keyVersion, sizeBytes, sha256,
+  uploadedAt }] }`. `versionId` = `uploadId`; guarde-o como a versão atual do objeto.
+- **Apagar:** `POST .../objects/delete` `{ items: [{ objectId, replacesVersionId }] }` → 204 (o objeto fica 30 dias na
+  lixeira).
+- **Erros:** troca de chave pendente → 409 `space-key-rotation-required` (guarde as mudanças numa **fila local** e envie
+  depois que um membro trocar a chave pelo app); versão da chave antiga → 409 `space-key-version-stale` (cifre de novo com
+  a versão atual); outro Hub gravou antes → 409 `object-version-conflict` (com `currentVersionId`; resolva, por exemplo,
+  gravando uma cópia de conflito como objeto novo); espaço cheio → 422 `space-storage-full` (`missingBytes`); objeto
+  acima de 5 GiB → 422 `object-too-large` (divida o arquivo); bytes no S3 diferentes do declarado ou PUT não feito →
+  422 `upload-mismatch`; `uploadId` desconhecido, de outro espaço ou com mais de 1 dia → 404 `upload-not-found`.
+
 ## 10. Pessoas usando o Hub
 
 - **Online (login pelo Hub):** o Hub pede o salt e os parâmetros da pessoa (`POST /auth/prelogin`, rota comum),
@@ -359,6 +388,9 @@ Assim nada do dono anterior chega a um dono novo.
 | `POST /hub/link-codes` | 30/h | Hub |
 | `POST /hub/user-sessions` | 10/min e 5/min | Hub e e-mail |
 | `GET /hub/sync` | 120/h | Hub |
+| `POST /hub/spaces/:spaceId/uploads` | 600/h | Hub |
+| `POST /hub/spaces/:spaceId/uploads/confirm` | 600/h | Hub |
+| `POST /hub/spaces/:spaceId/objects/delete` | 120/h | Hub |
 | demais rotas | 300/min somando todas | IP |
 
 Estourou: 429 `too-many-requests` com `Retry-After` (segundos).

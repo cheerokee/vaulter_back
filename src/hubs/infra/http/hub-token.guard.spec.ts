@@ -4,7 +4,10 @@ import { Reflector } from '@nestjs/core';
 import { IS_PUBLIC_KEY } from '../../../shared/infra/http/auth.decorators.js';
 import { UnauthenticatedError } from '../../../shared/domain/errors.js';
 import type { AuthenticateHubTokenUseCase } from '../../application/authenticate-hub-token.use-case.js';
-import { HubAuth, IS_HUB_AUTH_KEY } from './hub-auth.decorators.js';
+import {
+  HubAuth,
+  IS_HUB_AUTH_KEY,
+} from '../../../shared/infra/http/hub-auth.decorators.js';
 import { HubTokenGuard } from './hub-token.guard.js';
 
 @Controller()

@@ -9,7 +9,7 @@ import {
   type HubAuthContext,
 } from '../../application/authenticate-hub-token.use-case.js';
 import { invalidHubToken } from '../../application/hub-auth-errors.js';
-import { IS_HUB_AUTH_KEY } from './hub-auth.decorators.js';
+import { IS_HUB_AUTH_KEY } from '../../../shared/infra/http/hub-auth.decorators.js';
 
 const BEARER = /^Bearer ([^\s]+)$/i;
 

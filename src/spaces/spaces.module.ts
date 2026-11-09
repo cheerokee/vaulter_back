@@ -24,6 +24,7 @@ import { RemoveSpaceMemberUseCase } from './application/remove-space-member.use-
 import { RewrapRecoveryUseCase } from './application/rewrap-recovery.use-case.js';
 import { RotateSpaceKeyUseCase } from './application/rotate-space-key.use-case.js';
 import { SpaceAccess } from './application/space-access.js';
+import { SpaceContentAccess } from './application/space-content-access.js';
 import { SpaceRoomService } from './application/space-room.service.js';
 import { SpaceStorage } from './application/space-storage.js';
 import { SpaceStorageUsage } from './application/space-storage-usage.js';
@@ -100,12 +101,19 @@ import { SpacesController } from './infra/http/spaces.controller.js';
     RewrapRecoveryUseCase,
     RotateSpaceKeyUseCase,
     SpaceAccess,
+    SpaceContentAccess,
     SpaceRoomService,
     SpaceStorage,
     SpaceStorageUsage,
   ],
   // Para os próximos módulos (storage, hubs): checagem de acesso ao espaço, a Sala dos Hubs, o tamanho reservado
-  // (instalar num Hub) e a porta do uso (o `storage` liga a implementação real).
-  exports: [SpaceAccess, SpaceRoomService, SpaceStorage, SpaceStorageUsage],
+  // (instalar num Hub), a porta do uso (o `storage` liga a implementação real) e o acesso ao conteúdo (backup).
+  exports: [
+    SpaceAccess,
+    SpaceContentAccess,
+    SpaceRoomService,
+    SpaceStorage,
+    SpaceStorageUsage,
+  ],
 })
 export class SpacesModule {}

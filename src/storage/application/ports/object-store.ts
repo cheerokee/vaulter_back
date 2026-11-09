@@ -50,4 +50,11 @@ export abstract class ObjectStore {
   abstract deleteCurrent(
     key: string,
   ): Promise<{ deleteMarkerVersionId: string }>;
+
+  /**
+   * Permanently removes ONE version (or delete marker) of the key; the previous version becomes current again.
+   * Only for compensation: undoing a copy or a delete marker whose index transaction did not commit, so the bucket's
+   * current version keeps matching the index (a noncurrent version expires in 30 days).
+   */
+  abstract deleteVersion(key: string, versionId: string): Promise<void>;
 }

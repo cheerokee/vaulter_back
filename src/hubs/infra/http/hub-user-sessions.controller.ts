@@ -10,8 +10,8 @@ import {
   CurrentHub,
   HubAuth,
   type HubAuthContext,
-} from './hub-auth.decorators.js';
-import { hubIdTracker } from './hub-id.tracker.js';
+} from '../../../shared/infra/http/hub-auth.decorators.js';
+import { hubIdTracker } from '../../../shared/infra/http/hub-id.tracker.js';
 import { hubLoginEmailTracker } from './hub-login-email.tracker.js';
 
 type Req = {

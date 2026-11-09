@@ -12,6 +12,7 @@ import { GetHubUseCase } from './application/get-hub.use-case.js';
 import { GrantRoomUseCase } from './application/grant-room.use-case.js';
 import { HubAccess } from './application/hub-access.js';
 import { HubAdministration } from './application/hub-administration.js';
+import { HubDirectory } from './application/hub-directory.js';
 import { HubLinkCascade } from './application/hub-link-cascade.js';
 import { HubsMemberRemovedHook } from './application/member-removed.hook.js';
 import { HubsSpaceMemberLeftHook } from './application/space-member-left.hook.js';
@@ -142,6 +143,7 @@ import { LoginPersonOnHubUseCase } from './application/login-person-on-hub.use-c
     GrantRoomUseCase,
     HubAccess,
     HubAdministration,
+    HubDirectory,
     HubLinkCascade,
     HubsMemberRemovedHook,
     HubsSpaceMemberLeftHook,
@@ -164,8 +166,8 @@ import { LoginPersonOnHubUseCase } from './application/login-person-on-hub.use-c
     HubPersonSessions,
     LoginPersonOnHubUseCase,
   ],
-  // Para os outros módulos: checagem de acesso ao Hub e as operações administrativas (o `platform` as usa; o `hubs`
-  // não o importa).
-  exports: [HubAccess, HubAdministration],
+  // Para os outros módulos: checagem de acesso ao Hub, as operações administrativas (o `platform` as usa; o `hubs`
+  // não o importa) e os vínculos aprovados de um Hub (o `storage`, para achar a Sala).
+  exports: [HubAccess, HubAdministration, HubDirectory],
 })
 export class HubsModule {}
