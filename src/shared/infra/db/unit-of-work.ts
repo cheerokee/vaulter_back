@@ -1,6 +1,6 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { Injectable } from '@nestjs/common';
-import { DataSource, type EntityManager } from 'typeorm';
+import { DataSource, type EntityManager, QueryFailedError } from 'typeorm';
 
 // EntityManager da transação ativa, propagado pela cadeia assíncrona (inclusive entre módulos).
 const ambient = new AsyncLocalStorage<EntityManager>();
@@ -166,8 +166,36 @@ export class UnitOfWork {
     ]);
   }
 
+  /**
+   * Bounds every lock wait from here to the end of the transaction (`SET LOCAL lock_timeout`): a statement waiting
+   * longer for a row lock fails with 55P03 (`isLockTimeout`). Requires an active unit of work. Set it before the
+   * first lock (inside a savepoint that is rolled back, the setting goes back too).
+   */
+  async setLockTimeout(ms: number): Promise<void> {
+    const manager = activeManager(this.dataSource);
+    if (!manager) {
+      throw new Error(
+        'UnitOfWork.setLockTimeout requires an active unit of work (call it inside UnitOfWork.run).',
+      );
+    }
+    if (!Number.isSafeInteger(ms) || ms < 1) {
+      throw new Error(`setLockTimeout: invalid ${ms}`);
+    }
+    await manager.query(`SELECT set_config('lock_timeout', $1, true)`, [
+      String(ms),
+    ]);
+  }
+
   // Roda `work` com o contexto dado e restaura o anterior ao terminar (abre transação se não houver).
   withContext<T>(ctx: UnitOfWorkContext, work: () => Promise<T>): Promise<T> {
     return runWithContext(this.dataSource, ctx, work);
   }
+}
+
+/** A lock wait that passed `lock_timeout` (Postgres 55P03 `lock_not_available`, also FOR ... NOWAIT). */
+export function isLockTimeout(error: unknown): boolean {
+  return (
+    error instanceof QueryFailedError &&
+    (error.driverError as { code?: string } | undefined)?.code === '55P03'
+  );
 }

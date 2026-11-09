@@ -2,7 +2,7 @@ import {
   ConflictError,
   DomainValidationError,
 } from '../../shared/domain/errors.js';
-import { MAX_OBJECT_BYTES } from './backup-limits.js';
+import { MAX_CONFIRM_BATCH_BYTES, MAX_OBJECT_BYTES } from './backup-limits.js';
 
 /** What the rules need of the (locked) space. */
 export type WritableSpace = {
@@ -55,6 +55,17 @@ export const BackupRules = {
         'space-storage-full',
         'The space does not have room for these objects.',
         { missingBytes },
+      );
+    }
+  },
+
+  /** 422 `confirm-batch-too-large` when one confirmation would copy more than 5 GiB (declared sizes). */
+  assertConfirmBatchSize(requestedBytes: number): void {
+    if (requestedBytes > MAX_CONFIRM_BATCH_BYTES) {
+      throw new DomainValidationError(
+        'confirm-batch-too-large',
+        `One confirmation can copy at most ${MAX_CONFIRM_BATCH_BYTES} bytes; confirm in smaller batches.`,
+        { maxBytes: MAX_CONFIRM_BATCH_BYTES, requestedBytes },
       );
     }
   },

@@ -751,6 +751,66 @@ describe('storage uploads (e2e)', () => {
     });
   });
 
+  it('a confirmation copying more than 5 GiB is 422 confirm-batch-too-large (split it); nothing is touched in S3', async () => {
+    const space = await newSpace('BigBatch', 6 * GiB);
+    const a = await blobFor(space);
+    const b = await blobFor(space);
+    const half = 2.5 * GiB;
+    const intent = await expectStatus(
+      userPost(ana, `/spaces/${space.spaceId}/backup/uploads`, {
+        items: [
+          { ...a.item, sizeBytes: half },
+          { ...b.item, sizeBytes: half + 1 },
+        ],
+      }),
+      201,
+    );
+    const ids = (intent.body.items as Intent[]).map((i) => i.uploadId);
+    expect(
+      expectProblem(
+        await userPost(ana, `/spaces/${space.spaceId}/backup/uploads/confirm`, {
+          uploadIds: ids,
+        }),
+        422,
+        'confirm-batch-too-large',
+      ),
+    ).toMatchObject({ maxBytes: 5 * GiB, requestedBytes: 5 * GiB + 1 });
+    expect((await versionRows(a.objectId))[0]!.status).toBe('pending');
+  });
+
+  it('a space lock held past the lock timeout (10 s) is 409 storage-busy, not a hung request or a 500', async () => {
+    const space = await newSpace('Locked');
+    const obj = await blobFor(space);
+    const ds = await adminDataSource();
+    const holder = ds.createQueryRunner();
+    await holder.connect();
+    await holder.startTransaction();
+    try {
+      await holder.query(`SELECT 1 FROM spaces WHERE id = $1 FOR UPDATE`, [
+        space.spaceId,
+      ]);
+      const started = Date.now();
+      expectProblem(
+        await userPost(ana, `/spaces/${space.spaceId}/backup/uploads`, {
+          items: [obj.item],
+        }),
+        409,
+        'storage-busy',
+      );
+      expect(Date.now() - started).toBeGreaterThanOrEqual(9_000);
+    } finally {
+      await holder.rollbackTransaction();
+      await holder.release();
+    }
+    // Once the lock is gone, the same request goes through.
+    await expectStatus(
+      userPost(ana, `/spaces/${space.spaceId}/backup/uploads`, {
+        items: [obj.item],
+      }),
+      201,
+    );
+  }, 30_000);
+
   it('upload ids of another space or unknown are 404 upload-not-found; the body is validated (422)', async () => {
     const space = await newSpace('Ids');
     const other = await newSpace('Other');

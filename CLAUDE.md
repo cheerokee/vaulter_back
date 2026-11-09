@@ -732,7 +732,9 @@ mesmo commit).
   `space-key-rotation-required` (envio novo recusado enquanto a troca de chave estiver pendente; **apagar continua
   valendo**), 409 `space-key-version-stale`, 409 `object-version-conflict` (`currentVersionId`), 409 `storage-busy`,
   422 `duplicate-object` (objeto repetido no pedido), 404 `upload-not-found` (inexistente, de outro espaço/remetente, vencida),
-  422 `upload-mismatch` (bytes diferentes do declarado ou PUT não feito). Confirmar só quem pediu a intenção.
+  422 `upload-mismatch` (bytes diferentes do declarado ou PUT não feito), 422 `confirm-batch-too-large` (uma confirmação
+  copia no máximo 5 GiB declarados, `MAX_CONFIRM_BATCH_BYTES`). Confirmar só quem pediu a intenção (o mesmo Hub ou a
+  mesma pessoa); outro: 404 `upload-not-found`.
 - **O índice é a verdade; o S3 só guarda bytes.** Toda leitura, listagem e download usa o `s3VersionId` gravado no
   índice (`storage_object_versions`), **nunca** a versão "atual" do S3 (que pode estar errada por um instante depois de
   uma queda entre o S3 e o COMMIT). Vale para listar, baixar e tudo que vier.
@@ -741,7 +743,11 @@ mesmo commit).
   dos objetos `FOR UPDATE` em ordem de id, com as chamadas ao S3 (HEAD, cópia no servidor, delete marker) **sob** essas
   travas, para a ordem das versões no S3 ser a do índice. Trade-off aceito: enquanto um lote de confirmação roda (até
   100 cópias), redimensionar, trocar a chave, pôr/tirar membro, tirar da Sala e o gancho de saída da organização
-  (todos `FOR UPDATE` no espaço) esperam o lote; confirmações e apagamentos do mesmo espaço correm juntos.
+  (todos `FOR UPDATE` no espaço) esperam o lote; confirmações e apagamentos do mesmo espaço correm juntos. Limites do
+  trade-off: o lote copia no máximo 5 GiB (`confirm-batch-too-large`), e `StorageAccess.lock` põe `lock_timeout` de 10 s
+  (`STORAGE_LOCK_TIMEOUT_MS`, `uow.setLockTimeout`) para o resto da transação da intenção, da confirmação e do apagar:
+  esperar mais que isso pelo espaço ou por um objeto = 409 `storage-busy` (55P03, `lockTimeoutAsBusy`), em vez de o
+  pedido segurar uma conexão do pool (`DB_POOL_MAX_CONNECTIONS = 10` por instância, em `typeorm.options.ts`).
 - **Diário + reparo:** a marca `s3_write_started_at` quer dizer "alguma tentativa de gravar no S3 por esta linha
   começou neste instante ou depois", sempre no **relógio do banco**. A confirmação/o apagar a gravam numa **transação
   curta própria, confirmada ANTES** do unit of work que grava no S3, depois da checagem de acesso e só nas linhas de
@@ -758,7 +764,6 @@ mesmo commit).
 - **Nunca precisar de uma segunda conexão do pool enquanto se segura uma** (autocommit "por fora" de um `uow.run`
   aberto): com o pool cheio de transações esperando travas, a espera pela conexão não tem fim e o Postgres não vê o
   impasse. Grave antes, numa transação própria.
-- Confirmar só quem pediu a intenção (o mesmo Hub ou a mesma pessoa); outro: 404 `upload-not-found`.
 - **Listar e baixar** (`ListObjectsUseCase`, `GetDownloadUrlUseCase`, leitor `BackupIndexReader` em SQL): `memory.read`
   = Hub com o espaço na Sala (qualquer papel; é assim que um Hub reinstalado restaura) ou qualquer membro do espaço
   (qualquer sessão, inclusive a de um Hub fora da Sala); o resto 404 `space-not-found`. **Sem trava**
@@ -802,8 +807,10 @@ mesmo commit).
   índice, agendar `storage:reconcile`, aviso de franquia perto do fim, endpoint S3 público).
 
 ## Banco de dados (TypeORM + migrations)
-- **Pool:** o do driver `pg` (máximo padrão 10 conexões) com `connectionTimeoutMillis` = `DB_POOL_CONNECTION_TIMEOUT_MS`
-  (10 s, em `typeorm.options.ts`): pool esgotado vira erro (500, transações desfeitas) em vez de travar a API.
+- **Pool:** o do driver `pg`, com tamanho explícito `DB_POOL_MAX_CONNECTIONS` (10 por instância; instâncias × 10 abaixo
+  do `max_connections` do banco) e `connectionTimeoutMillis` = `DB_POOL_CONNECTION_TIMEOUT_MS` (10 s), ambos em
+  `typeorm.options.ts`: pool esgotado vira erro (500, transações desfeitas) em vez de travar a API. Trabalho longo
+  segurando conexão precisa de teto (ex.: o backup limita o lote da confirmação e a espera por trava, veja `storage`).
 - **TypeORM 1.x** + `@nestjs/typeorm`, driver `pg`. Config de conexão em `src/database/typeorm.options.ts`,
   compartilhada entre a aplicação (`DatabaseModule`) e o CLI (`src/database/data-source.ts`). Variáveis do
   `.env` (`DB_*`) são carregadas pelo `ConfigModule` (app) e por `process.loadEnvFile` (CLI).

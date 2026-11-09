@@ -5,6 +5,8 @@ import {
   type SpaceContentActor,
   type SpaceContentState,
 } from '../../spaces/application/space-content-access.js';
+import { UnitOfWork } from '../../shared/infra/db/unit-of-work.js';
+import { STORAGE_LOCK_TIMEOUT_MS } from '../domain/backup-limits.js';
 import type { BackupUploader } from '../domain/backup-object-version.js';
 
 /** Who acts on the backup: the hub with its own token, or a person with a user token (any session). */
@@ -25,13 +27,14 @@ export function uploaderOf(actor: StorageActor): BackupUploader {
 // - Pessoa: `SpaceAccess` (404 não membro, 403 sem a permissão), com qualquer sessão (decisão da Task 5: o conteúdo
 //   é cifrado no cliente e o membro já tem a chave).
 // Trava a linha do espaço (FOR UPDATE na intenção, FOR SHARE na confirmação e no apagar; veja `SpaceContentAccess`) e
-// reconfere sob ela. MUST run inside `UnitOfWork.run`. Leituras (listar, URL de download, `memory.read`: qualquer papel
+// reconfere sob ela, com `lock_timeout` de 10 s para o resto da transação (`STORAGE_LOCK_TIMEOUT_MS`). MUST run inside `UnitOfWork.run`. Leituras (listar, URL de download, `memory.read`: qualquer papel
 // de Sala e todo membro do espaço) usam `require`, as mesmas respostas sem trava nenhuma.
 @Injectable()
 export class StorageAccess {
   constructor(
     private readonly content: SpaceContentAccess,
     private readonly hubs: HubDirectory,
+    private readonly uow: UnitOfWork,
   ) {}
 
   /** Reads (listing, download URLs): the same answers as `lock`, without any lock and without a unit of work. */
@@ -54,6 +57,9 @@ export class StorageAccess {
     permission: StoragePermission,
     mode: 'update' | 'share' = 'update',
   ): Promise<SpaceContentState> {
+    // Toda espera por trava desta transação (espaço e, depois, objetos) é limitada: 55P03 vira 409 `storage-busy`
+    // nos casos de uso (`lockTimeoutAsBusy`), em vez de o pedido segurar uma conexão do pool atrás de um lote longo.
+    await this.uow.setLockTimeout(STORAGE_LOCK_TIMEOUT_MS);
     return this.content.lockForContent(
       spaceId,
       await this.contentActor(actor),

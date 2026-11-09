@@ -283,7 +283,9 @@ objeto). O backend guarda só o índice (ids, tamanho, sha256 do blob, versão d
   e a marca do provisório fazem parte da assinatura).
 - **3. Confirmação:** `POST .../uploads/confirm` `{ uploadIds }` (até 100; tudo ou nada; **idempotente**: repetir depois
   de um timeout devolve a mesma versão; só quem pediu a intenção confirma, com o mesmo token de Hub ou da mesma pessoa) → `{ items: [{ uploadId, versionId, objectId, keyVersion, sizeBytes, sha256,
-  uploadedAt }] }`. `versionId` = `uploadId`; guarde-o como a versão atual do objeto.
+  uploadedAt }] }`. `versionId` = `uploadId`; guarde-o como a versão atual do objeto. **Um pedido de confirmação copia
+  no máximo 5 GiB** (soma dos `sizeBytes` declarados do que ainda não foi confirmado): acima disso, 422
+  `confirm-batch-too-large` (`maxBytes`, `requestedBytes`); confirme em lotes menores (um objeto sempre cabe).
 - **Apagar:** `POST .../objects/delete` `{ items: [{ objectId, replacesVersionId }] }` → 204 (o objeto fica 30 dias na
   lixeira).
 - **Não reenvie o que não mudou.** Toda versão substituída e todo objeto apagado ficam **30 dias na lixeira e contam no
@@ -298,7 +300,8 @@ objeto). O backend guarda só o índice (ids, tamanho, sha256 do blob, versão d
   gravando uma cópia de conflito como objeto novo); espaço cheio → 422 `space-storage-full` (`missingBytes`); objeto
   acima de 5 GiB → 422 `object-too-large` (divida o arquivo); bytes no S3 diferentes do declarado ou PUT não feito →
   422 `upload-mismatch`; `uploadId` desconhecido, de outro espaço, de outro remetente ou com mais de 1 dia → 404 `upload-not-found`;
-  409 `storage-busy` (raro) → repita o mesmo pedido.
+  409 `storage-busy` (raro: o espaço ou o objeto ficou travado mais de 10 s por outro pedido, por exemplo uma
+  confirmação grande) → repita o mesmo pedido depois de alguns segundos, com jitter.
 
 ### Backup dos espaços (listar, baixar, restaurar)
 

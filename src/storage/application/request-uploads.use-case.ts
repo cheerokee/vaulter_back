@@ -12,7 +12,7 @@ import type {
   UploadIntentView,
 } from './dto/backup-views.js';
 import { ObjectStore } from './ports/object-store.js';
-import { objectVersionConflict } from './storage-errors.js';
+import { lockTimeoutAsBusy, objectVersionConflict } from './storage-errors.js';
 import {
   StorageAccess,
   type StorageActor,
@@ -27,6 +27,7 @@ import {
 //    ordem de id (criando a linha do objeto novo; id de outro espaço = 409), confere `replacesVersionId` (409
 //    `object-version-conflict`), encerra as intenções anteriores do mesmo objeto por quem envia, lê o uso (com as
 //    reservas) e confere que tudo cabe (422 `space-storage-full` com `missingBytes`); grava as versões `pending`;
+//    espera por trava além de 10 s (`lock_timeout`) = 409 `storage-busy`, repetível;
 // 3. depois do commit, assina um PUT por objeto no prefixo provisório `uploads/<uploadId>` (15 min), preso ao tamanho
 //    e ao sha256 declarados. Os cabeçalhos devolvidos vão ao cliente sem mudança.
 @Injectable()
@@ -50,58 +51,62 @@ export class RequestUploadsUseCase {
       BackupRules.assertObjectSize(i.objectId, i.sizeBytes);
     const uploader = uploaderOf(actor);
 
-    const created = await this.uow.run(async () => {
-      const space = await this.access.lock(
-        spaceId,
-        actor,
-        'memory.write',
-        'update',
-      );
-      const orgId = space.organizationId;
-      for (const i of items) BackupRules.assertWritable(space, i.keyVersion);
-      const sorted = [...items].sort((a, b) =>
-        a.objectId < b.objectId ? -1 : a.objectId > b.objectId ? 1 : 0,
-      );
-      for (const i of sorted) {
-        const object = await this.objects.lockOrCreate(
-          orgId,
-          space.spaceId,
-          i.objectId,
+    const created = await this.uow
+      .run(async () => {
+        const space = await this.access.lock(
+          spaceId,
+          actor,
+          'memory.write',
+          'update',
         );
-        if (!object) throw objectVersionConflict(i.objectId, null);
-        object.assertReplaces(i.replacesVersionId);
-        await this.versions.expirePending(
-          orgId,
-          space.spaceId,
-          i.objectId,
-          uploader,
+        const orgId = space.organizationId;
+        for (const i of items) BackupRules.assertWritable(space, i.keyVersion);
+        const sorted = [...items].sort((a, b) =>
+          a.objectId < b.objectId ? -1 : a.objectId > b.objectId ? 1 : 0,
         );
-      }
-      const usedBytes = await this.versions.usedBytes(orgId, space.spaceId);
-      BackupRules.assertFits(
-        space,
-        usedBytes,
-        items.reduce((sum, i) => sum + i.sizeBytes, 0),
-      );
-      const versions = new Map<string, BackupObjectVersion>();
-      for (const i of sorted) {
-        const version = BackupObjectVersion.request({
-          id: newId(),
-          organizationId: orgId,
-          spaceId: space.spaceId,
-          objectId: i.objectId,
-          keyVersion: i.keyVersion,
-          sizeBytes: i.sizeBytes,
-          sha256: i.sha256,
-          replacesVersionId: i.replacesVersionId,
-          uploader,
-          now,
-        });
-        await this.versions.create(version);
-        versions.set(i.objectId, version);
-      }
-      return { orgId, versions };
-    });
+        for (const i of sorted) {
+          const object = await this.objects.lockOrCreate(
+            orgId,
+            space.spaceId,
+            i.objectId,
+          );
+          if (!object) throw objectVersionConflict(i.objectId, null);
+          object.assertReplaces(i.replacesVersionId);
+          await this.versions.expirePending(
+            orgId,
+            space.spaceId,
+            i.objectId,
+            uploader,
+          );
+        }
+        const usedBytes = await this.versions.usedBytes(orgId, space.spaceId);
+        BackupRules.assertFits(
+          space,
+          usedBytes,
+          items.reduce((sum, i) => sum + i.sizeBytes, 0),
+        );
+        const versions = new Map<string, BackupObjectVersion>();
+        for (const i of sorted) {
+          const version = BackupObjectVersion.request({
+            id: newId(),
+            organizationId: orgId,
+            spaceId: space.spaceId,
+            objectId: i.objectId,
+            keyVersion: i.keyVersion,
+            sizeBytes: i.sizeBytes,
+            sha256: i.sha256,
+            replacesVersionId: i.replacesVersionId,
+            uploader,
+            now,
+          });
+          await this.versions.create(version);
+          versions.set(i.objectId, version);
+        }
+        return { orgId, versions };
+      })
+      .catch((error: unknown) => {
+        throw lockTimeoutAsBusy(error);
+      });
 
     const expiresAt = new Date(
       now.getTime() + PRESIGNED_URL_TTL_SECONDS * 1000,

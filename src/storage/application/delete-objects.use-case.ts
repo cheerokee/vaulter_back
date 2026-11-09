@@ -10,7 +10,7 @@ import { BackupObjectHealer, type ObjectRef } from './backup-object-healer.js';
 import type { DeleteObjectInput } from './dto/backup-views.js';
 import { ObjectStore } from './ports/object-store.js';
 import { assertStillMarked } from './journal.js';
-import { objectVersionConflict } from './storage-errors.js';
+import { lockTimeoutAsBusy, objectVersionConflict } from './storage-errors.js';
 import { StorageAccess, type StorageActor } from './storage-access.js';
 
 // Apagar objetos (spec storage-backup §4.2, "Apagar"), tudo ou nada por pedido, idempotente. Exige `memory.write`, a
@@ -24,7 +24,8 @@ import { StorageAccess, type StorageActor } from './storage-access.js';
 // nada). Reconfere a marca (409 `storage-busy` se sumiu), então: delete marker no S3 (a versão fica na lixeira 30
 // dias), lápide no objeto e `superseded_at` na versão. As marcas nunca são limpas aqui (só pela varredura). Uma troca
 // de chave pendente não impede apagar. Se o unit of work rejeitar depois do S3, os objetos são reparados (`repair`):
-// com a lápide confirmada os markers ficam; sem ela, saem.
+// com a lápide confirmada os markers ficam; sem ela, saem. Espera por trava além de 10 s (`lock_timeout`) = 409
+// `storage-busy`, repetível.
 @Injectable()
 export class DeleteObjectsUseCase {
   constructor(
@@ -44,25 +45,25 @@ export class DeleteObjectsUseCase {
   ): Promise<void> {
     BackupRules.assertDistinctObjects(items.map((i) => i.objectId));
     const writing: ObjectRef[] = [];
-    // Diário ANTES do unit of work (transação curta própria, relógio do banco; veja ConfirmUploadsUseCase), depois da
-    // checagem de `memory.write`: marca a versão que cada item diz apagar, se for a viva.
-    const marks = await this.uow.run(async () => {
-      const space = await this.access.lock(
-        spaceId,
-        actor,
-        'memory.write',
-        'share',
-      );
-      return this.versions.markLiveWrites(
-        space.organizationId,
-        space.spaceId,
-        items.map((i) => ({
-          objectId: i.objectId,
-          versionId: i.replacesVersionId,
-        })),
-      );
-    });
     try {
+      // Diário ANTES do unit of work (transação curta própria, relógio do banco; veja ConfirmUploadsUseCase), depois da
+      // checagem de `memory.write`: marca a versão que cada item diz apagar, se for a viva.
+      const marks = await this.uow.run(async () => {
+        const space = await this.access.lock(
+          spaceId,
+          actor,
+          'memory.write',
+          'share',
+        );
+        return this.versions.markLiveWrites(
+          space.organizationId,
+          space.spaceId,
+          items.map((i) => ({
+            objectId: i.objectId,
+            versionId: i.replacesVersionId,
+          })),
+        );
+      });
       await this.uow.run(async () => {
         const space = await this.access.lock(
           spaceId,
@@ -125,7 +126,7 @@ export class DeleteObjectsUseCase {
       });
     } catch (error) {
       if (writing.length > 0) await this.healer.repair(writing);
-      throw error;
+      throw lockTimeoutAsBusy(error);
     }
   }
 }

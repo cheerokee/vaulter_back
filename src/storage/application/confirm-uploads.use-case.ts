@@ -14,7 +14,11 @@ import {
 } from './dto/backup-views.js';
 import { ObjectStore } from './ports/object-store.js';
 import { assertStillMarked } from './journal.js';
-import { objectVersionConflict, uploadNotFound } from './storage-errors.js';
+import {
+  lockTimeoutAsBusy,
+  objectVersionConflict,
+  uploadNotFound,
+} from './storage-errors.js';
 import {
   StorageAccess,
   type StorageActor,
@@ -40,6 +44,7 @@ function sameUploader(
 //    senão 404 `upload-not-found` (também fora da janela de 1 dia); uma já confirmada só devolve a versão (repetição
 //    depois de um timeout: nada é copiado de novo);
 // 2. troca de chave pendente / versão da chave (409), reconferidos AQUI porque podem ter mudado depois da intenção;
+//    o que falta copiar soma no máximo 5 GiB declarados (422 `confirm-batch-too-large`; o cliente divide o lote);
 // 3. trava os objetos em ordem de id; objeto com marca mais antiga que as deste pedido (outra tentativa) é reparado
 //    antes (`BackupObjectHealer`); na ordem do pedido, confere `replacesVersionId` contra a versão viva (409
 //    `object-version-conflict`) e o `HEAD` do provisório (tamanho e sha256 iguais aos declarados, senão 422
@@ -53,6 +58,7 @@ function sameUploader(
 // As cópias acontecem sob a trava do objeto, então a ordem das versões no S3 é a do índice. Se o unit of work
 // rejeitar depois de começar a gravar no S3 (inclusive um COMMIT de resultado incerto), os objetos são reparados numa
 // transação nova (`repair`): só o que nenhuma versão confirmada referencia sai do bucket. As marcas ficam.
+// Espera por trava além de 10 s (`lock_timeout`, posto por `StorageAccess.lock`) = 409 `storage-busy`, repetível.
 @Injectable()
 export class ConfirmUploadsUseCase {
   constructor(
@@ -71,24 +77,24 @@ export class ConfirmUploadsUseCase {
     now: Date = new Date(),
   ): Promise<CommittedVersionView[]> {
     const writing: ObjectRef[] = [];
-    // Diário ANTES do unit of work (transação curta própria, confirmada; relógio do banco): marca só as intenções
-    // pendentes de QUEM confirma, depois da checagem de acesso. Nunca é preciso uma segunda conexão do pool enquanto o
-    // unit of work segura a dele, e a marca sobrevive a qualquer falha do que vem depois.
-    const marks = await this.uow.run(async () => {
-      const space = await this.access.lock(
-        spaceId,
-        actor,
-        'memory.write',
-        'share',
-      );
-      return this.versions.markPendingWrites(
-        space.organizationId,
-        space.spaceId,
-        uploadIds,
-        uploaderOf(actor),
-      );
-    });
     try {
+      // Diário ANTES do unit of work (transação curta própria, confirmada; relógio do banco): marca só as intenções
+      // pendentes de QUEM confirma, depois da checagem de acesso. Nunca é preciso uma segunda conexão do pool enquanto o
+      // unit of work segura a dele, e a marca sobrevive a qualquer falha do que vem depois.
+      const marks = await this.uow.run(async () => {
+        const space = await this.access.lock(
+          spaceId,
+          actor,
+          'memory.write',
+          'share',
+        );
+        return this.versions.markPendingWrites(
+          space.organizationId,
+          space.spaceId,
+          uploadIds,
+          uploaderOf(actor),
+        );
+      });
       return await this.uow.run(async () => {
         const space = await this.access.lock(
           spaceId,
@@ -112,6 +118,10 @@ export class ConfirmUploadsUseCase {
           BackupRules.assertWritable(space, version.keyVersion);
           toCommit.push(version);
         }
+        // As cópias correm sob as travas, segurando uma conexão do pool: um pedido copia no máximo 5 GiB declarados.
+        BackupRules.assertConfirmBatchSize(
+          toCommit.reduce((sum, v) => sum + v.sizeBytes, 0),
+        );
 
         const objectIds = [...new Set(toCommit.map((v) => v.objectId))].sort();
         const locked = new Map<string, BackupObject>();
@@ -197,7 +207,7 @@ export class ConfirmUploadsUseCase {
       });
     } catch (error) {
       if (writing.length > 0) await this.healer.repair(writing);
-      throw error;
+      throw lockTimeoutAsBusy(error);
     }
   }
 }

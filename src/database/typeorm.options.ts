@@ -10,6 +10,14 @@ export type DatabaseRole = 'app' | 'migration';
  */
 export const DB_POOL_CONNECTION_TIMEOUT_MS = 10_000;
 
+/**
+ * Connections in the pool of each API instance (explicit; it was pg's default). Long work holds one connection for
+ * its whole transaction (a backup confirmation copies up to 5 GiB in S3 under its locks), so the backup bounds what
+ * it holds: `MAX_CONFIRM_BATCH_BYTES` per confirmation and `STORAGE_LOCK_TIMEOUT_MS` per lock wait. Changing it:
+ * instances × this value must stay below the database `max_connections` (minus the owner's and the CLI's).
+ */
+export const DB_POOL_MAX_CONNECTIONS = 10;
+
 // Conexão compartilhada entre a aplicação Nest, o CLI de migrations (data-source.ts) e os testes.
 // - 'app': papel de runtime (DB_APP_*), sem superusuário e sem BYPASSRLS, para o RLS valer de verdade;
 // - 'migration': papel dono do banco (DB_*), usado por migrations, CLI e pelo setup dos testes.
@@ -26,7 +34,10 @@ export function typeOrmOptions(role: DatabaseRole): DataSourceOptions {
     // Schema só muda via migrations.
     namingStrategy: new SnakeNamingStrategy(),
     synchronize: false,
-    // Opções do pool do driver `pg` (máximo padrão: 10 conexões).
-    extra: { connectionTimeoutMillis: DB_POOL_CONNECTION_TIMEOUT_MS },
+    // Opções do pool do driver `pg`.
+    extra: {
+      max: DB_POOL_MAX_CONNECTIONS,
+      connectionTimeoutMillis: DB_POOL_CONNECTION_TIMEOUT_MS,
+    },
   };
 }

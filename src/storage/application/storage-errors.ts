@@ -1,4 +1,5 @@
 import { ConflictError, NotFoundError } from '../../shared/domain/errors.js';
+import { isLockTimeout } from '../../shared/infra/db/unit-of-work.js';
 
 export { objectVersionConflict } from '../domain/backup-object.js';
 
@@ -17,6 +18,14 @@ export function storageBusy(): ConflictError {
     'storage-busy',
     'The storage was busy with this object; repeat the request.',
   );
+}
+
+/**
+ * A lock wait past `STORAGE_LOCK_TIMEOUT_MS` (55P03: someone held the space or an object longer, e.g. a big
+ * confirmation) becomes the same retryable 409 `storage-busy`; any other error is returned unchanged.
+ */
+export function lockTimeoutAsBusy(error: unknown): unknown {
+  return isLockTimeout(error) ? storageBusy() : error;
 }
 
 /** 404: no committed version with this id for this object of this space, live or still in the 30-day trash. */

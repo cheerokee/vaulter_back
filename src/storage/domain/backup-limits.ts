@@ -2,6 +2,18 @@
 
 /** Biggest object (encrypted blob): the hub splits bigger files. */
 export const MAX_OBJECT_BYTES = 5_368_709_120; // 5 GiB
+/**
+ * Declared bytes one confirmation may copy (the objects not committed yet). The server-side copies run under the space
+ * and object locks while holding a pool connection, so one request must not hold them for an unbounded S3 time:
+ * above it, 422 `confirm-batch-too-large` (the client confirms in smaller batches). One object always fits.
+ */
+export const MAX_CONFIRM_BATCH_BYTES = MAX_OBJECT_BYTES;
+/**
+ * Longest wait for a row lock (space or objects) in an upload intent, confirmation or delete (`lock_timeout`, SET
+ * LOCAL by `StorageAccess.lock`): past it, 409 `storage-busy` (retryable) instead of a request (and its pool
+ * connection) waiting behind a long confirmation.
+ */
+export const STORAGE_LOCK_TIMEOUT_MS = 10_000;
 /** Items per upload intent, confirmation or delete request. */
 export const MAX_BATCH_ITEMS = 100;
 /** Validity of a presigned URL. */

@@ -4,11 +4,15 @@ import {
   NotFoundError,
 } from '../../shared/domain/errors.js';
 import type { UnitOfWork } from '../../shared/infra/db/unit-of-work.js';
+import { QueryFailedError } from 'typeorm';
 import { BackupObject } from '../domain/backup-object.js';
 import type { BackupObjectRepository } from '../domain/backup-object.repository.js';
 import { BackupObjectVersion } from '../domain/backup-object-version.js';
 import type { BackupObjectVersionRepository } from '../domain/backup-object-version.repository.js';
-import { MAX_OBJECT_BYTES } from '../domain/backup-limits.js';
+import {
+  MAX_CONFIRM_BATCH_BYTES,
+  MAX_OBJECT_BYTES,
+} from '../domain/backup-limits.js';
 import { BackupObjectHealer } from './backup-object-healer.js';
 import { ConfirmUploadsUseCase } from './confirm-uploads.use-case.js';
 import { DeleteObjectsUseCase } from './delete-objects.use-case.js';
@@ -849,5 +853,125 @@ describe('DeleteObjectsUseCase', () => {
         .get(`orgs/${ORG}/spaces/${SPACE}/objects/${OBJ_A}`)!
         .map((x) => x.isDeleteMarker),
     ).toEqual([false, true]);
+  });
+});
+
+// A lock wait past `lock_timeout` (SET LOCAL by StorageAccess.lock) is Postgres 55P03: the client gets the retryable
+// 409 `storage-busy` instead of a 500, on the space lock and on the object locks.
+describe('lock timeout (55P03) is 409 storage-busy', () => {
+  const lockTimeout = () =>
+    new QueryFailedError(
+      'SELECT ... FOR UPDATE',
+      [],
+      Object.assign(new Error('canceling statement due to lock timeout'), {
+        code: '55P03',
+      }),
+    );
+  const busy = { constructor: ConflictError, code: 'storage-busy' };
+
+  it('intent: on the space lock', async () => {
+    t.mocks.access.lock.mockRejectedValueOnce(lockTimeout());
+    await expect(
+      t.request.execute(HUB, SPACE, [item(OBJ_A)], NOW),
+    ).rejects.toMatchObject(busy);
+  });
+
+  it('confirm: on the space lock of the journal and on an object lock', async () => {
+    const id = (await t.request.execute(HUB, SPACE, [item(OBJ_A)], NOW))[0]!
+      .uploadId;
+    t.mocks.access.lock.mockRejectedValueOnce(lockTimeout());
+    await expect(
+      t.confirm.execute(HUB, SPACE, [id], NOW),
+    ).rejects.toMatchObject(busy);
+    t.mocks.objectRepo.lockForUpdate.mockRejectedValueOnce(lockTimeout());
+    await expect(
+      t.confirm.execute(HUB, SPACE, [id], NOW),
+    ).rejects.toMatchObject(busy);
+    expect(t.mocks.store.copy).not.toHaveBeenCalled();
+    // Once the lock is free, the same request goes through.
+    await t.confirm.execute(HUB, SPACE, [id], NOW);
+    expect(t.versions.get(id)!.status).toBe('committed');
+  });
+
+  it('delete: on an object lock', async () => {
+    const id = (await t.request.execute(HUB, SPACE, [item(OBJ_A)], NOW))[0]!
+      .uploadId;
+    await t.confirm.execute(HUB, SPACE, [id], NOW);
+    t.mocks.objectRepo.lockForUpdate.mockRejectedValueOnce(lockTimeout());
+    await expect(
+      t.remove.execute(
+        HUB,
+        SPACE,
+        [{ objectId: OBJ_A, replacesVersionId: id }],
+        NOW,
+      ),
+    ).rejects.toMatchObject(busy);
+    expect(t.mocks.store.deleteCurrent).not.toHaveBeenCalled();
+  });
+
+  it('other database errors pass through unchanged', async () => {
+    const other = new QueryFailedError(
+      'q',
+      [],
+      Object.assign(new Error('x'), { code: '40P01' }),
+    );
+    t.mocks.access.lock.mockRejectedValueOnce(other);
+    await expect(
+      t.request.execute(HUB, SPACE, [item(OBJ_A)], NOW),
+    ).rejects.toBe(other);
+  });
+});
+
+// The copies of a confirmation run under the space and object locks, holding a pool connection: the declared bytes
+// of what one request copies are capped (5 GiB), so one request never holds them for an unbounded S3 time.
+describe('confirmation batch size', () => {
+  it('above 5 GiB of objects to copy: 422 confirm-batch-too-large before any lock on objects or S3 call', async () => {
+    expect(MAX_CONFIRM_BATCH_BYTES).toBe(5 * GiB);
+    const half = 2.5 * GiB;
+    const ids = (
+      await t.request.execute(
+        HUB,
+        SPACE,
+        [
+          item(OBJ_A, { sizeBytes: half }),
+          item(OBJ_B, { sizeBytes: half + 1 }),
+        ],
+        NOW,
+      )
+    ).map((i) => i.uploadId);
+    t.trace.length = 0;
+    await expect(t.confirm.execute(HUB, SPACE, ids, NOW)).rejects.toMatchObject(
+      {
+        constructor: DomainValidationError,
+        code: 'confirm-batch-too-large',
+        details: { maxBytes: 5 * GiB, requestedBytes: 5 * GiB + 1 },
+      },
+    );
+    expect(t.trace.some((x) => x.startsWith('lockObject:'))).toBe(false);
+    expect(t.mocks.store.head).not.toHaveBeenCalled();
+    expect(t.mocks.store.copy).not.toHaveBeenCalled();
+    // Split in two requests, each fits.
+    await t.confirm.execute(HUB, SPACE, [ids[0]!], NOW);
+    await t.confirm.execute(HUB, SPACE, [ids[1]!], NOW);
+    expect(t.versions.get(ids[1]!)!.status).toBe('committed');
+  });
+
+  it('exactly 5 GiB fits; already committed ids do not count', async () => {
+    const [a] = await t.request.execute(
+      HUB,
+      SPACE,
+      [item(OBJ_A, { sizeBytes: 5 * GiB })],
+      NOW,
+    );
+    await t.confirm.execute(HUB, SPACE, [a!.uploadId], NOW);
+    const [b] = await t.request.execute(
+      HUB,
+      SPACE,
+      [item(OBJ_B, { sizeBytes: 1000 })],
+      NOW,
+    );
+    // Retry of the 5 GiB one (idempotent, nothing to copy) together with a new one.
+    await t.confirm.execute(HUB, SPACE, [a!.uploadId, b!.uploadId], NOW);
+    expect(t.versions.get(b!.uploadId)!.status).toBe('committed');
   });
 });
