@@ -60,6 +60,9 @@ services:
     restart: always
     environment:
       SERVICES: s3
+      # Confere a assinatura das URLs assinadas como o S3 (o padrão do LocalStack é ignorá-la): sem isso, o tamanho
+      # e os cabeçalhos assinados do PUT (checksum, tag) não seriam exigidos em desenvolvimento nem no e2e.
+      S3_SKIP_SIGNATURE_VALIDATION: "0"
     volumes:
       - ./.docker/localstack/init/ready.d:/etc/localstack/init/ready.d:ro
     ports:

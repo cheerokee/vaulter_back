@@ -20,6 +20,8 @@ function validConfig(): Record<string, unknown> {
     IDENTITY_DECOY_SALT_KEY: seed,
     HUB_CODE_HASH_KEY: seed,
     IDENTITY_RECOVERY_HASH_KEY: seed,
+    AWS_REGION: 'us-east-1',
+    S3_BUCKET_HUB_BRAIN: 'hub-brain',
   };
 }
 
@@ -162,5 +164,61 @@ describe('validateEnv ARGON2_POOL_SIZE', () => {
         validateEnv({ ...validConfig(), ARGON2_POOL_SIZE: bad }),
       ).toThrow(/ARGON2_POOL_SIZE/);
     }
+  });
+});
+
+describe('validateEnv S3', () => {
+  it.each(['AWS_REGION', 'S3_BUCKET_HUB_BRAIN'])(
+    'rejects missing %s',
+    (key) => {
+      const config = validConfig();
+      delete config[key];
+      expect(() => validateEnv(config)).toThrow(new RegExp(key));
+      expect(() => validateEnv({ ...validConfig(), [key]: '' })).toThrow(
+        new RegExp(key),
+      );
+    },
+  );
+
+  it('defaults S3_FORCE_PATH_STYLE to false and parses true', () => {
+    expect(validateEnv(validConfig()).S3_FORCE_PATH_STYLE).toBe(false);
+    expect(
+      validateEnv({ ...validConfig(), S3_FORCE_PATH_STYLE: 'true' })
+        .S3_FORCE_PATH_STYLE,
+    ).toBe(true);
+    expect(() =>
+      validateEnv({ ...validConfig(), S3_FORCE_PATH_STYLE: 'yes' }),
+    ).toThrow(/S3_FORCE_PATH_STYLE/);
+  });
+
+  it('treats AWS_ENDPOINT_URL as optional (empty = unset) and rejects a non-URL', () => {
+    expect(validateEnv(validConfig()).AWS_ENDPOINT_URL).toBeUndefined();
+    expect(
+      validateEnv({ ...validConfig(), AWS_ENDPOINT_URL: '' }).AWS_ENDPOINT_URL,
+    ).toBeUndefined();
+    expect(
+      validateEnv({ ...validConfig(), AWS_ENDPOINT_URL: 'http://aws:4566' })
+        .AWS_ENDPOINT_URL,
+    ).toBe('http://aws:4566');
+    expect(() =>
+      validateEnv({ ...validConfig(), AWS_ENDPOINT_URL: 'not a url' }),
+    ).toThrow(/AWS_ENDPOINT_URL/);
+  });
+
+  it('accepts no static credentials (IAM role) or both, never only one', () => {
+    expect(() => validateEnv(validConfig())).not.toThrow();
+    expect(() =>
+      validateEnv({
+        ...validConfig(),
+        AWS_ACCESS_KEY_ID: 'test',
+        AWS_SECRET_ACCESS_KEY: 'test',
+      }),
+    ).not.toThrow();
+    expect(() =>
+      validateEnv({ ...validConfig(), AWS_ACCESS_KEY_ID: 'test' }),
+    ).toThrow(/AWS_SECRET_ACCESS_KEY/);
+    expect(() =>
+      validateEnv({ ...validConfig(), AWS_SECRET_ACCESS_KEY: 'test' }),
+    ).toThrow(/AWS_ACCESS_KEY_ID/);
   });
 });

@@ -11,6 +11,7 @@ import { OrganizationsModule } from './organizations/organizations.module.js';
 import { SpacesModule } from './spaces/spaces.module.js';
 import { HubsModule } from './hubs/hubs.module.js';
 import { PlatformModule } from './platform/platform.module.js';
+import { StorageModule } from './storage/storage.module.js';
 import { pinoHttpOptions } from './shared/infra/observability/logger.config.js';
 import { ThrottlingModule } from './shared/infra/http/throttling.module.js';
 import { validateEnv } from './shared/infra/config/env.validation.js';
@@ -32,6 +33,7 @@ import { validateEnv } from './shared/infra/config/env.validation.js';
     SpacesModule,
     HubsModule,
     PlatformModule,
+    StorageModule,
     // Depois do IdentityModule, do HubsModule e do PlatformModule: os guards de token (usuário e Hub) rodam antes do
     // throttler, que conta por usuário/Hub (fixado por test/shared/rate-limit e test/hubs/rate-limit), e a trava da
     // plataforma responde o 404 antes de o throttler contar (fixado por test/platform/staff).

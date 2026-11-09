@@ -73,7 +73,12 @@ npm run start:dev                    # dentro do container: API em live reload
   subir a versão sem decidir sobre o token. A versão gratuita **não persiste dados**: a cada subida o
   `.docker/localstack/init/ready.d/01-buckets.sh` recria o bucket `vaulter-hub-brain` (versionado), vazio.
   Novos buckets entram nesse script. Clientes S3 apontando para `aws:4566` precisam de path-style
-  (`S3_FORCE_PATH_STYLE=true`). Layout do bucket: `orgs/<orgId>/spaces/<spaceId>/...`.
+  (`S3_FORCE_PATH_STYLE=true`). Layout do bucket: `orgs/<orgId>/spaces/<spaceId>/...`. O script também grava as
+  **regras de ciclo de vida** (versões antigas e *delete markers* sozinhos em `orgs/` saem em 30 dias; o provisório de
+  envio sai em 1 dia pela **tag `stage=upload`**, porque filtro de ciclo de vida só casa prefixo do começo da chave e
+  `uploads/` fica no meio; o LocalStack guarda as regras mas não as executa) e o CI roda o mesmo script no serviço
+  LocalStack. `S3_SKIP_SIGNATURE_VALIDATION=0` (compose e CI) faz o LocalStack conferir a assinatura das URLs
+  assinadas, como o S3; sem isso o tamanho e os cabeçalhos assinados do PUT não seriam exigidos.
 - Não há imagem de produção ainda — o `Dockerfile` é só para desenvolvimento.
 - Novo serviço (banco, cache, fila) entra no `docker-compose.yaml`, com suas variáveis no `.env.example`.
 
@@ -744,6 +749,10 @@ Validadas na subida por `src/shared/infra/config/env.validation.ts` (faltou ou i
 | `ARGON2_MAX_QUEUE` | fila máxima do pool do Argon2id; cheia, responde 503 (inteiro >= 1) | `threads × 64` |
 | `RATE_LIMIT_ENABLED` | liga o rate limit (os e2e rodam com `false`) | `true` |
 | `ARGON2_POOL_SIZE` | threads do pool do Argon2id (inteiro >= 1) | `min(4, núcleos)` |
+| `AWS_REGION` / `S3_BUCKET_HUB_BRAIN` | região e bucket (versionado) do storage | obrigatórias |
+| `AWS_ENDPOINT_URL` | endpoint do S3 (LocalStack em dev; vazio em produção) | vazio |
+| `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` | credenciais estáticas, as duas ou nenhuma (sem elas, papel IAM) | vazio |
+| `S3_FORCE_PATH_STYLE` | path-style (obrigatório no LocalStack) | `false` |
 
 Os valores do `.env.example` para os segredos são **só de desenvolvimento**; produção gera os próprios:
 `node -e "console.log(require('crypto').randomBytes(32).toString('base64url'))"`.

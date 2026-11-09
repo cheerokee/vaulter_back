@@ -67,6 +67,26 @@ class TrustProxyConstraint implements ValidatorConstraintInterface {
   }
 }
 
+/** AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY: both or neither (without them the SDK uses the IAM role). */
+@ValidatorConstraint({ name: 'awsCredentialPair', async: false })
+class AwsCredentialPairConstraint implements ValidatorConstraintInterface {
+  validate(value: unknown, args: ValidationArguments): boolean {
+    const [other] = args.constraints as [string];
+    const otherValue = (args.object as Record<string, unknown>)[other];
+    const has = (v: unknown) => typeof v === 'string' && v !== '';
+    if (value !== undefined && typeof value !== 'string') return false;
+    return has(value) === has(otherValue);
+  }
+
+  defaultMessage(args: ValidationArguments): string {
+    const [other] = args.constraints as [string];
+    return `${args.property} must be set together with ${other} (or both left unset to use the IAM role)`;
+  }
+}
+
+const emptyToUndefined = ({ value }: { value: unknown }): unknown =>
+  value === '' ? undefined : value;
+
 const toBoolean = ({ value }: { value: unknown }): unknown => {
   if (value === 'true' || value === true) return true;
   if (value === 'false' || value === false) return false;
@@ -208,6 +228,30 @@ export class EnvironmentVariables {
       'IDENTITY_RECOVERY_HASH_KEY must be 32 bytes encoded as base64url (43 chars, no padding)',
   })
   IDENTITY_RECOVERY_HASH_KEY!: string;
+
+  @IsString()
+  @IsNotEmpty()
+  AWS_REGION!: string;
+
+  /** LocalStack in development (`http://aws:4566`); unset in production (the SDK resolves the AWS endpoint). */
+  @Transform(emptyToUndefined)
+  @IsOptional()
+  @IsUrl({ require_tld: false, protocols: ['http', 'https'] })
+  AWS_ENDPOINT_URL?: string;
+
+  @Validate(AwsCredentialPairConstraint, ['AWS_SECRET_ACCESS_KEY'])
+  AWS_ACCESS_KEY_ID?: string;
+
+  @Validate(AwsCredentialPairConstraint, ['AWS_ACCESS_KEY_ID'])
+  AWS_SECRET_ACCESS_KEY?: string;
+
+  @Transform(toBoolean)
+  @IsBoolean()
+  S3_FORCE_PATH_STYLE: boolean = false;
+
+  @IsString()
+  @IsNotEmpty()
+  S3_BUCKET_HUB_BRAIN!: string;
 }
 
 export function validateEnv(

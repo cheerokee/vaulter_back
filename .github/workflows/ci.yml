@@ -29,6 +29,20 @@ jobs:
           --health-interval 5s
           --health-timeout 5s
           --health-retries 20
+      # Mesmo S3 do docker-compose (LocalStack 4.14.0, a última sem LOCALSTACK_AUTH_TOKEN), para o e2e do storage.
+      aws:
+        image: localstack/localstack:4.14.0
+        env:
+          SERVICES: s3
+          # Confere a assinatura das URLs assinadas, como o S3 (o padrão do LocalStack é ignorá-la).
+          S3_SKIP_SIGNATURE_VALIDATION: "0"
+        ports:
+          - 4566:4566
+        options: >-
+          --health-cmd "curl -fs http://localhost:4566/_localstack/health"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 30
 
     env:
       DB_HOST: localhost
@@ -50,6 +64,12 @@ jobs:
       IDENTITY_DECOY_SALT_KEY: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
       HUB_CODE_HASH_KEY: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
       IDENTITY_RECOVERY_HASH_KEY: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+      AWS_REGION: us-east-1
+      AWS_ENDPOINT_URL: http://localhost:4566
+      AWS_ACCESS_KEY_ID: test
+      AWS_SECRET_ACCESS_KEY: test
+      S3_FORCE_PATH_STYLE: "true"
+      S3_BUCKET_HUB_BRAIN: vaulter-hub-brain
 
     steps:
       - uses: actions/checkout@v4
@@ -84,4 +104,9 @@ jobs:
       # o schema:check falha se o schema:log do TypeORM imprimir qualquer SQL (drift = falta migration).
       - run: npm run migration:run
       - run: npm run schema:check
+      # Mesmo script do compose (.docker/localstack/init/ready.d): bucket versionado + regras de ciclo de vida.
+      - name: Create S3 bucket (LocalStack)
+        run: |
+          docker cp .docker/localstack/init/ready.d/01-buckets.sh "${{ job.services.aws.id }}:/tmp/01-buckets.sh"
+          docker exec -e S3_BUCKET_HUB_BRAIN "${{ job.services.aws.id }}" bash /tmp/01-buckets.sh
       - run: npm run test:e2e
