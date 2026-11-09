@@ -31,6 +31,14 @@ export function spaceResponse(v: SpaceView | SpaceDetailsView) {
     ...('pendingGrants' in v && v.pendingGrants !== undefined
       ? { pendingGrants: v.pendingGrants }
       : {}),
+    ...(v.storage
+      ? {
+          storage: {
+            quotaBytes: v.storage.quotaBytes,
+            usedBytes: v.storage.usedBytes,
+          },
+        }
+      : {}),
     createdAt: iso(v.createdAt),
     updatedAt: iso(v.updatedAt),
   };

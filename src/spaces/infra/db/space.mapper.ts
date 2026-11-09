@@ -1,3 +1,4 @@
+import { byteCount } from '../../../shared/infra/db/byte-count.js';
 import { Space } from '../../domain/space.js';
 import type { SpaceTypeormEntity } from './space.entity.js';
 
@@ -8,6 +9,7 @@ export type SpaceRow = {
   name: string;
   current_key_version: number;
   key_rotation_required: boolean;
+  storage_quota_bytes: string;
   created_at: Date;
   updated_at: Date | null;
 };
@@ -20,6 +22,7 @@ export const SpaceMapper = {
         name: row.name,
         currentKeyVersion: row.currentKeyVersion,
         keyRotationRequired: row.keyRotationRequired,
+        storageQuotaBytes: byteCount(row.storageQuotaBytes),
         createdAt: row.createdAt,
         updatedAt: row.updatedAt ?? undefined,
       },
@@ -34,6 +37,7 @@ export const SpaceMapper = {
         name: row.name,
         currentKeyVersion: row.current_key_version,
         keyRotationRequired: row.key_rotation_required,
+        storageQuotaBytes: byteCount(row.storage_quota_bytes),
         createdAt: row.created_at,
         updatedAt: row.updated_at ?? undefined,
       },
@@ -51,6 +55,7 @@ export const SpaceMapper = {
       name: space.name,
       currentKeyVersion: space.currentKeyVersion,
       keyRotationRequired: space.keyRotationRequired,
+      storageQuotaBytes: String(space.storageQuotaBytes),
     };
   },
 };

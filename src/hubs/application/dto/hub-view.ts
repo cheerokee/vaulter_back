@@ -21,8 +21,18 @@ export function toHubView(hub: Hub): HubView {
   };
 }
 
+/** Capacity the hub reported (null = never) and the reserved size of the installed spaces the viewer may see. */
+export type HubStorageView = {
+  capacityBytes: number | null;
+  reservedBytes: number;
+};
+
 /** The hub as seen by one user: their role on it (spec §6; `hub_user` is implicit for linked members). */
-export type HubWithRoleView = HubView & { role: HubRole };
+export type HubWithRoleView = HubView & {
+  role: HubRole;
+  /** Only on `GET /hubs/:id`. */
+  storage?: HubStorageView;
+};
 
 export function toHubWithRoleView(hub: Hub, role: HubRole): HubWithRoleView {
   return { ...toHubView(hub), role };

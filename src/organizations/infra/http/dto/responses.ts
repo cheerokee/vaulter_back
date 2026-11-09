@@ -23,6 +23,14 @@ export function organizationResponse(v: OrganizationView) {
         }
       : null,
     roleKey: v.roleKey,
+    ...(v.storage
+      ? {
+          storage: {
+            quotaBytes: v.storage.quotaBytes,
+            reservedBytes: v.storage.reservedBytes,
+          },
+        }
+      : {}),
     createdAt: v.createdAt.toISOString(),
     updatedAt: v.updatedAt.toISOString(),
   };

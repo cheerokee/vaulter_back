@@ -25,7 +25,18 @@ export function hubResponse(v: HubView) {
 
 /** The hub as seen by one user, with their role on it. */
 export function hubWithRoleResponse(v: HubWithRoleView) {
-  return { ...hubResponse(v), role: v.role };
+  return {
+    ...hubResponse(v),
+    role: v.role,
+    ...(v.storage
+      ? {
+          storage: {
+            capacityBytes: v.storage.capacityBytes,
+            reservedBytes: v.storage.reservedBytes,
+          },
+        }
+      : {}),
+  };
 }
 
 export function hubLinkResponse(v: HubLinkView) {

@@ -39,6 +39,7 @@ describe('Space', () => {
         name: 'x',
         currentKeyVersion: 3,
         keyRotationRequired: true,
+        storageQuotaBytes: 10_737_418_240,
       },
       'id-1',
     );

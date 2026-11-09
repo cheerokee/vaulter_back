@@ -21,6 +21,11 @@ export abstract class OrganizationRepository {
    * MUST run inside `UnitOfWork.run`.
    */
   abstract lockForUpdate(orgId: string): Promise<Organization | null>;
+  /**
+   * Sum of the reserved sizes (`spaces.storage_quota_bytes`) of the organization's live spaces, in its RLS scope.
+   * Consistent with a quota check only under `lockForUpdate`: creating or growing a space takes that lock first.
+   */
+  abstract reservedStorageBytes(orgId: string): Promise<number>;
   /** The user's personal organization (they are its owner), or null. */
   abstract findPersonalOf(userId: string): Promise<Organization | null>;
   abstract listForUser(

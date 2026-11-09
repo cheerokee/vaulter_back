@@ -5,6 +5,7 @@ import {
   Param,
   Patch,
   Post,
+  Put,
   Query,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
@@ -18,10 +19,12 @@ import { CreateSpaceUseCase } from '../../application/create-space.use-case.js';
 import { GetSpaceUseCase } from '../../application/get-space.use-case.js';
 import { ListSpacesUseCase } from '../../application/list-spaces.use-case.js';
 import { RenameSpaceUseCase } from '../../application/rename-space.use-case.js';
+import { ResizeSpaceStorageUseCase } from '../../application/resize-space-storage.use-case.js';
 import {
   CreateSpaceDto,
   ListSpacesQuery,
   RenameSpaceDto,
+  ResizeSpaceStorageDto,
 } from './dto/space.dto.js';
 import {
   spaceListItemResponse,
@@ -38,6 +41,7 @@ export class SpacesController {
     private readonly create: CreateSpaceUseCase,
     private readonly get: GetSpaceUseCase,
     private readonly rename: RenameSpaceUseCase,
+    private readonly resize: ResizeSpaceStorageUseCase,
   ) {}
 
   @ApiBearerAuth()
@@ -73,6 +77,9 @@ export class SpacesController {
         wrappedKey: dto.wrappedKey,
         recoveryPublicKey: dto.recoveryPublicKey,
         recoveryWrappedKey: dto.recoveryWrappedKey,
+        ...(dto.storageQuotaBytes !== undefined
+          ? { storageQuotaBytes: dto.storageQuotaBytes }
+          : {}),
       }),
     );
   }
@@ -95,6 +102,21 @@ export class SpacesController {
   ) {
     return spaceResponse(
       await this.rename.execute(auth, id, { name: dto.name }),
+    );
+  }
+
+  /** Space manager. Growing must fit the organization quota and every hub the space is on; shrinking, the usage. */
+  @ApiBearerAuth()
+  @Put('spaces/:id/storage-quota')
+  async doResize(
+    @CurrentAuth() auth: AuthContext,
+    @Param('id', uuidPipe('id')) id: string,
+    @Body() dto: ResizeSpaceStorageDto,
+  ) {
+    return spaceResponse(
+      await this.resize.execute(auth, id, {
+        storageQuotaBytes: dto.storageQuotaBytes,
+      }),
     );
   }
 }

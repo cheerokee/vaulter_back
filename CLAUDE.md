@@ -284,7 +284,12 @@ src/organizations/
   `recoveryPublicKey(orgId)` (`null` se não houver), `organizationIdsOf(userId)` (organizações ativas da pessoa),
   `personalOrganizationIdOf(userId)` (a organização pessoal, ou `null`), `hubLinkPolicy(orgId)` (`null` se desconhecida) e `allowRoomSpaces(orgId)` (`false` se desconhecida), sem lançar
   para org/usuário inexistente. Não é checagem de autorização. `allowRoomSpaces` (padrão `true`, no `PATCH`) bloqueia
-  só **novas** liberações na Sala dos Hubs.
+  só **novas** liberações na Sala dos Hubs. **Franquia de nuvem:** `storageQuota(orgId)` (leitura) e
+  `lockStorageQuota(orgId)` (trava a linha da organização `FOR NO KEY UPDATE`, **folha**: depois de Hubs e espaço) devolvem
+  `{ quotaBytes, reservedBytes }`; a regra é `assertOrganizationStorageFits` (`application/organization-storage.ts`,
+  422 `organization-storage-quota-exceeded` com `availableBytes`). O reservado (`OrganizationRepository.reservedStorageBytes`)
+  é soma de `spaces.storage_quota_bytes` em SQL: **exceção documentada** à fronteira (como a sincronização do Hub).
+  `organizations.storage_quota_bytes` padrão 50 GiB; `GET /organizations/:id` traz `storage: { quotaBytes, reservedBytes }`.
 - **`OrganizationAccess` é o padrão para os próximos módulos (spaces, hubs):** `requireMember(orgId, userId)` ->
   **404** para não membro (não revela que a organização existe); `requirePermission(orgId, userId, permissao)` ->
   **403** para membro sem a permissão. Todo caso de uso que toca dado de organização chama um dos dois primeiro;
@@ -389,6 +394,16 @@ exportam); nenhum dos dois importa `spaces`.
 - **`SpaceMemberLeftHooks`** (`src/shared/application/`, global como os outros ganchos): o `spaces` emite
   `{ organizationId, spaceId, userId, now }` no Remove, no Leave e, no gancho de saída da organização, uma vez por
   espaço; roda no unit of work da saída, depois das lápides, e erro desfaz a saída.
+- **Tamanho do espaço** (spec storage-backup §4.4): `spaces.storage_quota_bytes` (padrão 10 GiB, 1 GiB..5 TiB, escolhido
+  na criação com `storageQuotaBytes`); criar confere a franquia com `lockStorageQuota` antes do kit e do insert.
+  `PUT /spaces/:id/storage-quota` (`ResizeSpaceStorageUseCase`, Gestor): diminuir nunca abaixo do uso (422
+  `space-storage-quota-below-usage`); aumentar confere a franquia e os ganchos **`SpaceQuotaHooks`**
+  (`src/shared/application/`, global: `lock` antes do lock do espaço, `assertIncrease` depois; o `hubs` confere a
+  capacidade de cada Hub onde o espaço está, 422 `hub-storage-full` com `hubId`/`missingBytes`); auditado
+  `space.storage_quota_changed`. O **uso** vem da porta `SpaceStorageUsage` (exportada; sem fonte, 0): o `storage` liga
+  a implementação real com `use(source)` em `onModuleInit` (e `release` no destroy). `SpaceStorage.lockQuota` (exportado)
+  lê o tamanho com o espaço `FOR SHARE` (instalação no Hub). `GET /spaces/:id`, a criação e o resize trazem
+  `storage: { quotaBytes, usedBytes }`. Bigint do banco vira número por `byteCount` (`shared/infra/db/byte-count.ts`).
 - **Fluxo de chaves** (cifra no app; o backend só guarda blobs e valida formato — libsodium, formato em
   `docs/crypto/user-keys.md`, seção da cópia trancada: `0x01 ‖ crypto_box_seal`, 81 bytes, base64url, 108 chars):
   - cada **versão** da chave do espaço é uma linha de `space_keys` (`spaces.current_key_version`); **todo membro tem
@@ -465,8 +480,9 @@ consulta só de leitura (veja Sincronização).
   aprovado). **Autorização é sempre do caso de uso**: `HubOrganizationRepository.upsert` troca para o contexto do Hub
   por dentro, então todo caso de uso confere dono / membro (`OrganizationAccess.requireMember`) / admin
   (`org.hubs.approve`) antes de escrever.
-- **Ordem de locks dos Hubs:** linha do Hub (`HubRepository.lockForShare`; `lockForUpdate` no desregistro, sempre o
-  primeiro lock) -> linha do vínculo (`HubOrganizationRepository.lockForUpdate`; `lockForShare` na liberação da Sala
+- **Ordem de locks dos Hubs:** linha do Hub (`HubRepository.lockForShare`; `lockForUpdate` no desregistro;
+  `lockForStorage` = `FOR NO KEY UPDATE` ao instalar espaço e no aumento de espaço, serializando quem mexe no que está
+  instalado contra a capacidade; sempre o primeiro lock) -> linha do vínculo (`HubOrganizationRepository.lockForUpdate`; `lockForShare` na liberação da Sala
   e ao pôr espaço) -> `hub_space` -> espaço -> Gestores. Desvincular segura o vínculo `FOR UPDATE` antes de
   `revokeRoomForOrganization`. O gancho de saída do espaço (`hubs.space-member-left`) roda com o espaço já travado e
   **só lê** vínculos. O gancho de saída da organização do `hubs` tem duas fases em `MemberRemovedHooks`: `order: -10`
@@ -497,6 +513,16 @@ consulta só de leitura (veja Sincronização).
   `hub_owner`/`hub_room`, só o contexto do dono alcança) e a Sala cai em **toda organização a que o Hub já foi
   vinculado** (`listAllOrgIds`, com lápides e revogados). Auditoria sem organização (`hub.claimed`,
   `hub.deregistered`, `hub.role.changed`) vai para a organização pessoal do dono.
+- **Capacidade do Hub** (spec storage-backup §4.5): `hubs.storage_capacity_bytes` (nula até o Hub informar), gravada
+  por `PUT /hub/storage` (`@HubAuth()`, `{ capacityBytes }` 1 GiB..64 TiB, 204; só a coluna, `setStorageCapacity`;
+  menor que o reservado é aceito). Instalar (`AddHubSpaceUseCase`): Hub `lockForStorage` -> vínculo (share) ->
+  `hub_space` (share) -> espaço (`SpaceStorage.lockQuota`, share); com capacidade, soma dos tamanhos instalados em
+  **todas** as organizações (`HubSpaceRepository.reservedBytes`, cada organização no próprio escopo; lê
+  `spaces.storage_quota_bytes` em SQL, como `add` já lê `spaces`) + o novo ≤ capacidade, senão 422 `hub-storage-full`
+  (`missingBytes`); espaço já instalado não conta de novo. Aumento de espaço (`HubsSpaceQuotaHook`, em `SpaceQuotaHooks`):
+  trava os Hubs do espaço antes do espaço; depois relê e trava com `NOWAIT` um Hub que apareceu no meio (409
+  `hub-storage-busy`, raro). `GET /hubs/:id` traz `storage: { capacityBytes, reservedBytes }` (o dono soma tudo; os
+  outros, só as organizações de que são membros ativos). e2e em `test/storage/quotas.e2e-spec.ts`.
 - **`hub_space` e Sala** (a Sala em si é do `spaces`; veja `SpaceRoomService` lá): `hub_space` diz quais espaços de
   uma organização vinculada estão no Hub (FK composta para o vínculo, lápide ao tirar). Liberar na Sala exige
   espaço já no Hub, `allowRoomSpaces` só para liberação **nova** (422 `room-not-allowed`; liberar de novo ou trocar
@@ -516,7 +542,8 @@ consulta só de leitura (veja Sincronização).
   daquela chave: a apresentação confere se a chave já está em uso); o dono lê/grava seus Hubs; o Hub lê **todos** os
   próprios vínculos (qualquer status) e só os `hub_space` de vínculo aprovado; em `role_assignments` de escopo Hub o
   contexto do Hub só pode **gravar lápide** em linha viva atribuível (nunca criar nem reativar). `hubs` usa GRANT de
-  UPDATE por coluna (`name`, `last_seen_at`, `deleted_at`, `updated_at`: chave de assinatura e dono imutáveis). `hub_organization.hub_owner_user_id` é cópia
+  UPDATE por coluna (`name`, `last_seen_at`, `deleted_at`, `updated_at`, `storage_capacity_bytes`: chave de assinatura e
+  dono imutáveis). `hub_organization.hub_owner_user_id` é cópia
   desnormalizada do dono para a policy (FK composta com `hubs`): numa transferência de Hub futura, atualizar.
 - **Testes:** helpers em `test/support/hubs-kit.ts` (reivindicar com a cripto real, código de vínculo, atalhos dos
   casos de uso, estado cru de vínculos/espaços/papéis) e `test/support/hub-client.ts` (o aparelho pela HTTP: gera as

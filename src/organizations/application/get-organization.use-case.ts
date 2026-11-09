@@ -18,6 +18,12 @@ export class GetOrganizationUseCase {
   async execute(actor: Actor, orgId: string): Promise<OrganizationView> {
     const membership = await this.access.requireMember(orgId, actor.userId);
     const org = await loadOrganization(this.orgs, orgId);
-    return toOrganizationView(org, membership.roleKey, new Date());
+    return {
+      ...toOrganizationView(org, membership.roleKey, new Date()),
+      storage: {
+        quotaBytes: org.storageQuotaBytes,
+        reservedBytes: await this.orgs.reservedStorageBytes(orgId),
+      },
+    };
   }
 }

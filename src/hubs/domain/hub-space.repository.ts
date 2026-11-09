@@ -44,4 +44,18 @@ export abstract class HubSpaceRepository {
     organizationId: string,
     slice?: KeysetSlice,
   ): Promise<HubSpaceRef[]>;
+  /** Hubs where the space is installed (live rows), read in the organization scope, in hub id order. */
+  abstract hubIdsOfSpace(
+    organizationId: string,
+    spaceId: string,
+  ): Promise<string[]>;
+  /**
+   * Sum of the reserved sizes of the live spaces installed on the hub: in every organization the hub was ever linked
+   * to (`organizationIds` omitted: the capacity check and the owner's view), or only in the given ones (what a
+   * non-owner may see). Each organization is read in its own RLS scope. Trusted read: authorization is the caller's.
+   */
+  abstract reservedBytes(
+    hubId: string,
+    organizationIds?: readonly string[],
+  ): Promise<number>;
 }

@@ -36,4 +36,18 @@ export abstract class HubRepository {
    * every link mutation (hub -> link -> hub_space -> space): it serializes with deregistration (FOR UPDATE).
    */
   abstract lockForShare(hubId: string): Promise<Hub | null>;
+  /**
+   * `SELECT ... FOR NO KEY UPDATE` on an ACTIVE hub (null when missing or deregistered), in the hub's own context.
+   * REQUIRES an active unit of work. Everything that reads or changes what is installed against the capacity takes
+   * it FIRST (same place as `lockForShare` in the order): installs serialize on it (two installs never both fit in the
+   * same room), and a space resize locks every hub the space is on. Conflicts with `lockForShare`/`lockForUpdate`;
+   * FK checks (`FOR KEY SHARE`) do not wait for it. `nowait`: a hub locked by someone else is 409
+   * `hub-storage-busy` instead of waiting (a resize that found a new hub only after locking the space).
+   */
+  abstract lockForStorage(
+    hubId: string,
+    opts?: { nowait?: boolean },
+  ): Promise<Hub | null>;
+  /** Writes only the reported capacity of an ACTIVE hub (no read-modify-write of the row); false when none. */
+  abstract setStorageCapacity(hubId: string, bytes: number): Promise<boolean>;
 }

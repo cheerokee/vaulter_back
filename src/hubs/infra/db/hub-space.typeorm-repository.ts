@@ -2,8 +2,12 @@ import { Injectable } from '@nestjs/common';
 import { validate } from 'uuid';
 import { DataSource, MoreThan } from 'typeorm';
 import type { KeysetSlice } from '../../../shared/domain/pagination.js';
+import { byteCount } from '../../../shared/infra/db/byte-count.js';
 import { runInOrganizationScope } from '../../../shared/infra/db/organization-scope.js';
-import { currentManager } from '../../../shared/infra/db/unit-of-work.js';
+import {
+  currentManager,
+  runWithContext,
+} from '../../../shared/infra/db/unit-of-work.js';
 import {
   HubSpaceRepository,
   type HubSpaceRef,
@@ -190,5 +194,67 @@ export class HubSpaceTypeormRepository extends HubSpaceRepository {
         ...(slice ? { take: slice.limit } : {}),
       });
     return rows.map(toRef);
+  }
+
+  async hubIdsOfSpace(
+    organizationId: string,
+    spaceId: string,
+  ): Promise<string[]> {
+    if (!validate(organizationId) || !validate(spaceId)) return [];
+    const rows: { hub_id: string }[] = await runInOrganizationScope(
+      this.dataSource,
+      organizationId,
+      (m) =>
+        m.query(
+          `SELECT hub_id FROM hub_space
+            WHERE space_id = $1 AND organization_id = $2 AND deleted_at IS NULL
+            ORDER BY hub_id`,
+          [spaceId, organizationId],
+        ),
+    );
+    return rows.map((r) => r.hub_id);
+  }
+
+  // Atravessa organizações: a lista vem de hub_organization no contexto do próprio Hub (ele lê todos os próprios
+  // vínculos, com lápides: um espaço só fica no Hub com vínculo, mas a lista inteira é barata e não depende do status),
+  // e cada organização é somada no próprio escopo (hub_space e spaces por org_isolation). Lê `spaces.storage_quota_bytes`
+  // em SQL, como `add` já lê `spaces` (o tamanho é do `spaces`; mudou a coluna lá, atualize aqui).
+  async reservedBytes(
+    hubId: string,
+    organizationIds?: readonly string[],
+  ): Promise<number> {
+    if (!validate(hubId)) return 0;
+    const orgIds =
+      organizationIds ??
+      (
+        await runWithContext(
+          this.dataSource,
+          { hubId },
+          (m) =>
+            m.query(
+              `SELECT DISTINCT organization_id FROM hub_organization WHERE hub_id = $1 ORDER BY organization_id`,
+              [hubId],
+            ) as Promise<{ organization_id: string }[]>,
+        )
+      ).map((r) => r.organization_id);
+    let total = 0;
+    for (const orgId of new Set(orgIds)) {
+      if (!validate(orgId)) continue;
+      const rows: { reserved: string }[] = await runInOrganizationScope(
+        this.dataSource,
+        orgId,
+        (m) =>
+          m.query(
+            `SELECT COALESCE(SUM(s.storage_quota_bytes), 0)::bigint AS reserved
+               FROM hub_space hs
+               JOIN spaces s ON s.id = hs.space_id AND s.organization_id = hs.organization_id
+              WHERE hs.hub_id = $1 AND hs.organization_id = $2
+                AND hs.deleted_at IS NULL AND s.deleted_at IS NULL`,
+            [hubId, orgId],
+          ),
+      );
+      total += byteCount(rows[0]?.reserved ?? '0');
+    }
+    return total;
   }
 }

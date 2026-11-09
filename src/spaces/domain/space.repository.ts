@@ -37,6 +37,8 @@ export abstract class SpaceRepository {
    * members must serialize on it so nobody is left out of a new key version.
    */
   abstract lockForUpdate(orgId: string, spaceId: string): Promise<Space | null>;
+  /** `SELECT ... FOR SHARE` (installing on a hub reads the reserved size stable). REQUIRES an active unit of work. */
+  abstract lockForShare(orgId: string, spaceId: string): Promise<Space | null>;
   /** Spaces where the user is an active member. */
   abstract listForMember(
     orgId: string,

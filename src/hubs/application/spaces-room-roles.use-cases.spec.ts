@@ -23,6 +23,7 @@ import { DeregisterHubUseCase } from './deregister-hub.use-case.js';
 import { HubAdministration } from './hub-administration.js';
 import { GrantRoomUseCase } from './grant-room.use-case.js';
 import type { HubAccess } from './hub-access.js';
+import type { SpaceStorage } from '../../spaces/application/space-storage.js';
 import { RemoveHubSpaceUseCase } from './remove-hub-space.use-case.js';
 import { RevokeRoomUseCase } from './revoke-room.use-case.js';
 
@@ -84,6 +85,7 @@ const spaceAccess = {
 const hubs = {
   findById: vi.fn(),
   lockForShare: vi.fn(),
+  lockForStorage: vi.fn(),
   lockForUpdate: vi.fn(),
   save: vi.fn(),
 };
@@ -101,7 +103,9 @@ const hubSpaces = {
   remove: vi.fn(),
   lockForShare: vi.fn(),
   removeAllOfOrganization: vi.fn(),
+  reservedBytes: vi.fn(),
 };
+const spaceStorage = { lockQuota: vi.fn() };
 const hubRoles = { assign: vi.fn(), removeAllOfHub: vi.fn() };
 const room = {
   grantRoom: vi.fn(),
@@ -167,26 +171,58 @@ beforeEach(() => {
 afterEach(() => vi.useRealTimers());
 
 describe('AddHubSpaceUseCase', () => {
+  const GiB = 1024 ** 3;
   const useCase = () =>
     new AddHubSpaceUseCase(
       as<HubAccess>(access),
       as<SpaceAccess>(spaceAccess),
+      as<SpaceStorage>(spaceStorage),
       as<HubRepository>(hubs),
       as<HubOrganizationRepository>(links),
       as<HubSpaceRepository>(hubSpaces),
       as<AuditLog>(audit),
       as<UnitOfWork>(uow),
     );
+  const withCapacity = (capacityBytes: number | null) =>
+    hubs.lockForStorage.mockImplementation(async () => {
+      calls.push(`lockHubStorage:${String(inTx)}`);
+      return Hub.restore(
+        {
+          ownerUserId: OWNER,
+          name: 'Sala',
+          signingPublicKey: 's',
+          encryptionPublicKey: 'e',
+          lastSeenAt: null,
+          deletedAt: null,
+          storageCapacityBytes: capacityBytes,
+        },
+        HUB_ID,
+      );
+    });
 
-  it('the owner only needs to be a space member; then hub -> link (share) -> add -> audit', async () => {
+  beforeEach(() => {
+    withCapacity(null);
+    // Not installed yet (the shared default says it is).
+    hubSpaces.lockForShare.mockImplementation(log('shareHubSpace', null));
+    spaceStorage.lockQuota.mockImplementation(log('shareSpace', 10 * GiB));
+    hubSpaces.reservedBytes.mockImplementation(log('reserved', 10 * GiB));
+  });
+
+  it('the owner only needs to be a space member; then hub (storage) -> link -> hub_space -> space (share) -> add -> audit', async () => {
     await useCase().execute(actor(OWNER), { hubId: HUB_ID, spaceId: SPACE });
     expect(calls).toEqual([
       `requireSpaceMember:${SPACE}`,
-      'lockHub:true',
+      'lockHubStorage:true',
       `shareLink:${HUB_ID}`,
+      `shareHubSpace:${HUB_ID}`,
+      `shareSpace:${ORG}`,
       'addSpace:[object Object]',
       'audit:[object Object]',
     ]);
+    expect(hubs.lockForShare).not.toHaveBeenCalled();
+    expect(spaceStorage.lockQuota).toHaveBeenCalledWith(ORG, SPACE);
+    // Capacity never reported: no sum, no check.
+    expect(hubSpaces.reservedBytes).not.toHaveBeenCalled();
     expect(hubSpaces.add).toHaveBeenCalledWith({
       ...ref,
       addedByUserId: OWNER,
@@ -217,6 +253,44 @@ describe('AddHubSpaceUseCase', () => {
       });
     }
     expect(hubSpaces.add).toHaveBeenCalledTimes(1);
+  });
+
+  it('with a capacity: installed sum (every organization) + the new size must fit', async () => {
+    withCapacity(20 * GiB);
+    await useCase().execute(actor(OWNER), { hubId: HUB_ID, spaceId: SPACE });
+    expect(hubSpaces.reservedBytes).toHaveBeenCalledWith(HUB_ID);
+    expect(calls.indexOf(`shareSpace:${ORG}`)).toBeLessThan(
+      calls.indexOf(`reserved:${HUB_ID}`),
+    );
+    expect(calls.indexOf(`reserved:${HUB_ID}`)).toBeLessThan(
+      calls.indexOf('addSpace:[object Object]'),
+    );
+
+    withCapacity(20 * GiB - 1);
+    await expect(
+      useCase().execute(actor(OWNER), { hubId: HUB_ID, spaceId: SPACE }),
+    ).rejects.toMatchObject({
+      constructor: DomainValidationError,
+      code: 'hub-storage-full',
+      details: { missingBytes: 1 },
+    });
+    expect(hubSpaces.add).toHaveBeenCalledTimes(1);
+  });
+
+  it('a space already on the hub is not counted twice', async () => {
+    withCapacity(GiB);
+    hubSpaces.lockForShare.mockImplementation(log('shareHubSpace', ref));
+    await useCase().execute(actor(OWNER), { hubId: HUB_ID, spaceId: SPACE });
+    expect(hubSpaces.reservedBytes).not.toHaveBeenCalled();
+    expect(hubSpaces.add).toHaveBeenCalledTimes(1);
+  });
+
+  it('a missing or deregistered hub is 404 before anything else is locked', async () => {
+    hubs.lockForStorage.mockResolvedValueOnce(null);
+    await expect(
+      useCase().execute(actor(OWNER), { hubId: HUB_ID, spaceId: SPACE }),
+    ).rejects.toMatchObject({ code: 'hub-not-found' });
+    expect(links.lockForShare).not.toHaveBeenCalled();
   });
 });
 

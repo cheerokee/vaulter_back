@@ -19,11 +19,14 @@ import { PromoteSpaceManagerUseCase } from './application/promote-space-manager.
 import { RecoverOrphanSpaceUseCase } from './application/recover-orphan-space.use-case.js';
 import { RecoveryKit } from './application/recovery-kit.js';
 import { RenameSpaceUseCase } from './application/rename-space.use-case.js';
+import { ResizeSpaceStorageUseCase } from './application/resize-space-storage.use-case.js';
 import { RemoveSpaceMemberUseCase } from './application/remove-space-member.use-case.js';
 import { RewrapRecoveryUseCase } from './application/rewrap-recovery.use-case.js';
 import { RotateSpaceKeyUseCase } from './application/rotate-space-key.use-case.js';
 import { SpaceAccess } from './application/space-access.js';
 import { SpaceRoomService } from './application/space-room.service.js';
+import { SpaceStorage } from './application/space-storage.js';
+import { SpaceStorageUsage } from './application/space-storage-usage.js';
 import { KeyFingerprinter } from './application/ports/key-fingerprinter.js';
 import { PendingGrantRepository } from './domain/pending-grant.repository.js';
 import { SpaceGrantRepository } from './domain/space-grant.repository.js';
@@ -92,13 +95,17 @@ import { SpacesController } from './infra/http/spaces.controller.js';
     RecoverOrphanSpaceUseCase,
     RecoveryKit,
     RenameSpaceUseCase,
+    ResizeSpaceStorageUseCase,
     RemoveSpaceMemberUseCase,
     RewrapRecoveryUseCase,
     RotateSpaceKeyUseCase,
     SpaceAccess,
     SpaceRoomService,
+    SpaceStorage,
+    SpaceStorageUsage,
   ],
-  // Para os próximos módulos (storage, hubs): checagem de acesso ao espaço e a Sala dos Hubs.
-  exports: [SpaceAccess, SpaceRoomService],
+  // Para os próximos módulos (storage, hubs): checagem de acesso ao espaço, a Sala dos Hubs, o tamanho reservado
+  // (instalar num Hub) e a porta do uso (o `storage` liga a implementação real).
+  exports: [SpaceAccess, SpaceRoomService, SpaceStorage, SpaceStorageUsage],
 })
 export class SpacesModule {}

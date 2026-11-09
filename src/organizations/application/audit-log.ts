@@ -15,6 +15,7 @@ export type AuditAction =
   | 'invitation.revoked'
   | 'space.created'
   | 'space.renamed'
+  | 'space.storage_quota_changed'
   | 'space.member_added'
   | 'space.member_removed'
   | 'space.member_left'

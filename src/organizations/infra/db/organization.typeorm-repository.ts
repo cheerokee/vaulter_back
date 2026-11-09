@@ -6,6 +6,7 @@ import {
   type CursorPage,
   type CursorPageRequest,
 } from '../../../shared/domain/pagination.js';
+import { byteCount } from '../../../shared/infra/db/byte-count.js';
 import { runInOrganizationScope } from '../../../shared/infra/db/organization-scope.js';
 import {
   currentManager,
@@ -74,6 +75,23 @@ export class OrganizationTypeormRepository extends OrganizationRepository {
       }),
     );
     return row ? OrganizationMapper.toDomain(row) : null;
+  }
+
+  // EXCEÇÃO DOCUMENTADA à fronteira entre módulos (como a leitura da sincronização do Hub): a franquia é da
+  // organização, mas o reservado mora em `spaces.storage_quota_bytes` (o `spaces` depende do `organizations`, nunca o
+  // contrário). Só leitura, uma coluna, no escopo da organização; mudou a coluna lá, atualize aqui.
+  async reservedStorageBytes(orgId: string): Promise<number> {
+    const rows: { reserved: string }[] = await runInOrganizationScope(
+      this.dataSource,
+      orgId,
+      (m) =>
+        m.query(
+          `SELECT COALESCE(SUM(storage_quota_bytes), 0)::bigint AS reserved
+             FROM spaces WHERE organization_id = $1 AND deleted_at IS NULL`,
+          [orgId],
+        ),
+    );
+    return byteCount(rows[0]?.reserved ?? '0');
   }
 
   // Só com `app.user_id`: a organização pessoal aparece pela policy de membro (o dono nunca sai dela).

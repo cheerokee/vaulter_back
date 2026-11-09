@@ -136,6 +136,7 @@ describe('RotateSpaceKeyUseCase', () => {
           name: 'Manuais',
           currentKeyVersion: 1,
           keyRotationRequired: true,
+          storageQuotaBytes: 10_737_418_240,
         },
         SPACE_ID,
       ),

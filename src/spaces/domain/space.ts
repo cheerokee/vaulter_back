@@ -4,11 +4,19 @@ import {
 } from '../../shared/domain/errors.js';
 import { Entity } from '../../shared/domain/entity.js';
 
+/** Reserved size of a new space when the creator does not choose one (10 GiB, spec storage-backup §4.4). */
+export const SPACE_STORAGE_QUOTA_DEFAULT_BYTES = 10_737_418_240;
+/** Smallest and largest reserved size of a space: 1 GiB .. 5 TiB. */
+export const SPACE_STORAGE_QUOTA_MIN_BYTES = 1_073_741_824;
+export const SPACE_STORAGE_QUOTA_MAX_BYTES = 5_497_558_138_880;
+
 export type SpaceProps = {
   organizationId: string;
   name: string;
   currentKeyVersion: number;
   keyRotationRequired: boolean;
+  /** Reserved size (bytes): counts against the organization quota and the capacity of every hub it is on. */
+  storageQuotaBytes: number;
   createdAt?: Date;
   updatedAt?: Date;
 };
@@ -24,17 +32,36 @@ function assertName(raw: string): string {
   return name;
 }
 
+function assertStorageQuota(bytes: number): number {
+  if (
+    !Number.isSafeInteger(bytes) ||
+    bytes < SPACE_STORAGE_QUOTA_MIN_BYTES ||
+    bytes > SPACE_STORAGE_QUOTA_MAX_BYTES
+  ) {
+    throw new DomainValidationError(
+      'space-storage-quota-invalid',
+      'The space size must be a whole number of bytes between 1 GiB and 5 TiB.',
+    );
+  }
+  return bytes;
+}
+
 export class Space extends Entity<SpaceProps> {
   static create(input: {
     organizationId: string;
     name: string;
     now: Date;
+    /** Defaults to `SPACE_STORAGE_QUOTA_DEFAULT_BYTES`. */
+    storageQuotaBytes?: number;
   }): Space {
     return new Space({
       organizationId: input.organizationId,
       name: assertName(input.name),
       currentKeyVersion: 1,
       keyRotationRequired: false,
+      storageQuotaBytes: assertStorageQuota(
+        input.storageQuotaBytes ?? SPACE_STORAGE_QUOTA_DEFAULT_BYTES,
+      ),
       createdAt: input.now,
     });
   }
@@ -45,6 +72,28 @@ export class Space extends Entity<SpaceProps> {
 
   rename(name: string): void {
     this.props = { ...this.props, name: assertName(name) };
+  }
+
+  /**
+   * New reserved size. Never below `usedBytes` (every stored version, trash included): 422
+   * `space-storage-quota-below-usage`. Whether a growth fits (organization quota, hub capacity) is the caller's
+   * check, with the returned `fromBytes`/`toBytes`.
+   */
+  resizeStorage(
+    bytes: number,
+    usedBytes: number,
+  ): { fromBytes: number; toBytes: number } {
+    const toBytes = assertStorageQuota(bytes);
+    if (toBytes < usedBytes) {
+      throw new DomainValidationError(
+        'space-storage-quota-below-usage',
+        'The space size cannot be smaller than what it already stores (trash included).',
+        { usedBytes },
+      );
+    }
+    const fromBytes = this.props.storageQuotaBytes;
+    this.props = { ...this.props, storageQuotaBytes: toBytes };
+    return { fromBytes, toBytes };
   }
 
   /** A member left (space or organization): the next key version must exclude them. */
@@ -93,6 +142,9 @@ export class Space extends Entity<SpaceProps> {
   }
   get keyRotationRequired(): boolean {
     return this.props.keyRotationRequired;
+  }
+  get storageQuotaBytes(): number {
+    return this.props.storageQuotaBytes;
   }
   get createdAt(): Date | undefined {
     return this.props.createdAt;

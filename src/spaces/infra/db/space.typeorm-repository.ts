@@ -77,6 +77,18 @@ export class SpaceTypeormRepository extends SpaceRepository {
     return row ? SpaceMapper.toDomain(row) : null;
   }
 
+  async lockForShare(orgId: string, spaceId: string): Promise<Space | null> {
+    requireUnitOfWork(this.dataSource, 'SpaceRepository.lockForShare');
+    if (!validate(spaceId)) return null;
+    const row = await runInOrganizationScope(this.dataSource, orgId, (m) =>
+      m.getRepository(SpaceTypeormEntity).findOne({
+        where: { id: spaceId, organizationId: orgId },
+        lock: { mode: 'pessimistic_read' },
+      }),
+    );
+    return row ? SpaceMapper.toDomain(row) : null;
+  }
+
   // Uma consulta: papel, "retrancar pendente" (alguma versão ativa com impressão diferente da do kit atual;
   // sem kit, false) e a contagem de pendências abertas (o caso de uso mostra só para Gestor).
   async listForMember(

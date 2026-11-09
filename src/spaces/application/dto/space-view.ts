@@ -1,6 +1,9 @@
 import type { Space } from '../../domain/space.js';
 import type { SpaceRoleKey } from '../../domain/space-membership.js';
 
+/** Reserved size and usage (every stored version, trash included), in bytes. */
+export type SpaceStorageView = { quotaBytes: number; usedBytes: number };
+
 /** Details of a space for one of its members. */
 export type SpaceView = {
   id: string;
@@ -13,6 +16,8 @@ export type SpaceView = {
   keyRotationRequired: boolean;
   /** Some key version is still wrapped for a previous recovery kit. */
   recoveryRewrapRequired: boolean;
+  /** Present on create, `GET /spaces/:id` and the resize (where the usage is read). */
+  storage?: SpaceStorageView;
   createdAt: Date | null;
   updatedAt: Date | null;
 };
@@ -49,6 +54,7 @@ export function toSpaceView(
   space: Space,
   roleKey: SpaceRoleKey,
   recoveryRewrapRequired: boolean,
+  usedBytes?: number,
 ): SpaceView {
   return {
     id: space.id,
@@ -58,6 +64,9 @@ export function toSpaceView(
     currentKeyVersion: space.currentKeyVersion,
     keyRotationRequired: space.keyRotationRequired,
     recoveryRewrapRequired,
+    ...(usedBytes !== undefined
+      ? { storage: { quotaBytes: space.storageQuotaBytes, usedBytes } }
+      : {}),
     createdAt: space.createdAt ?? null,
     updatedAt: space.updatedAt ?? null,
   };

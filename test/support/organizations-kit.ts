@@ -47,6 +47,7 @@ export function makeOrganization(
       recoveryKeyChangedAt: null,
       recoveryKeyChangedByUserId: null,
       platformAppointment: null,
+      storageQuotaBytes: 53_687_091_200,
       createdAt: new Date('2026-10-01T00:00:00Z'),
       updatedAt: new Date('2026-10-02T00:00:00Z'),
       ...overrides,
@@ -101,6 +102,7 @@ export function makeKit() {
     lockForUpdate: vi.fn(),
     findPersonalOf: vi.fn(),
     listForUser: vi.fn(),
+    reservedStorageBytes: vi.fn(),
   };
   const memberships = {
     add: vi.fn(),
@@ -159,6 +161,7 @@ export function makeKit() {
     members.set(MEMBER, 'org_member');
     organization = makeOrganization();
     trace.length = 0;
+    orgs.reservedStorageBytes.mockResolvedValue(0);
     orgs.findById.mockImplementation(async (id: string) => {
       tag('orgs.findById');
       return id === ORG_ID ? organization : null;

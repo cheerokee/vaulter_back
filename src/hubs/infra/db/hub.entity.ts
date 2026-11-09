@@ -1,4 +1,12 @@
-import { Column, Entity, Index, JoinColumn, ManyToOne, Unique } from 'typeorm';
+import {
+  Check,
+  Column,
+  Entity,
+  Index,
+  JoinColumn,
+  ManyToOne,
+  Unique,
+} from 'typeorm';
 import { SyncableTypeormEntity } from '../../../shared/infra/db/base.entity.js';
 
 // Sincronizável e sem organization_id (o Hub não é de organização). RLS (migration CreateHubs): dono, o próprio
@@ -11,6 +19,7 @@ import { SyncableTypeormEntity } from '../../../shared/infra/db/base.entity.js';
 @Index('uq_hubs_signing_public_key', ['signingPublicKey'], { unique: true })
 @Index('fk_hubs_users_idx', ['ownerUserId'])
 @Index('ix_hubs_sync_version', ['syncVersion'])
+@Check('ck_hubs_storage_capacity_bytes', `"storage_capacity_bytes" > 0`)
 export class HubTypeormEntity extends SyncableTypeormEntity {
   @Column({ type: 'uuid' })
   ownerUserId!: string;
@@ -34,4 +43,9 @@ export class HubTypeormEntity extends SyncableTypeormEntity {
 
   @Column({ type: 'timestamptz', nullable: true })
   lastSeenAt!: Date | null;
+
+  // Capacidade utilizável do SSD informada pelo próprio Hub (bytes; bigint volta como string no driver pg). Nula até
+  // o Hub informar: sem conferência ao instalar.
+  @Column({ type: 'bigint', nullable: true })
+  storageCapacityBytes!: string | null;
 }

@@ -1,3 +1,4 @@
+import { byteCount } from '../../../shared/infra/db/byte-count.js';
 import { Organization } from '../../domain/organization.js';
 import { OrganizationTypeormEntity } from './organization.entity.js';
 
@@ -25,6 +26,7 @@ export const OrganizationMapper = {
                 protectedUntil: row.protectedUntil,
               }
             : null,
+        storageQuotaBytes: byteCount(row.storageQuotaBytes),
         createdAt: row.createdAt,
         updatedAt: row.updatedAt ?? undefined,
       },
@@ -49,6 +51,7 @@ export const OrganizationMapper = {
       platformAppointedUserId: org.platformAppointment?.appointedUserId ?? null,
       platformAppointedAt: org.platformAppointment?.appointedAt ?? null,
       protectedUntil: org.platformAppointment?.protectedUntil ?? null,
+      storageQuotaBytes: String(org.storageQuotaBytes),
     };
   },
 };

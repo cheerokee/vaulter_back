@@ -1,4 +1,5 @@
 import type { OrgRoleKey } from '../../domain/membership.js';
+import type { OrganizationStorageQuota } from '../../domain/storage-quota.js';
 import type {
   HubLinkPolicy,
   Organization,
@@ -23,6 +24,8 @@ export type OrganizationView = {
   platformAppointment: PlatformAppointment | null;
   /** The caller's organization role. */
   roleKey: OrgRoleKey;
+  /** Cloud quota and what the live spaces reserve (only on `GET /organizations/:id`). */
+  storage?: OrganizationStorageQuota;
   createdAt: Date;
   updatedAt: Date;
 };

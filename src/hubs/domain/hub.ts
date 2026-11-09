@@ -10,6 +10,8 @@ export type HubProps = {
   lastSeenAt: Date | null;
   /** Tombstone: a deregistered hub is refused everywhere. */
   deletedAt: Date | null;
+  /** Usable SSD capacity the hub reported (`PUT /hub/storage`); null/absent = never reported (installs unchecked). */
+  storageCapacityBytes?: number | null;
   createdAt?: Date;
   updatedAt?: Date;
 };
@@ -70,6 +72,9 @@ export class Hub extends Entity<HubProps> {
   }
   get deletedAt(): Date | null {
     return this.props.deletedAt;
+  }
+  get storageCapacityBytes(): number | null {
+    return this.props.storageCapacityBytes ?? null;
   }
   get isDeregistered(): boolean {
     return this.props.deletedAt !== null;

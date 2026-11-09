@@ -29,6 +29,8 @@ import { RequestHubLinkUseCase } from './application/request-hub-link.use-case.j
 import { RevokeRoomUseCase } from './application/revoke-room.use-case.js';
 import { UnlinkHubOrganizationUseCase } from './application/unlink-hub-organization.use-case.js';
 import { SyncHubUseCase } from './application/sync-hub.use-case.js';
+import { ReportHubStorageUseCase } from './application/report-hub-storage.use-case.js';
+import { HubsSpaceQuotaHook } from './application/space-quota.hook.js';
 import { HubSyncReader } from './application/ports/hub-sync-reader.js';
 import { AuthenticateHubTokenUseCase } from './application/authenticate-hub-token.use-case.js';
 import { ClaimHubUseCase } from './application/claim-hub.use-case.js';
@@ -67,6 +69,7 @@ import {
   HubOrganizationsController,
 } from './infra/http/hub-organizations.controller.js';
 import { HubSpacesController } from './infra/http/hub-spaces.controller.js';
+import { HubStorageController } from './infra/http/hub-storage.controller.js';
 import { HubSyncController } from './infra/http/hub-sync.controller.js';
 import { HubsController } from './infra/http/hubs.controller.js';
 import { OrganizationHubLinksController } from './infra/http/organization-hub-links.controller.js';
@@ -96,6 +99,7 @@ import { LinkCodeTypeormRepository } from './infra/db/link-code.typeorm-reposito
     HubLinkCodesController,
     HubSpacesController,
     HubSyncController,
+    HubStorageController,
     OrganizationHubLinksController,
   ],
   providers: [
@@ -150,6 +154,8 @@ import { LinkCodeTypeormRepository } from './infra/db/link-code.typeorm-reposito
     RevokeRoomUseCase,
     UnlinkHubOrganizationUseCase,
     SyncHubUseCase,
+    ReportHubStorageUseCase,
+    HubsSpaceQuotaHook,
   ],
   // Para os outros módulos: checagem de acesso ao Hub e as operações administrativas (o `platform` as usa; o `hubs`
   // não o importa).

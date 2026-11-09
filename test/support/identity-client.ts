@@ -150,6 +150,8 @@ export function identityClient(getApp: () => INestApplication) {
       orgId: string,
       kitPublicKey: string,
       name = 'Manuais',
+      /** Extra body fields (e.g. `storageQuotaBytes`; any value, to test the validation). */
+      extra: Record<string, unknown> = {},
     ) => {
       const key = await generateSpaceKey();
       const res = await http()
@@ -160,6 +162,7 @@ export function identityClient(getApp: () => INestApplication) {
           wrappedKey: await sealSpaceKey(key, creator.account.publicKey),
           recoveryPublicKey: kitPublicKey,
           recoveryWrappedKey: await sealSpaceKey(key, kitPublicKey),
+          ...extra,
         });
       return { res, key, spaceId: res.body?.id as string };
     },

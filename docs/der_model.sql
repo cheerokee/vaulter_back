@@ -160,6 +160,7 @@ CREATE TABLE organizations (
   platform_appointed_at DATETIME NULL COMMENT 'quando foi a última nomeação pela plataforma',
   protected_until DATETIME NULL COMMENT 'fim da janela de proteção (nomeação + 7 dias)',
   personal_owner_user_id CHAR(36) NULL COMMENT 'dono da organização pessoal; nulo nas demais; garante uma pessoal por conta',
+  storage_quota_bytes BIGINT NOT NULL DEFAULT 53687091200 COMMENT 'franquia de nuvem (50 GiB): a soma dos storage_quota_bytes dos espaços vivos não passa dela; CHECK > 0',
   sync_version BIGINT NOT NULL COMMENT 'versão de sincronização: sequência global do servidor, muda a cada insert/update/exclusão',
   PRIMARY KEY (id),
   UNIQUE INDEX uq_organizations_personal_owner (personal_owner_user_id),
@@ -223,7 +224,7 @@ CREATE TABLE organization_invitations (
 -- RLS (Postgres): SELECT se owner_user_id = app.user_id, OU id = app.hub_id (Hub autenticado), OU o Hub tem vínculo
 -- aprovado com organização de que app.user_id é membro ativo, OU signing_public_key = app.hub_signing_public_key
 -- (busca da apresentação); INSERT pelo dono (contexto de reivindicação: app.user_id = owner_user_id gravado);
--- UPDATE pelo dono ou pelo próprio Hub (last_seen_at). Matriz completa na migration CreateHubs.
+-- UPDATE pelo dono ou pelo próprio Hub (last_seen_at, storage_capacity_bytes). Matriz completa na migration CreateHubs.
 CREATE TABLE hubs (
   id CHAR(36) NOT NULL,
   created_at DATETIME NOT NULL,
@@ -234,6 +235,7 @@ CREATE TABLE hubs (
   encryption_public_key TEXT NOT NULL COMMENT 'X25519 (antes public_key): para trancar as chaves dos espaços abertos na sala',
   signing_public_key VARCHAR(64) NOT NULL COMMENT 'Ed25519 (base64url): única para sempre, inclusive de Hubs desregistrados (sem WHERE deleted_at no Postgres)',
   last_seen_at DATETIME NULL,
+  storage_capacity_bytes BIGINT NULL COMMENT 'capacidade utilizável do SSD informada pelo Hub (PUT /hub/storage); nula = sem conferência ao instalar; CHECK > 0',
   sync_version BIGINT NOT NULL COMMENT 'versão de sincronização: sequência global do servidor, muda a cada insert/update/exclusão',
   PRIMARY KEY (id),
   UNIQUE INDEX uq_hubs_signing_public_key (signing_public_key),
@@ -370,6 +372,7 @@ CREATE TABLE spaces (
   allow_online_llm TINYINT NOT NULL DEFAULT 1 COMMENT 'v1: só o campo; todos permitidos',
   current_key_version INT NOT NULL DEFAULT 1,
   key_rotation_required TINYINT NOT NULL DEFAULT 0 COMMENT 'flag de coordenação do backend: troca de chave pendente após a saída de um membro',
+  storage_quota_bytes BIGINT NOT NULL DEFAULT 10737418240 COMMENT 'tamanho reservado (10 GiB; 1 GiB..5 TiB): soma na franquia da organização e na capacidade de cada Hub onde está; CHECK > 0',
   sync_version BIGINT NOT NULL COMMENT 'versão de sincronização: sequência global do servidor, muda a cada insert/update/exclusão',
   PRIMARY KEY (id),
   UNIQUE INDEX uq_spaces_id_organization (id, organization_id) COMMENT 'alvo das FKs compostas (filho_id, organization_id)',

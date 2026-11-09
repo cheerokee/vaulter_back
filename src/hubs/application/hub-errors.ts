@@ -64,3 +64,8 @@ export function hubRoleTargetNotEligible(): DomainValidationError {
     'The user is not an active member of any organization linked to this hub.',
   );
 }
+
+/** The space vanished between the access check and its lock (same 404 as `SpaceAccess`). */
+export function spaceNotFound(): NotFoundError {
+  return new NotFoundError('space-not-found', 'The space was not found.');
+}

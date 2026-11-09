@@ -139,6 +139,13 @@ Duas chamadas públicas, que **dividem um orçamento de 60/h por IP**:
   foi desregistrado. Token expirado ou de Hub desregistrado: 401 `invalid-hub-token`.
 - Token de Hub em rota de usuário e token de usuário em rota de Hub: 401.
 
+### Capacidade do SSD
+
+Logo depois de autenticar, e sempre que mudar (SSD trocado, partição redimensionada), o Hub informa quanto do SSD pode
+usar: `PUT /hub/storage` (token de Hub) com `{ "capacityBytes": <inteiro> }`, de **1 GiB a 64 TiB** (fora disso, 422
+`validation-failed`). Responde **204**. Um valor menor que o já reservado pelos espaços instalados é aceito: só as
+próximas instalações são recusadas. Hub que nunca informou: instala sem conferência (software antigo não trava).
+
 ## 6. Vincular organizações
 
 Um vínculo Hub ↔ organização só fica ativo com **dois consentimentos**: o do dono e o da organização. A política da
@@ -182,6 +189,14 @@ o backup.
 
 - **Pôr:** `POST /hubs/:id/spaces` com `{ "spaceId" }`. Pode o dono, se for membro do espaço, ou um Gestor do espaço,
   se for membro de uma organização com vínculo aprovado. Sem vínculo aprovado: 422 `organization-not-linked`.
+  **Capacidade** ("como um console"): com a capacidade informada (§5), a soma dos tamanhos reservados
+  (`storageQuotaBytes`) dos espaços já instalados, de **todas** as organizações, mais o novo, precisa caber; senão 422
+  `hub-storage-full` com `missingBytes`. Pôr de novo um espaço que já está no Hub não conta duas vezes.
+- **Aumentar o tamanho** de um espaço instalado (`PUT /spaces/:id/storage-quota`, Gestor) também confere cada Hub onde
+  ele está: 422 `hub-storage-full` com `hubId` e `missingBytes`. Raro: 409 `hub-storage-busy` quando outra instalação
+  no mesmo Hub acontece no mesmo instante (repetir).
+- **Ver:** `GET /hubs/:id` traz `storage: { capacityBytes, reservedBytes }` (`capacityBytes` nulo até o Hub informar;
+  o reservado conta os espaços que quem consulta vê: o dono, todos).
 - **Tirar:** `DELETE /hubs/:id/spaces/:spaceId` (o dono tira qualquer espaço; um Gestor tira o próprio). Tirar
   também tira o espaço da Sala.
 - **Listar:** `GET /hubs/:id/spaces` (cursor).

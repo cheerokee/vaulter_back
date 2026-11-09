@@ -1,3 +1,4 @@
+import { byteCount } from '../../../shared/infra/db/byte-count.js';
 import { Hub } from '../../domain/hub.js';
 import type { HubTypeormEntity } from './hub.entity.js';
 
@@ -9,6 +10,7 @@ export type HubRow = {
   signing_public_key: string;
   encryption_public_key: string;
   last_seen_at: Date | null;
+  storage_capacity_bytes: string | null;
   deleted_at: Date | null;
   created_at: Date;
   updated_at: Date | null;
@@ -24,6 +26,10 @@ export const HubMapper = {
         encryptionPublicKey: row.encryptionPublicKey,
         lastSeenAt: row.lastSeenAt,
         deletedAt: row.deletedAt,
+        storageCapacityBytes:
+          row.storageCapacityBytes === null
+            ? null
+            : byteCount(row.storageCapacityBytes),
         createdAt: row.createdAt,
         updatedAt: row.updatedAt ?? undefined,
       },
@@ -40,6 +46,10 @@ export const HubMapper = {
         encryptionPublicKey: row.encryption_public_key,
         lastSeenAt: row.last_seen_at,
         deletedAt: row.deleted_at,
+        storageCapacityBytes:
+          row.storage_capacity_bytes === null
+            ? null
+            : byteCount(row.storage_capacity_bytes),
         createdAt: row.created_at,
         updatedAt: row.updated_at ?? undefined,
       },

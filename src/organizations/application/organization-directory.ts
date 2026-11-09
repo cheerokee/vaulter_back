@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { validate } from 'uuid';
 import type { HubLinkPolicy } from '../domain/organization.js';
+import type { OrganizationStorageQuota } from '../domain/storage-quota.js';
 import { MembershipRepository } from '../domain/membership.repository.js';
 import { OrganizationRepository } from '../domain/organization.repository.js';
 
@@ -81,5 +82,36 @@ export class OrganizationDirectory {
     if (!validate(orgId)) return false;
     const org = await this.orgs.findById(orgId);
     return org?.allowRoomSpaces ?? false;
+  }
+
+  /**
+   * The cloud quota and the reserved sum of the live spaces; null for an unknown org or a malformed id. A plain
+   * read (views): a check that reserves more must use `lockStorageQuota`.
+   */
+  async storageQuota(orgId: string): Promise<OrganizationStorageQuota | null> {
+    if (!validate(orgId)) return null;
+    const org = await this.orgs.findById(orgId);
+    if (!org) return null;
+    return {
+      quotaBytes: org.storageQuotaBytes,
+      reservedBytes: await this.orgs.reservedStorageBytes(orgId),
+    };
+  }
+
+  /**
+   * Same, with the organization row locked (`FOR NO KEY UPDATE`) until the end of the unit of work: creating or
+   * growing a space (and changing the quota) serialize on it, so two reservations never both fit in the same room.
+   * MUST run inside `UnitOfWork.run`. The organization row is a LEAF lock: take it after hubs and spaces.
+   */
+  async lockStorageQuota(
+    orgId: string,
+  ): Promise<OrganizationStorageQuota | null> {
+    if (!validate(orgId)) return null;
+    const org = await this.orgs.lockForUpdate(orgId);
+    if (!org) return null;
+    return {
+      quotaBytes: org.storageQuotaBytes,
+      reservedBytes: await this.orgs.reservedStorageBytes(orgId),
+    };
   }
 }

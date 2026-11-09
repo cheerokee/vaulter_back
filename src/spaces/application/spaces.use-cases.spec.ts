@@ -27,6 +27,7 @@ import { CreateSpaceUseCase } from './create-space.use-case.js';
 import { GetSpaceUseCase } from './get-space.use-case.js';
 import { ListSpacesUseCase } from './list-spaces.use-case.js';
 import { RenameSpaceUseCase } from './rename-space.use-case.js';
+import { SpaceStorageUsage } from './space-storage-usage.js';
 import { Space } from '../domain/space.js';
 
 const kit = makeSpaceKit();
@@ -47,6 +48,7 @@ describe('CreateSpaceUseCase', () => {
     new CreateSpaceUseCase(
       d.orgAccess,
       d.recoveryKit,
+      d.directory,
       d.spaces,
       d.keys,
       d.grants,
@@ -252,7 +254,14 @@ describe('ListSpacesUseCase', () => {
 
 describe('GetSpaceUseCase', () => {
   const useCase = () =>
-    new GetSpaceUseCase(d.access, d.recoveryKit, d.keys, d.pending, d.room);
+    new GetSpaceUseCase(
+      d.access,
+      d.recoveryKit,
+      d.keys,
+      d.pending,
+      d.room,
+      new SpaceStorageUsage(),
+    );
 
   it('returns the details with my role and the computed flags', async () => {
     kit.addSpace(SPACE_ID, ORG_ID, [[READER, 'space_reader']], {
@@ -269,6 +278,7 @@ describe('GetSpaceUseCase', () => {
       keyRotationRequired: true,
       recoveryRewrapRequired: true,
       roomHubs: [],
+      storage: { quotaBytes: 10_737_418_240, usedBytes: 0 },
       createdAt: new Date('2026-10-01T00:00:00Z'),
       updatedAt: null,
     });
@@ -355,6 +365,7 @@ describe('RenameSpaceUseCase', () => {
             name: sp.name,
             currentKeyVersion: sp.currentKeyVersion,
             keyRotationRequired: sp.keyRotationRequired,
+            storageQuotaBytes: sp.storageQuotaBytes,
             createdAt: sp.createdAt,
             updatedAt: saved,
           },

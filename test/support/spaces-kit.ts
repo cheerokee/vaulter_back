@@ -85,6 +85,11 @@ export function makeSpaceKit() {
   const roomBySpace = new Map<string, Map<string, SpaceRoleKey>>();
   /** orgId -> allow_room_spaces. */
   const roomPolicy = new Map<string, boolean>();
+  /** orgId -> storage quota snapshot (default: 50 GiB, nothing reserved). */
+  const storageQuota = new Map<
+    string,
+    { quotaBytes: number; reservedBytes: number }
+  >();
   let depth = 0;
   const trace: string[] = [];
   const tag = (name: string) => trace.push(depth > 0 ? name : `${name}@out`);
@@ -150,6 +155,8 @@ export function makeSpaceKit() {
     organizationIdsOf: vi.fn(),
     allowRoomSpaces: vi.fn(),
     hubLinkPolicy: vi.fn(),
+    storageQuota: vi.fn(),
+    lockStorageQuota: vi.fn(),
   };
   const fingerprinter = { fingerprint: vi.fn() };
   const audit = { record: vi.fn() };
@@ -189,6 +196,7 @@ export function makeSpaceKit() {
             name: s.name,
             currentKeyVersion: s.currentKeyVersion,
             keyRotationRequired: s.keyRotationRequired,
+            storageQuotaBytes: s.storageQuotaBytes,
             createdAt: s.createdAt,
             updatedAt: s.updatedAt,
           },
@@ -215,6 +223,7 @@ export function makeSpaceKit() {
           name: 'Manuais',
           currentKeyVersion: version,
           keyRotationRequired: opts.rotation ?? false,
+          storageQuotaBytes: 10_737_418_240,
           createdAt: new Date('2026-10-01T00:00:00Z'),
         },
         id,
@@ -257,6 +266,7 @@ export function makeSpaceKit() {
     spaceRoles.clear();
     roomBySpace.clear();
     roomPolicy.clear();
+    storageQuota.clear();
     versionsBySpace.clear();
     addSpace(SPACE_ID, ORG_ID, [
       [MANAGER, 'space_manager'],
@@ -530,6 +540,20 @@ export function makeSpaceKit() {
         return orgRole(orgId, userId) !== undefined;
       },
     );
+    const quotaOf = (orgId: string) =>
+      orgMembers.has(orgId)
+        ? (storageQuota.get(orgId) ?? {
+            quotaBytes: 53_687_091_200,
+            reservedBytes: 0,
+          })
+        : null;
+    directory.storageQuota.mockImplementation(async (orgId: string) =>
+      quotaOf(orgId),
+    );
+    directory.lockStorageQuota.mockImplementation(async (orgId: string) => {
+      tag('directory.lockStorageQuota');
+      return quotaOf(orgId);
+    });
     directory.isActiveMember.mockImplementation(
       async (orgId: string, userId: string) =>
         orgRole(orgId, userId) !== undefined,
@@ -591,6 +615,7 @@ export function makeSpaceKit() {
     spaceRoles,
     roomBySpace,
     roomPolicy,
+    storageQuota,
     versionsBySpace,
     mocks: {
       spaces,

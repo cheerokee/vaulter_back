@@ -21,6 +21,7 @@ export type CloudMode = 'encrypted_backup' | 'active_cloud';
   `"cloud_mode" IN ('encrypted_backup', 'active_cloud')`,
 )
 @Check('ck_spaces_current_key_version', `"current_key_version" >= 1`)
+@Check('ck_spaces_storage_quota_bytes', `"storage_quota_bytes" > 0`)
 @Index('ix_spaces_sync_version', ['syncVersion'])
 @Index('fk_spaces_organizations_idx', ['organizationId'])
 export class SpaceTypeormEntity extends SyncableTypeormEntity {
@@ -51,4 +52,9 @@ export class SpaceTypeormEntity extends SyncableTypeormEntity {
 
   @Column({ type: 'boolean', default: false })
   keyRotationRequired!: boolean;
+
+  // Tamanho reservado (bytes; bigint volta como string no driver pg, o mapper converte). Soma na franquia da
+  // organização e na capacidade de cada Hub onde o espaço está.
+  @Column({ type: 'bigint', default: 10737418240 })
+  storageQuotaBytes!: string;
 }

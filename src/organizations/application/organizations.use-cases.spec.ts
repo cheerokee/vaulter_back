@@ -155,6 +155,16 @@ describe('GetOrganizationUseCase', () => {
     expect(out).toMatchObject({ id: ORG_ID, roleKey: 'org_member' });
   });
 
+  it('shows the cloud quota and what the live spaces reserve', async () => {
+    m.orgs.reservedStorageBytes.mockResolvedValueOnce(12_884_901_888);
+    const out = await useCase().execute(actor(MEMBER), ORG_ID);
+    expect(out.storage).toEqual({
+      quotaBytes: 53_687_091_200,
+      reservedBytes: 12_884_901_888,
+    });
+    expect(m.orgs.reservedStorageBytes).toHaveBeenCalledWith(ORG_ID);
+  });
+
   it('404 for a non-member', async () => {
     await expect(
       useCase().execute(actor(STRANGER), ORG_ID),

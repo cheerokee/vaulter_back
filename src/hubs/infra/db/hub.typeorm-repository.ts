@@ -14,7 +14,7 @@ import {
 } from '../../../shared/infra/db/unit-of-work.js';
 import type { Hub } from '../../domain/hub.js';
 import { HubRepository } from '../../domain/hub.repository.js';
-import { hubNotFound, requireUnitOfWork } from './db-helpers.js';
+import { hubNotFound, requireUnitOfWork, updatedRows } from './db-helpers.js';
 import { HubTypeormEntity } from './hub.entity.js';
 import { HubMapper, type HubRow } from './hub.mapper.js';
 
@@ -166,5 +166,53 @@ export class HubTypeormRepository extends HubRepository {
         ),
     );
     return rows[0] ? HubMapper.fromRow(rows[0]) : null;
+  }
+
+  // Mesmo contexto do `lockForShare` (a policy de UPDATE de hubs libera o próprio Hub). Com `nowait`, 55P03 (lock em
+  // uso) vira 409: o savepoint do contexto desfaz só esta tentativa, mas o erro sobe e desfaz o caso de uso.
+  async lockForStorage(
+    hubId: string,
+    opts: { nowait?: boolean } = {},
+  ): Promise<Hub | null> {
+    requireUnitOfWork(this.dataSource, 'HubRepository.lockForStorage');
+    if (!validate(hubId)) return null;
+    try {
+      const rows: HubRow[] = await runWithContext(
+        this.dataSource,
+        { hubId },
+        (m) =>
+          m.query(
+            `SELECT * FROM hubs WHERE id = $1 AND deleted_at IS NULL FOR NO KEY UPDATE${opts.nowait ? ' NOWAIT' : ''}`,
+            [hubId],
+          ),
+      );
+      return rows[0] ? HubMapper.fromRow(rows[0]) : null;
+    } catch (error) {
+      const code =
+        error instanceof QueryFailedError
+          ? (error.driverError as { code?: string }).code
+          : undefined;
+      if (code === '55P03') {
+        throw new ConflictError(
+          'hub-storage-busy',
+          'A hub this space is on is changing right now; try again.',
+        );
+      }
+      throw error;
+    }
+  }
+
+  // Só a coluna da capacidade (GRANT de UPDATE por coluna): nunca grava nome/lápide lidos antes.
+  async setStorageCapacity(hubId: string, bytes: number): Promise<boolean> {
+    if (!validate(hubId)) return false;
+    const rows = updatedRows<{ id: string }>(
+      await currentManager(this.dataSource).query(
+        `UPDATE hubs SET storage_capacity_bytes = $2, updated_at = now()
+          WHERE id = $1 AND deleted_at IS NULL
+         RETURNING id`,
+        [hubId, bytes],
+      ),
+    );
+    return rows.length > 0;
   }
 }

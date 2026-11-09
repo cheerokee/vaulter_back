@@ -1,6 +1,7 @@
 import { DomainValidationError } from '../../shared/domain/errors.js';
 import { Entity } from '../../shared/domain/entity.js';
 import { assertRecoveryPublicKey } from './recovery-key.js';
+import { ORGANIZATION_STORAGE_QUOTA_DEFAULT_BYTES } from './storage-quota.js';
 
 export const HUB_LINK_POLICIES = ['any_member_hub', 'admin_approved'] as const;
 export type HubLinkPolicy = (typeof HUB_LINK_POLICIES)[number];
@@ -36,6 +37,8 @@ export type OrganizationProps = {
   recoveryKeyChangedByUserId: string | null;
   /** Latest platform appointment (overwritten by a new one); null if never. */
   platformAppointment: PlatformAppointment | null;
+  /** Cloud quota (bytes): the reserved sizes of the live spaces never add up beyond it. */
+  storageQuotaBytes: number;
   createdAt?: Date;
   updatedAt?: Date;
 };
@@ -65,6 +68,7 @@ export class Organization extends Entity<OrganizationProps> {
       recoveryKeyChangedAt: null,
       recoveryKeyChangedByUserId: null,
       platformAppointment: null,
+      storageQuotaBytes: ORGANIZATION_STORAGE_QUOTA_DEFAULT_BYTES,
       createdAt: input.now,
     });
   }
@@ -85,6 +89,7 @@ export class Organization extends Entity<OrganizationProps> {
       recoveryKeyChangedAt: null,
       recoveryKeyChangedByUserId: null,
       platformAppointment: null,
+      storageQuotaBytes: ORGANIZATION_STORAGE_QUOTA_DEFAULT_BYTES,
       createdAt: input.now,
     });
   }
@@ -231,6 +236,9 @@ export class Organization extends Entity<OrganizationProps> {
   }
   get allowRoomSpaces(): boolean {
     return this.props.allowRoomSpaces;
+  }
+  get storageQuotaBytes(): number {
+    return this.props.storageQuotaBytes;
   }
   get createdAt(): Date | undefined {
     return this.props.createdAt;

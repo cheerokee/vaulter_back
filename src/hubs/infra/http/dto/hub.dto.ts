@@ -9,11 +9,16 @@ import {
   IsString,
   IsUUID,
   Matches,
+  Max,
   MaxLength,
   Min,
   ValidateNested,
 } from 'class-validator';
 import { CursorPaginationQuery } from '../../../../shared/infra/http/cursor-pagination.query.js';
+import {
+  HUB_STORAGE_CAPACITY_MAX_BYTES,
+  HUB_STORAGE_CAPACITY_MIN_BYTES,
+} from '../../../domain/hub-storage.js';
 import {
   HUB_LINK_STATUSES,
   type HubLinkStatus,
@@ -166,4 +171,12 @@ export class OrganizationHubLinksQuery extends CursorPaginationQuery {
   @IsOptional()
   @IsIn(HUB_LINK_STATUSES)
   status?: HubLinkStatus;
+}
+
+export class HubStorageDto {
+  /** Usable SSD capacity in bytes (1 GiB .. 64 TiB). Less than what is already reserved is accepted. */
+  @IsInt()
+  @Min(HUB_STORAGE_CAPACITY_MIN_BYTES)
+  @Max(HUB_STORAGE_CAPACITY_MAX_BYTES)
+  capacityBytes!: number;
 }
