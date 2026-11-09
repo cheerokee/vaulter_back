@@ -1,8 +1,9 @@
-import { Injectable, type OnModuleDestroy } from '@nestjs/common';
+import { Injectable, Logger, type OnModuleDestroy } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import {
   CopyObjectCommand,
   DeleteObjectCommand,
+  DeleteObjectsCommand,
   GetObjectCommand,
   HeadObjectCommand,
   ListObjectVersionsCommand,
@@ -17,7 +18,13 @@ import {
   type PresignedPut,
   type PresignPutInput,
   type StoredVersion,
+  type VersionRef,
 } from '../../application/ports/object-store.js';
+
+/** S3 `DeleteObjects` takes at most 1000 keys per call. */
+export const DELETE_OBJECTS_MAX_KEYS = 1000;
+/** Per-key `DeleteObjects` errors that mean the version no longer exists (LocalStack answers `NoSuchVersion`). */
+const ALREADY_GONE = new Set(['NoSuchVersion', 'NoSuchKey']);
 
 const SHA256_HEX = /^[0-9a-f]{64}$/;
 
@@ -35,6 +42,7 @@ const UNHOISTABLE = new Set(['x-amz-checksum-sha256', 'x-amz-tagging']);
 
 @Injectable()
 export class S3ObjectStore extends ObjectStore implements OnModuleDestroy {
+  private readonly logger = new Logger(S3ObjectStore.name);
   private readonly client: S3Client;
   private readonly bucket: string;
 
@@ -189,6 +197,44 @@ export class S3ObjectStore extends ObjectStore implements OnModuleDestroy {
       keyMarker = page.NextKeyMarker;
       versionIdMarker = page.NextVersionIdMarker;
     }
+  }
+
+  async deleteVersions(
+    versions: readonly VersionRef[],
+  ): Promise<{ failed: VersionRef[] }> {
+    const failed: VersionRef[] = [];
+    for (let i = 0; i < versions.length; i += DELETE_OBJECTS_MAX_KEYS) {
+      const batch = versions.slice(i, i + DELETE_OBJECTS_MAX_KEYS);
+      try {
+        // Quiet: the answer lists only the keys that failed.
+        const out = await this.client.send(
+          new DeleteObjectsCommand({
+            Bucket: this.bucket,
+            Delete: {
+              Quiet: true,
+              Objects: batch.map((v) => ({
+                Key: v.key,
+                VersionId: v.versionId,
+              })),
+            },
+          }),
+        );
+        for (const e of out.Errors ?? []) {
+          // Already gone (the sweep or an earlier attempt got there first): that is the goal, not a failure.
+          if (e.Code && ALREADY_GONE.has(e.Code)) continue;
+          if (e.Key && e.VersionId) {
+            failed.push({ key: e.Key, versionId: e.VersionId });
+          }
+        }
+      } catch (error) {
+        this.logger.warn(
+          { err: error, versions: batch.length },
+          'DeleteObjects failed for a whole batch',
+        );
+        failed.push(...batch);
+      }
+    }
+    return { failed };
   }
 
   async deleteVersion(key: string, versionId: string): Promise<void> {

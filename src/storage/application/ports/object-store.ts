@@ -15,6 +15,12 @@ export interface PresignedPut {
   headers: Record<string, string>;
 }
 
+/** One version of one key, to delete for good. */
+export interface VersionRef {
+  key: string;
+  versionId: string;
+}
+
 /** One stored version of a key (an object version or a delete marker). */
 export interface StoredVersion {
   versionId: string;
@@ -63,6 +69,16 @@ export abstract class ObjectStore {
    * so the bucket's current version keeps matching the index (a noncurrent version expires in 30 days).
    */
   abstract deleteVersion(key: string, versionId: string): Promise<void>;
+
+  /**
+   * Permanently removes many versions in batched calls (S3 `DeleteObjects`, up to 1000 per call): only for the trash
+   * purge (`BackupTrash`), of versions the index already marked `purged`. Never throws: returns the versions that were
+   * NOT deleted (per-key errors, or every version of a batch whose call failed); their journal marks stay, so the
+   * reconcile sweep removes them later. Deleting a version that no longer exists counts as deleted.
+   */
+  abstract deleteVersions(
+    versions: readonly VersionRef[],
+  ): Promise<{ failed: VersionRef[] }>;
 
   /** Every version and delete marker of exactly this key (any order). */
   abstract listVersions(key: string): Promise<StoredVersion[]>;

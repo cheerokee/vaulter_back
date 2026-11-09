@@ -4,10 +4,12 @@ import { objectKey, uploadKey } from '../domain/backup-keys.js';
 import { INDEX_TAIL_TIMEOUT_MS } from '../domain/backup-limits.js';
 import type { BackupObject } from '../domain/backup-object.js';
 import { BackupObjectRepository } from '../domain/backup-object.repository.js';
-import type { BackupObjectVersion } from '../domain/backup-object-version.js';
+import type {
+  BackupObjectVersion,
+  PurgedVersion,
+} from '../domain/backup-object-version.js';
 import { BackupObjectVersionRepository } from '../domain/backup-object-version.repository.js';
 import { BackupRules } from '../domain/backup-rules.js';
-import type { PurgedVersion } from '../domain/backup-object-version.js';
 import { BackupObjectHealer, type ObjectRef } from './backup-object-healer.js';
 import { BackupTrash } from './backup-trash.js';
 import {
@@ -62,7 +64,7 @@ function sameUploader(
 // transação nova (`repair`): só o que nenhuma versão confirmada referencia sai do bucket. As marcas ficam.
 // Espera por trava além de 10 s (`lock_timeout`, posto por `StorageAccess.lock`) = 409 `storage-busy`, repetível.
 // Limite de versões antigas por objeto (10, `MAX_TRASH_VERSIONS_PER_OBJECT`; spec §4.8 "Controle da lixeira"): cada
-// objeto que ganhou versão nova tem as substituídas além das 10 mais recentes apagadas de vez (`BackupTrash.capObject`:
+// objeto que ganhou versão nova (inclusive um apagado que volta) tem as substituídas além das 10 mais recentes apagadas de vez (`BackupTrash.capObject`:
 // `purged` no índice, sob a trava do objeto, no mesmo unit of work) e, só DEPOIS do COMMIT, apagadas do S3
 // (`removeFromBucket`, que nunca falha o pedido: a marca do diário deixa o resto para a varredura).
 @Injectable()
@@ -169,9 +171,12 @@ export class ConfirmUploadsUseCase {
           version.assertUploaded(
             await this.store.head(uploadKey(orgId, space.spaceId, version.id)),
           );
+          // Um objeto apagado que volta também passa pelo limite: o apagar não o aplica e deixou a última versão
+          // (e as antigas) na lixeira.
+          const revived = object.deletedAt !== null;
           const { supersededVersionId } = object.commit(version.id);
-          if (supersededVersionId) {
-            superseded.push(supersededVersionId);
+          if (supersededVersionId) superseded.push(supersededVersionId);
+          if (supersededVersionId || revived) {
             withOldVersions.add(version.objectId);
           }
         }

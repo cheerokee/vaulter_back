@@ -8,7 +8,7 @@ import { ObjectStore } from './ports/object-store.js';
 // Apagar de vez versões da lixeira (spec storage-backup §4.8, "Controle da lixeira"), em duas fases:
 // 1. no unit of work, com o objeto travado: a linha vira `purged` (relógio do banco) e ganha a marca do diário
 //    (`s3_write_started_at`); sai do uso, das listagens e dos downloads (404) no COMMIT;
-// 2. DEPOIS do COMMIT (`removeFromBucket`): `deleteVersion` de cada versão no S3, fora da trava. Uma queda entre as
+// 2. DEPOIS do COMMIT (`removeFromBucket`): `DeleteObjects` em lote no S3 (até 1000 versões por chamada), fora da trava. Uma queda entre as
 //    duas fases deixa no bucket uma versão que o índice não referencia, nunca o contrário (o índice apontando para uma
 //    versão apagada como baixável): a varredura (`storage:reconcile`, pela marca) ou o próximo toque do objeto a tiram
 //    com o `BackupObjectHealer` (só referencia `committed`), e o ciclo de vida de 30 dias a apagaria de qualquer jeito.
@@ -38,24 +38,35 @@ export class BackupTrash {
     return ids.length > 0 ? this.versions.markPurged(orgId, spaceId, ids) : [];
   }
 
-  /** After the COMMIT of the purge. Never throws: a failure is logged and the journal mark leaves it to the sweep. */
+  /**
+   * After the COMMIT of the purge: one batched S3 call per 1000 versions (`deleteVersions`), so a full batch of the
+   * "empty the trash" never turns into 1000 sequential requests. Never throws: what was not deleted (per-key errors, a
+   * failed call) is logged and keeps its journal mark, so the reconcile sweep removes it.
+   */
   async removeFromBucket(
     orgId: string,
     spaceId: string,
     purged: readonly PurgedVersion[],
   ): Promise<void> {
-    for (const v of purged) {
-      try {
-        await this.store.deleteVersion(
-          objectKey(orgId, spaceId, v.objectId),
-          v.s3VersionId,
-        );
-      } catch (error) {
+    if (purged.length === 0) return;
+    try {
+      const { failed } = await this.store.deleteVersions(
+        purged.map((v) => ({
+          key: objectKey(orgId, spaceId, v.objectId),
+          versionId: v.s3VersionId,
+        })),
+      );
+      if (failed.length > 0) {
         this.logger.warn(
-          { err: error, organizationId: orgId, objectId: v.objectId },
-          'could not delete a purged backup version from the bucket; the reconcile sweep removes it',
+          { organizationId: orgId, spaceId, failed: failed.length },
+          'could not delete purged backup versions from the bucket; the reconcile sweep removes them',
         );
       }
+    } catch (error) {
+      this.logger.warn(
+        { err: error, organizationId: orgId, spaceId, versions: purged.length },
+        'could not delete purged backup versions from the bucket; the reconcile sweep removes them',
+      );
     }
   }
 }

@@ -27,7 +27,8 @@ export type EmptyTrashResult = {
 //    até 1000 versões da lixeira (`MAX_PURGE_BATCH_VERSIONS`), objetos FOR UPDATE em ordem de id (a ordem da
 //    confirmação e do apagar), `purged` no índice (nunca a versão viva de um objeto vivo; `TrashRules.purgeable` é a
 //    segunda trava sobre o SQL), auditoria `space.backup.trash_emptied`;
-// 4. depois do COMMIT, `deleteVersion` no S3 (`BackupTrash.removeFromBucket`; veja lá a regra de queda).
+// 4. depois do COMMIT, `DeleteObjects` em lote no S3 (`BackupTrash.removeFromBucket`; veja lá a regra de queda).
+// Um pedido que não apaga nada responde `remainingVersions: 0` (o laço do app nunca gira sem progresso).
 // Os delete markers dos objetos apagados ficam (o ciclo de vida os remove). O app repete enquanto
 // `remainingVersions > 0` (cada repetição gasta o orçamento de reautenticação).
 @Injectable()
@@ -113,7 +114,14 @@ export class EmptyTrashUseCase {
             },
           });
         }
-        return { orgId, spaceId: space.spaceId, purged, remainingVersions };
+        // Garantia de progresso: um pedido que não apagou nada responde 0, e o laço do app (repete enquanto
+        // `remainingVersions > 0`, cada volta gastando o orçamento de reautenticação) sempre para.
+        return {
+          orgId,
+          spaceId: space.spaceId,
+          purged,
+          remainingVersions: purged.length > 0 ? remainingVersions : 0,
+        };
       });
     } catch (error) {
       throw lockTimeoutAsBusy(error);

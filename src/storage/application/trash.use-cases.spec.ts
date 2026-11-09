@@ -108,9 +108,15 @@ function setup() {
     }),
   };
   const store = {
-    deleteVersion: vi.fn(async (key: string, versionId: string) => {
-      trace.push(`deleteVersion:${key.split('/').pop()}:${versionId}`);
-    }),
+    deleteVersions: vi.fn(
+      async (items: readonly { key: string; versionId: string }[]) => {
+        trace.push(`deleteVersions:${items.length}`);
+        for (const { key, versionId } of items) {
+          trace.push(`deleteVersion:${key.split('/').pop()}:${versionId}`);
+        }
+        return { failed: [] as { key: string; versionId: string }[] };
+      },
+    ),
   };
   const audit = {
     record: vi.fn(async (entry: { action: string }) => {
@@ -174,7 +180,7 @@ describe('EmptyTrashUseCase', () => {
     });
     expect(t.mocks.uow.run).not.toHaveBeenCalled();
     expect(t.mocks.versionRepo.markPurged).not.toHaveBeenCalled();
-    expect(t.mocks.store.deleteVersion).not.toHaveBeenCalled();
+    expect(t.mocks.store.deleteVersions).not.toHaveBeenCalled();
     expect(t.mocks.audit.record).not.toHaveBeenCalled();
   });
 
@@ -206,6 +212,10 @@ describe('EmptyTrashUseCase', () => {
       `lockObject:${OBJ_B}`,
     ]);
     const commit = t.trace.indexOf('commit');
+    // ONE batched S3 call (DeleteObjects, up to 1000 versions), never one call per version.
+    expect(t.trace.filter((x) => x.startsWith('deleteVersions:'))).toEqual([
+      'deleteVersions:4',
+    ]);
     expect(t.trace.indexOf('audit:space.backup.trash_emptied')).toBeLessThan(
       commit,
     );
@@ -257,14 +267,36 @@ describe('EmptyTrashUseCase', () => {
     });
     expect(t.mocks.versionRepo.markPurged).not.toHaveBeenCalled();
     expect(t.mocks.audit.record).not.toHaveBeenCalled();
-    expect(t.mocks.store.deleteVersion).not.toHaveBeenCalled();
+    expect(t.mocks.store.deleteVersions).not.toHaveBeenCalled();
   });
 
   it('an S3 delete that fails after the COMMIT does not fail the request (the journal mark lets the sweep finish)', async () => {
-    t.mocks.store.deleteVersion.mockRejectedValueOnce(new Error('S3 down'));
+    t.mocks.store.deleteVersions.mockRejectedValueOnce(new Error('S3 down'));
     const out = await t.useCase.execute(USER, SPACE, PROOF);
     expect(out.purgedVersions).toBe(4);
-    expect(t.mocks.store.deleteVersion).toHaveBeenCalledTimes(4);
+    expect(t.mocks.store.deleteVersions).toHaveBeenCalledTimes(1);
+  });
+
+  it('versions S3 refused to delete (per-key errors) do not fail the request either', async () => {
+    t.mocks.store.deleteVersions.mockResolvedValueOnce({
+      failed: [{ key: `x/${OBJ_A}`, versionId: 's3-01' }],
+    });
+    expect((await t.useCase.execute(USER, SPACE, PROOF)).purgedVersions).toBe(
+      4,
+    );
+  });
+
+  it('a call that purges nothing answers remainingVersions 0, so the app loop always stops', async () => {
+    t.mocks.versionRepo.trashCandidates.mockResolvedValueOnce([
+      { id: v(3), objectId: OBJ_A }, // only the live version: filtered out
+    ]);
+    t.setRemaining(3); // what the count would say (e.g. versions taken by a concurrent purge)
+    expect(await t.useCase.execute(USER, SPACE, PROOF)).toEqual({
+      purgedVersions: 0,
+      purgedBytes: 0,
+      remainingVersions: 0,
+    });
+    expect(t.mocks.store.deleteVersions).not.toHaveBeenCalled();
   });
 
   it('a lock wait past the storage lock_timeout is 409 storage-busy', async () => {
@@ -280,6 +312,6 @@ describe('EmptyTrashUseCase', () => {
     const error = await t.useCase.execute(USER, SPACE, PROOF).catch((e) => e);
     expect(error).toBeInstanceOf(ConflictError);
     expect(error.code).toBe('storage-busy');
-    expect(t.mocks.store.deleteVersion).not.toHaveBeenCalled();
+    expect(t.mocks.store.deleteVersions).not.toHaveBeenCalled();
   });
 });

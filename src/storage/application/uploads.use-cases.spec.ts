@@ -295,6 +295,18 @@ function setup() {
         versionsOf(key).filter((v) => v.versionId !== versionId),
       );
     }),
+    deleteVersions: vi.fn(
+      async (items: readonly { key: string; versionId: string }[]) => {
+        for (const { key, versionId } of items) {
+          trace.push(`deleteVersion:${key.split('/').pop()}:${versionId}`);
+          bucket.set(
+            key,
+            versionsOf(key).filter((v) => v.versionId !== versionId),
+          );
+        }
+        return { failed: [] as { key: string; versionId: string }[] };
+      },
+    ),
     listVersions: vi.fn(async (key: string) => [...versionsOf(key)]),
     presignGet: vi.fn(),
   };
@@ -875,7 +887,7 @@ describe('per-object cap of old versions (10)', () => {
 
   it('a failed S3 delete after the COMMIT does not fail the confirmation', async () => {
     await replaceChain(11);
-    t.mocks.store.deleteVersion.mockRejectedValueOnce(new Error('S3 down'));
+    t.mocks.store.deleteVersions.mockRejectedValueOnce(new Error('S3 down'));
     const ids = [...t.versions.values()].map((v) => v.id).sort();
     const next = (
       await t.request.execute(
@@ -901,6 +913,29 @@ describe('per-object cap of old versions (10)', () => {
     );
     expect(t.mocks.versionRepo.supersededInTrash).not.toHaveBeenCalled();
     expect(t.mocks.versionRepo.markPurged).not.toHaveBeenCalled();
+  });
+
+  it('reviving a deleted object applies the cap too (the delete left 11 old versions)', async () => {
+    const ids = await replaceChain(11); // 10 old versions + the live one
+    await t.remove.execute(
+      HUB,
+      SPACE,
+      [{ objectId: OBJ_A, replacesVersionId: ids.at(-1)! }],
+      NOW,
+    ); // no cap on delete: 11 versions in the trash
+    expect(t.mocks.versionRepo.markPurged).not.toHaveBeenCalled();
+    const revived = (
+      await t.request.execute(HUB, SPACE, [item(OBJ_A)], NOW)
+    )[0]!.uploadId;
+    await t.confirm.execute(HUB, SPACE, [revived], NOW);
+    expect(t.objects.get(OBJ_A)!.liveVersionId).toBe(revived);
+    expect(t.versions.get(ids[0]!)!.status).toBe('purged');
+    expect(
+      [...t.versions.values()].filter(
+        (v) => v.status === 'committed' && v.supersededAt,
+      ),
+    ).toHaveLength(10);
+    expect(t.trace).toContain(`deleteVersion:${OBJ_A}:s3-1`);
   });
 });
 

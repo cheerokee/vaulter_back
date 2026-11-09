@@ -299,7 +299,12 @@ objeto). O backend guarda só o índice (ids, tamanho, sha256 do blob, versão d
   `version-not-found`). Objeto apagado guarda as versões os 30 dias inteiros. O **Gestor** pode **esvaziar a lixeira**
   do espaço pelo app (`POST /spaces/:spaceId/backup/trash/empty` `{ currentAuthProof }`, só token de usuário, com
   reautenticação; até 1000 versões por pedido → `{ purgedVersions, purgedBytes, remainingVersions }`, repita enquanto
-  `remainingVersions > 0`); a versão viva nunca é apagada. Não há rota de Hub para isso.
+  `remainingVersions > 0`; um pedido que não apaga nada responde `remainingVersions: 0`); a versão viva nunca é
+  apagada. Não há rota de Hub para isso. **Cada pedido gasta o orçamento de reautenticação** (5 por 15 min, dividido
+  com troca de senha e afins): um Gestor apaga até **5000 versões por 15 min**. O app deve explicar que uma lixeira
+  muito grande leva várias rodadas (com 429, esperar o `Retry-After`); no uso normal o limite de 10 versões por objeto
+  mantém a lixeira pequena. Enquanto um pedido roda, confirmações e apagamentos do Hub nos objetos do lote podem
+  receber 409 `storage-busy` (repita).
 - **Avisos no app (recomendação):** `GET /spaces/:id` traz `storage: { quotaBytes, usedBytes, trashBytes }`. Avise o
   Gestor quando `usedBytes` passar de **80%** de `quotaBytes` e a lixeira (`trashBytes`) for parte relevante disso,
   oferecendo **"esvaziar a lixeira"** ou **"aumentar o espaço"** (`PUT /spaces/:id/storage-quota`); e avise que o

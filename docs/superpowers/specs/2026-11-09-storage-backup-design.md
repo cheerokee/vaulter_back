@@ -189,10 +189,14 @@ controles, mais os dados para o app avisar:
   downloads, que dão 404) e no S3 sai com `deleteVersion`. **Nunca** a versão viva de um objeto vivo; os delete
   markers dos objetos apagados ficam (o ciclo de vida os remove). Até **1000 versões por pedido**
   (`MAX_PURGE_BATCH_VERSIONS`) → `{ purgedVersions, purgedBytes, remainingVersions }`; o app repete enquanto
-  `remainingVersions > 0`. Auditado `space.backup.trash_emptied` (`spaceId`, `purgedVersions`, `purgedBytes`).
+  `remainingVersions > 0` (um pedido que não apaga nada responde 0). Cada pedido gasta o orçamento de reautenticação
+  compartilhado (5 por 15 min): até 5000 versões por 15 min por Gestor; o app explica que uma lixeira muito grande leva
+  várias rodadas. No S3, um `DeleteObjects` em lote (até 1000 versões por chamada), depois do COMMIT. Auditado
+  `space.backup.trash_emptied` (`spaceId`, `purgedVersions`, `purgedBytes`).
 - **Limite de versões antigas por objeto:** `MAX_TRASH_VERSIONS_PER_OBJECT = 10`. Quando uma confirmação cria uma
   versão nova, as versões substituídas do objeto além das 10 mais recentes (por `superseded_at`) são apagadas do mesmo
-  jeito. Objeto apagado guarda as versões os 30 dias inteiros (sem limite no apagar).
+  jeito (também quando a confirmação traz de volta um objeto apagado). Objeto apagado guarda as versões os 30 dias
+  inteiros (sem limite no apagar).
 - **Segurança (decisão do Claude):** travas na ordem de sempre (espaço FOR SHARE, objetos FOR UPDATE em ordem de id,
   `lock_timeout` do storage → 409 `storage-busy`). O índice é marcado `purged` (com a marca do diário
   `s3_write_started_at`) e confirmado **antes** dos `deleteVersion` no S3, que rodam depois do COMMIT: uma queda no

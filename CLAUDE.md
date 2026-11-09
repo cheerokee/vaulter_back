@@ -753,6 +753,9 @@ mesmo commit).
   (`STORAGE_LOCK_TIMEOUT_MS`, `uow.setLockTimeout`) para o resto da transação da intenção, da confirmação e do apagar:
   esperar mais que isso pelo espaço ou por um objeto = 409 `storage-busy` (55P03, `lockTimeoutAsBusy`), em vez de o
   pedido segurar uma conexão do pool (`DB_POOL_MAX_CONNECTIONS = 10` por instância, em `typeorm.options.ts`).
+  **Esvaziar a lixeira** trava o espaço FOR SHARE e até os objetos do lote (até 1000 versões) FOR UPDATE em ordem de id,
+  só pelas gravações no índice (o S3 vem depois do COMMIT): enquanto isso, confirmações e apagamentos do Hub nesses
+  objetos podem receber 409 `storage-busy` (repetível) e o que trava o espaço FOR UPDATE espera.
 - **Diário + reparo:** a marca `s3_write_started_at` é o instante (no **relógio do banco**) em que a tentativa mais
   recente de gravar no S3 por esta linha começou, gravado **antes** de qualquer gravação dela no S3 (o S3 é tocado
   nesse instante ou depois); cada nova tentativa **renova** a marca para o próprio instante, e marca nenhuma some no
@@ -767,8 +770,9 @@ mesmo commit).
   toque do objeto (marca mais antiga que a da tentativa), logo depois de um unit of work que rejeitou depois de gravar
   no S3 (inclusive COMMIT de resultado incerto: o que o COMMIT gravou é referenciado e fica) e na varredura (contexto
   `app.storage_reconcile`, policy `storage_reconcile_read` só das linhas marcadas; como toda confirmação deixa marca,
-  a varredura revisita cada objeto gravado na última janela). **Só o reparo e a lixeira (`BackupTrash`, versões
-  `purged`) usam `ObjectStore.deleteVersion`.**
+  a varredura revisita cada objeto gravado na última janela). **Só o reparo usa `ObjectStore.deleteVersion`; só a
+  lixeira (`BackupTrash`, versões `purged`) usa `ObjectStore.deleteVersions`** (S3 `DeleteObjects`, até 1000 por
+  chamada; nunca lança: devolve o que não saiu, e `NoSuchVersion`/`NoSuchKey` contam como apagado).
 - **Controle da lixeira** (spec §4.8, "Controle da lixeira"; decisão do Jonas de 2026-11-09): status `purged` em
   `storage_object_versions` (`purged_at`, relógio do banco; migration `StorageTrashPurge`), que sai do uso, das
   listagens e dos downloads (tudo filtra `committed`; o reparo a trata como não referenciada). (1) **Esvaziar**
@@ -777,12 +781,16 @@ mesmo commit).
   `current-auth-proof-invalid`) **antes de qualquer gravação** → no unit of work, espaço FOR SHARE, até 1000 versões da
   lixeira, objetos FOR UPDATE em ordem de id, `purged` (nunca a versão viva de um objeto vivo: no SQL e em
   `TrashRules.purgeable`), auditoria `space.backup.trash_emptied` (só se apagou algo) → `{ purgedVersions, purgedBytes,
-  remainingVersions }`; o app repete enquanto `remainingVersions > 0` (cada repetição gasta o orçamento de
-  reautenticação: 5 por 15 min = 5000 versões). Os delete markers dos objetos apagados ficam. (2) **Limite de 10
+  remainingVersions }`; o app repete enquanto `remainingVersions > 0`, e um pedido que não apagou nada responde
+  `remainingVersions: 0` (o laço sempre para). **Orçamento de reautenticação (decisão do controlador: a rota fica com
+  `@ThrottleReauth()`, regra do projeto para toda rota que confere a senha atual):** cada volta gasta uma das 5
+  tentativas por 15 min, então um Gestor apaga até **5000 versões por 15 min**; o app explica que uma lixeira muito
+  grande leva várias rodadas, e o limite de 10 versões por objeto mantém a lixeira pequena no uso normal. Os delete
+  markers dos objetos apagados ficam. (2) **Limite de 10
   versões antigas por objeto** na confirmação (`BackupTrash.capObject`, sob a trava do objeto, depois do
-  `markSuperseded`); o apagar não aplica limite. **Ordem índice → S3:** `markPurged` grava `purged` e renova a marca do
-  diário na mesma transação; os `deleteVersion` rodam **depois do COMMIT**, fora da trava (`removeFromBucket`, nunca
-  falha o pedido). Queda no meio = versão no bucket sem referência no índice, que a varredura (pela marca) ou o próximo
+  `markSuperseded`), inclusive quando a confirmação traz de volta um objeto apagado; o apagar não aplica limite. **Ordem índice → S3:** `markPurged` grava `purged` e renova a marca do
+  diário na mesma transação; o `DeleteObjects` em lote roda **depois do COMMIT**, fora da trava (`removeFromBucket`,
+  nunca falha o pedido; o que não saiu fica com a marca para a varredura). Queda no meio = versão no bucket sem referência no índice, que a varredura (pela marca) ou o próximo
   toque do objeto apagam; nunca o índice apontando para uma versão apagada. Fora da trava é seguro: a versão apagada
   nunca é a atual do S3. A listagem com `since` ainda mostra a lápide cuja última versão foi `purged` (sem versão).
   `GET /spaces/:id` traz `storage.trashBytes`; recomendação ao app (avisar o Gestor acima de 80% com lixeira

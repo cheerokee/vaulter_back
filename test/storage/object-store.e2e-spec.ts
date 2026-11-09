@@ -219,6 +219,38 @@ describe('ObjectStore (S3 / LocalStack)', () => {
     expect(await store.head(to)).toMatchObject({ versionId: v1.versionId });
   });
 
+  it('deleteVersions removes many versions of several keys in one batch; the current ones stay', async () => {
+    const base = prefix();
+    const a = `${base}/objects/${randomUUID()}`;
+    const b = `${base}/objects/${randomUUID()}`;
+    const up = `${base}/uploads/${randomUUID()}`;
+    await upload(store, up, randomBytes(20));
+    const a1 = await store.copy(up, a);
+    const a2 = await store.copy(up, a);
+    const a3 = await store.copy(up, a);
+    const b1 = await store.copy(up, b);
+    const { deleteMarkerVersionId: bMarker } = await store.deleteCurrent(b);
+
+    const out = await store.deleteVersions([
+      { key: a, versionId: a1.versionId },
+      { key: a, versionId: a2.versionId },
+      { key: b, versionId: b1.versionId },
+    ]);
+    expect(out).toEqual({ failed: [] });
+    expect(await store.listVersions(a)).toEqual([
+      { versionId: a3.versionId, isDeleteMarker: false },
+    ]);
+    expect(await store.head(a)).toMatchObject({ versionId: a3.versionId });
+    // The deleted object keeps only its delete marker.
+    expect(await store.listVersions(b)).toEqual([
+      { versionId: bMarker, isDeleteMarker: true },
+    ]);
+    // Again (the sweep or a retry got there first): idempotent, nothing failed.
+    expect(
+      await store.deleteVersions([{ key: a, versionId: a1.versionId }]),
+    ).toEqual({ failed: [] });
+  });
+
   it('listVersions returns every version and delete marker of exactly that key', async () => {
     const base = prefix();
     const objectId = randomUUID();
