@@ -75,14 +75,19 @@ export class BackupObjectTypeormRepository extends BackupObjectRepository {
   async save(object: BackupObject): Promise<void> {
     await runInOrganizationScope(this.dataSource, object.organizationId, (m) =>
       m.query(
+        // Relógio do banco NO MOMENTO da escrita (`clock_timestamp()`, não o início da transação): os casos de uso
+        // gravam o objeto depois de todo o trabalho no S3, então `updated_at` (o `since` da listagem) fica a
+        // milissegundos do COMMIT; a lápide usa o mesmo relógio da janela da lixeira.
         `UPDATE storage_objects
-              SET current_version_id = $3, deleted_at = $4, updated_at = now()
+              SET current_version_id = $3,
+                  deleted_at = CASE WHEN $4::boolean THEN COALESCE(deleted_at, clock_timestamp()) END,
+                  updated_at = clock_timestamp()
             WHERE id = $1 AND organization_id = $2`,
         [
           object.id,
           object.organizationId,
           object.currentVersionId,
-          object.deletedAt,
+          object.deletedAt !== null,
         ],
       ),
     );

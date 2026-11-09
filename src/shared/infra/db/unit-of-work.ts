@@ -145,6 +145,27 @@ export class UnitOfWork {
     await setTransactionContext(manager, { organizationId, userId, hubId });
   }
 
+  /**
+   * From now on, the active transaction may live at most `ms` more: past it the server terminates the connection
+   * (`transaction_timeout`, Postgres >= 17, counted from this call, idle time included) and the transaction never
+   * commits; the `run` rejects. Lasts until the end of the transaction (`set_config(..., true)`). For a tail of short
+   * writes whose time to COMMIT must be bounded. Requires an active unit of work.
+   */
+  async limitRemainingTime(ms: number): Promise<void> {
+    const manager = activeManager(this.dataSource);
+    if (!manager) {
+      throw new Error(
+        'UnitOfWork.limitRemainingTime requires an active unit of work (call it inside UnitOfWork.run).',
+      );
+    }
+    if (!Number.isSafeInteger(ms) || ms < 1) {
+      throw new Error(`limitRemainingTime: invalid ${ms}`);
+    }
+    await manager.query(`SELECT set_config('transaction_timeout', $1, true)`, [
+      String(ms),
+    ]);
+  }
+
   // Roda `work` com o contexto dado e restaura o anterior ao terminar (abre transação se não houver).
   withContext<T>(ctx: UnitOfWorkContext, work: () => Promise<T>): Promise<T> {
     return runWithContext(this.dataSource, ctx, work);

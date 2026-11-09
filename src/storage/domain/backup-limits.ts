@@ -16,3 +16,9 @@ export const UPLOAD_WINDOW_MS = 24 * 60 * 60 * 1000;
 export const TRASH_DAYS = 30;
 /** Biggest page of an index listing (a restoring hub lists the whole space). */
 export const MAX_LIST_LIMIT = 1000;
+/**
+ * Longest time from the index writes of a confirmation/delete (which stamp `storage_objects.updated_at` with the
+ * database clock, after all S3 work) to its COMMIT: past it the transaction is killed (`transaction_timeout`) and never
+ * commits. Bounds how far behind a committed `updated_at` can be, so the 1-hour `since` overlap of the listing holds.
+ */
+export const INDEX_TAIL_TIMEOUT_MS = 5 * 60 * 1000;

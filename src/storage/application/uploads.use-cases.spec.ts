@@ -255,6 +255,9 @@ function setup() {
     presignGet: vi.fn(),
   };
   const uow = {
+    limitRemainingTime: vi.fn(async (ms: number) => {
+      trace.push(`limit:${ms}`);
+    }),
     run: vi.fn(async <T>(work: () => Promise<T>) => {
       trace.push('run');
       const saved = {
@@ -529,6 +532,8 @@ describe('ConfirmUploadsUseCase', () => {
       `head:${second}`,
       'reconfirm',
       `copy:${OBJ_A}`,
+      // After every S3 write: from here to COMMIT the transaction lives at most 5 min (the `since` overlap holds).
+      `limit:${5 * 60_000}`,
       `saveVersion:${second}`,
       `superseded:${first}`,
       `saveObject:${OBJ_A}`,

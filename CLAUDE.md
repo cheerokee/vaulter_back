@@ -739,9 +739,13 @@ pelo que exportam; ninguém importa `storage`.
   padrão 100) → `{ items, nextCursor, asOf }`: `current` = vivos com a versão atual (com `since`, o que mudou desde
   então pelo `updated_at` do objeto, lápides com `currentVersion: null`); `trash` = apagados há menos de 30 dias com a
   última versão; `versions&objectId=` = versões guardadas (viva + lixeira), com `supersededAt` e `current`. Intenção
-  nunca confirmada não aparece. `asOf` = `now()` do banco na consulta; como o `updated_at` é o início da transação que
-  mudou o objeto (que pode ter copiado no S3 por minutos), o próximo `since` deve ter folga (`asOf` - 1 h) e o Hub
-  faz uma listagem completa periódica (mesmo limite da sincronização, veja Pendências). `POST
+  nunca confirmada não aparece. `asOf` = `now()` do banco na consulta; o próximo `since` é `asOf` - 1 h. **A folga é
+  garantida:** confirmar/apagar gravam o objeto (`updated_at`, `deleted_at`, e `superseded_at` da versão) com
+  `clock_timestamp()` **depois** de todo o trabalho no S3 e, antes dessas gravações, `uow.limitRemainingTime(
+  INDEX_TAIL_TIMEOUT_MS)` (5 min, `transaction_timeout` do Postgres 17+): a transação que não confirmar até lá é
+  derrubada e nunca entra (o reparo tira as cópias). Rede de segurança: o Hub faz uma **listagem completa diária**
+  (sem `since`) que **substitui** o estado local (o que não vier vivo é apagado localmente, como a sincronização
+  completa). `POST
   .../objects/:objectId/versions/:versionId/download` → `{ url, expiresAt }` (15 min, não revogável: quem perde o
   acesso guarda só a URL que já tinha); versão desconhecida, pendente, de outro objeto ou fora da lixeira: 404
   `version-not-found`.
@@ -781,6 +785,9 @@ pelo que exportam; ninguém importa `storage`.
     aninhado** — a transação fica abortada e o `run` externo rejeita com `25P02` (há uma sonda antes do COMMIT
     para isso não virar ROLLBACK silencioso).
   - Efeitos pós-commit (fila pg-boss, e-mail, chamadas externas) vão **depois** do `run`, não dentro.
+  - `uow.limitRemainingTime(ms)` (`transaction_timeout`, contado a partir da chamada, inclusive ocioso): passou, o
+    Postgres derruba a conexão e a transação nunca confirma (o `run` rejeita). Para limitar a cauda entre um carimbo
+    de relógio e o COMMIT (ex.: o `since` do backup).
   - Contexto do RLS: `uow.setContext({ organizationId?, userId?, hubId? })` grava `app.organization_id` /
     `app.user_id` / `app.hub_id` (Hub autenticado)
     (`set_config(..., true)`) até o fim da transação; fora de `run` lança erro. Para trocar só num trecho (ex.:
@@ -863,8 +870,10 @@ Os valores do `.env.example` para os segredos são **só de desenvolvimento**; p
   (o `REPEATABLE READ` só deixa cada página coerente). Opções: horizonte seguro (guardar `pg_current_xact_id()` numa
   coluna xid8 junto da versão e só servir linhas abaixo de `pg_snapshot_xmin(pg_current_snapshot())`) ou carimbo de
   versão no momento do commit. Mitigação até lá: sincronização completa periódica do Hub. O mesmo vale para o `since`
-  da listagem do backup (`updated_at` = início da transação): mitigado pela folga de 1 h e pela listagem completa
-  periódica.
+  da listagem do backup, mas ali a distância entre o carimbo (`clock_timestamp()`, depois do S3) e o COMMIT é limitada a
+  5 min (`limitRemainingTime`), dentro da folga de 1 h do `since`.
+- **Índice `storage_objects (space_id, updated_at)`** para o `since` da listagem do backup (hoje filtra sem índice, pelo
+  índice do espaço + PK); entra numa migration quando os espaços crescerem.
 - Exclusão de conta (LGPD) precisa revogar as sessões.
 - **Agendar `npm run storage:reconcile`** (1x por dia, fora da aplicação) até o pg-boss entrar; aí vira uma tarefa
   dele. Sem a varredura, um objeto que ninguém toca de novo depois de uma queda entre o S3 e o COMMIT pode ter a versão

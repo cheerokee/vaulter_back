@@ -21,11 +21,13 @@ export abstract class BackupObjectVersionRepository {
     objectId: string,
     uploader: BackupUploader,
   ): Promise<number>;
-  /** Marks the versions as superseded at `now` (only those not superseded yet): they go to the 30-day trash. */
+  /**
+   * Marks the versions as superseded (only those not superseded yet), on the database clock like the trash window:
+   * they go to the 30-day trash.
+   */
   abstract markSuperseded(
     orgId: string,
     versionIds: readonly string[],
-    now: Date,
   ): Promise<void>;
   /**
    * Usage of the space, in bytes: committed versions that are current or were superseded less than 30 days ago

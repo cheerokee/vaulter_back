@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { UnitOfWork } from '../../shared/infra/db/unit-of-work.js';
 import { objectKey, uploadKey } from '../domain/backup-keys.js';
+import { INDEX_TAIL_TIMEOUT_MS } from '../domain/backup-limits.js';
 import type { BackupObject } from '../domain/backup-object.js';
 import { BackupObjectRepository } from '../domain/backup-object.repository.js';
 import type { BackupObjectVersion } from '../domain/backup-object-version.js';
@@ -178,10 +179,14 @@ export class ConfirmUploadsUseCase {
           );
           version.commit(versionId, now);
         }
+        // Daqui ao COMMIT só gravações curtas no índice: o carimbo de `updated_at` do objeto (relógio do banco, no
+        // `save` abaixo) fica no máximo INDEX_TAIL_TIMEOUT_MS antes do COMMIT, ou a transação morre (o reparo tira as
+        // cópias); é o que garante a folga do `since` da listagem.
+        await this.uow.limitRemainingTime(INDEX_TAIL_TIMEOUT_MS);
         for (const version of toCommit) await this.versions.save(version);
         // A version committed and replaced in the same request goes to the trash too.
         if (superseded.length > 0) {
-          await this.versions.markSuperseded(orgId, superseded, now);
+          await this.versions.markSuperseded(orgId, superseded);
         }
         // As marcas NÃO são limpas aqui: uma cópia abortada de outra tentativa ainda pode chegar ao S3; só a
         // varredura por idade as limpa, depois de reparar o objeto.

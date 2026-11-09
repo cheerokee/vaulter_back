@@ -386,4 +386,26 @@ describe('UnitOfWork (e2e)', () => {
     expect(loaded.refreshTokenHash).toBe('h2');
     expect(loaded.revokedReason).toBe('logout');
   });
+
+  it('limitRemainingTime bounds the rest of the transaction (runtime role, idle time included): it never commits', async () => {
+    const email = `limit-${newId()}@x.com`;
+    await expect(
+      uow.run(async () => {
+        await users.create(makeUser(email));
+        await uow.limitRemainingTime(300);
+        await new Promise((r) => setTimeout(r, 600)); // idle in transaction (like an S3 call)
+        await currentManager(ds).query('SELECT 1');
+      }),
+    ).rejects.toThrow();
+    expect(await users.findByEmail(email)).toBeNull();
+    // The pool recovers: the next unit of work commits normally, with no limit left over.
+    await uow.run(async () => {
+      await users.create(makeUser(email));
+      await new Promise((r) => setTimeout(r, 400));
+    });
+    expect(await users.findByEmail(email)).not.toBeNull();
+    await expect(uow.limitRemainingTime(1000)).rejects.toThrow(
+      /requires an active unit of work/,
+    );
+  });
 });

@@ -300,9 +300,15 @@ objeto). O backend guarda só o índice (ids, tamanho, sha256 do blob, versão d
   `{ items: [{ objectId, deleted, deletedAt, currentVersion: { versionId, keyVersion, sizeBytes, sha256, uploadedAt } | null }], nextCursor, asOf }`.
   Sem `since`: só os objetos vivos. Com `since` (ISO 8601): o que mudou desde então, **inclusive apagados**
   (`deleted: true`, `currentVersion: null`: apague localmente). Siga `nextCursor` até `null`; guarde o `asOf` da
-  **primeira** página e use **`asOf` menos 1 hora** como o próximo `since` (o horário gravado é o do início da gravação,
-  que pode demorar); repetir um item é inofensivo. Faça uma listagem completa (sem `since`) de vez em quando, junto da
-  sincronização completa.
+  **primeira** página e use **`asOf` menos 1 hora** como o próximo `since`; repetir um item é inofensivo. A folga é
+  garantida: o backend carimba a mudança no relógio do banco depois de todo o trabalho no S3, e a transação que não
+  confirmar em até 5 min depois do carimbo é derrubada (nunca entra), então nenhuma mudança confirmada fica mais de
+  5 min "no passado".
+- **Listagem completa (substitui o estado local):** **uma vez por dia** (com jitter) e sempre que o Hub perder o
+  `since` (estado local perdido, ficou mais de 30 dias sem listar), liste tudo **sem `since`**: o resultado é o estado
+  vivo inteiro. Todo objeto local que **não** veio nela como vivo é tratado como **apagado** (vai para a lixeira local
+  do Hub), como na sincronização completa (`since=0`), que substitui o estado local. É a rede de segurança para
+  qualquer mudança perdida, inclusive apagamentos.
 - **Lixeira:** `include=trash` (apagados há menos de 30 dias, com a última versão em `currentVersion`) e
   `include=versions&objectId=<id>` (as versões guardadas do objeto, a mais antiga primeiro, com `supersededAt` e
   `current`). Restaurar da lixeira = baixar a versão e **reenviar** como versão nova (não existe "desapagar").

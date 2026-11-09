@@ -2,6 +2,7 @@ import { randomBytes } from 'node:crypto';
 import type { INestApplication } from '@nestjs/common';
 import type request from 'supertest';
 import { newId } from '../../src/shared/domain/id.js';
+import { ObjectStore } from '../../src/storage/application/ports/object-store.js';
 import {
   adminDataSource,
   createTestApp,
@@ -661,6 +662,152 @@ describe('storage downloads and trash (e2e)', () => {
       await userPost(rita.token, dl('nope', versionId)),
       422,
       'validation-failed',
+    );
+  }, 60_000);
+
+  it('since and trash page by cursor (limit=1): changes after asOf, tombstones included; the trash pages the deleted ones', async () => {
+    const space = await newSpace('Paged');
+    const base = `/spaces/${space.spaceId}/backup`;
+    const [a, b, c2, d] = [newId(), newId(), newId(), newId()].sort();
+    const v: Record<string, string> = {};
+    for (const id of [a!, b!, c2!, d!]) {
+      v[id] = await upload(space, id, randomBytes(40));
+    }
+    const asOf = (
+      await expectStatus(userGet(rita.token, `${base}/objects`), 200)
+    ).body.asOf as string;
+    // After asOf: b gets a new version, c and d are deleted; a does not change.
+    const b2 = await upload(space, b!, randomBytes(41), v[b!]!);
+    await expectStatus(
+      userPost(olivia.token, `${base}/objects/delete`, {
+        items: [
+          { objectId: c2!, replacesVersionId: v[c2!] },
+          { objectId: d!, replacesVersionId: v[d!] },
+        ],
+      }),
+      204,
+    );
+
+    const pages: ListedObject[][] = [];
+    let cursor: string | null = null;
+    do {
+      const res = await expectStatus(
+        userGet(rita.token, `${base}/objects`, {
+          since: asOf,
+          limit: 1,
+          ...(cursor ? { cursor } : {}),
+        }),
+        200,
+      );
+      pages.push(res.body.items as ListedObject[]);
+      cursor = res.body.nextCursor as string | null;
+    } while (cursor);
+    expect(pages.every((p) => p.length <= 1)).toBe(true);
+    expect(pages.flat()).toEqual([
+      expect.objectContaining({
+        objectId: b,
+        deleted: false,
+        currentVersion: expect.objectContaining({ versionId: b2 }),
+      }),
+      {
+        objectId: c2,
+        deleted: true,
+        deletedAt: expect.any(String),
+        currentVersion: null,
+      },
+      {
+        objectId: d,
+        deleted: true,
+        deletedAt: expect.any(String),
+        currentVersion: null,
+      },
+    ]);
+
+    const trash = await listAll<ListedObject>(
+      (q) => userGet(rita.token, `${base}/objects`, q),
+      { include: 'trash', limit: 1 },
+    );
+    expect(trash.map((o) => [o.objectId, o.currentVersion?.versionId])).toEqual(
+      [
+        [c2, v[c2!]],
+        [d, v[d!]],
+      ],
+    );
+    // `since` also filters the trash.
+    const trashSince = await expectStatus(
+      userGet(rita.token, `${base}/objects`, {
+        include: 'trash',
+        since: new Date(Date.now() + 60_000).toISOString(),
+      }),
+      200,
+    );
+    expect(trashSince.body.items).toEqual([]);
+  }, 60_000);
+
+  it('the object row is stamped with the database clock after the S3 work (updated_at, deleted_at), not at the transaction start', async () => {
+    const space = await newSpace('Clock');
+    const base = `/spaces/${space.spaceId}/backup`;
+    const objectId = newId();
+    const store = app.get(ObjectStore);
+    const copy = store.copy.bind(store);
+    let copiedAt = 0;
+    const spy = vi.spyOn(store, 'copy').mockImplementation(async (...args) => {
+      await new Promise((r) => setTimeout(r, 1500)); // a slow S3 copy inside the transaction
+      const out = await copy(...args);
+      copiedAt = Date.now();
+      return out;
+    });
+    let versionId: string;
+    try {
+      versionId = await upload(space, objectId, randomBytes(30));
+    } finally {
+      spy.mockRestore();
+    }
+    const admin = await adminDataSource();
+    const row = async () =>
+      (
+        (await admin.query(
+          `SELECT updated_at, deleted_at FROM storage_objects WHERE id = $1`,
+          [objectId],
+        )) as { updated_at: Date; deleted_at: Date | null }[]
+      )[0]!;
+    expect((await row()).updated_at.getTime()).toBeGreaterThanOrEqual(
+      copiedAt - 50,
+    );
+
+    const del = store.deleteCurrent.bind(store);
+    let deletedInS3At = 0;
+    const spyDel = vi
+      .spyOn(store, 'deleteCurrent')
+      .mockImplementation(async (...args) => {
+        await new Promise((r) => setTimeout(r, 1500));
+        const out = await del(...args);
+        deletedInS3At = Date.now();
+        return out;
+      });
+    try {
+      await expectStatus(
+        userPost(olivia.token, `${base}/objects/delete`, {
+          items: [{ objectId, replacesVersionId: versionId }],
+        }),
+        204,
+      );
+    } finally {
+      spyDel.mockRestore();
+    }
+    const after = await row();
+    expect(after.updated_at.getTime()).toBeGreaterThanOrEqual(
+      deletedInS3At - 50,
+    );
+    expect(after.deleted_at!.getTime()).toBeGreaterThanOrEqual(
+      deletedInS3At - 50,
+    );
+    const [ver] = (await admin.query(
+      `SELECT superseded_at FROM storage_object_versions WHERE id = $1`,
+      [versionId],
+    )) as { superseded_at: Date }[];
+    expect(ver!.superseded_at.getTime()).toBeGreaterThanOrEqual(
+      deletedInS3At - 50,
     );
   }, 60_000);
 });

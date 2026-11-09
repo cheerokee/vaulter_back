@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { UnitOfWork } from '../../shared/infra/db/unit-of-work.js';
 import { objectKey } from '../domain/backup-keys.js';
+import { INDEX_TAIL_TIMEOUT_MS } from '../domain/backup-limits.js';
 import type { BackupObject } from '../domain/backup-object.js';
 import { BackupObjectRepository } from '../domain/backup-object.repository.js';
 import { BackupObjectVersionRepository } from '../domain/backup-object-version.repository.js';
@@ -113,7 +114,10 @@ export class DeleteObjectsUseCase {
             objectKey(orgId, space.spaceId, object.id),
           );
         }
-        await this.versions.markSuperseded(orgId, superseded, now);
+        // Daqui ao COMMIT só gravações curtas no índice: o carimbo de `updated_at` (relógio do banco, abaixo) fica no
+        // máximo INDEX_TAIL_TIMEOUT_MS antes do COMMIT, ou a transação morre (garantia da folga do `since`).
+        await this.uow.limitRemainingTime(INDEX_TAIL_TIMEOUT_MS);
+        await this.versions.markSuperseded(orgId, superseded);
         // As marcas ficam: só a varredura por idade as limpa.
         for (const object of deleted) await this.objects.save(object);
       });

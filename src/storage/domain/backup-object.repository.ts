@@ -18,6 +18,9 @@ export abstract class BackupObjectRepository {
     spaceId: string,
     objectId: string,
   ): Promise<BackupObject | null>;
-  /** Writes the current version and the tombstone. */
+  /**
+   * Writes the current version and the tombstone, stamping `updated_at` (and a new tombstone's `deleted_at`) with the
+   * database clock at the time of the write. Call it after the S3 work, at the end of the unit of work.
+   */
   abstract save(object: BackupObject): Promise<void>;
 }

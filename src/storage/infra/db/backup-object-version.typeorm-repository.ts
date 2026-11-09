@@ -152,14 +152,13 @@ export class BackupObjectVersionTypeormRepository extends BackupObjectVersionRep
   async markSuperseded(
     orgId: string,
     versionIds: readonly string[],
-    now: Date,
   ): Promise<void> {
     if (versionIds.length === 0) return;
     await runInOrganizationScope(this.dataSource, orgId, (m) =>
       m.query(
-        `UPDATE storage_object_versions SET superseded_at = $3, updated_at = now()
+        `UPDATE storage_object_versions SET superseded_at = clock_timestamp(), updated_at = now()
           WHERE organization_id = $1 AND id = ANY($2::uuid[]) AND superseded_at IS NULL`,
-        [orgId, versionIds, now],
+        [orgId, versionIds],
       ),
     );
   }
