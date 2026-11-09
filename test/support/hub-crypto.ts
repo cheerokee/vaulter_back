@@ -92,3 +92,79 @@ export function sealRoomGrants(
     })),
   );
 }
+
+/** Space backup object format. See docs/crypto/space-backup.md. */
+export type BackupObjectContext = {
+  spaceId: string;
+  objectId: string;
+  keyVersion: number;
+};
+
+const BACKUP_FORMAT_VERSION = 1;
+const BACKUP_NONCE_BYTES = 24;
+
+function uuidBytes(uuid: string): Uint8Array {
+  const hex = uuid.replaceAll('-', '');
+  if (!/^[0-9a-fA-F]{32}$/.test(hex)) throw new Error('invalid uuid');
+  return Uint8Array.from(hex.match(/../g)!, (h) => parseInt(h, 16));
+}
+
+function backupAd(ctx: BackupObjectContext): Uint8Array {
+  const prefix = new TextEncoder().encode('space-object');
+  const ad = new Uint8Array(1 + prefix.length + 16 + 16 + 4);
+  ad[0] = BACKUP_FORMAT_VERSION;
+  ad.set(prefix, 1);
+  ad.set(uuidBytes(ctx.spaceId), 1 + prefix.length);
+  ad.set(uuidBytes(ctx.objectId), 1 + prefix.length + 16);
+  new DataView(ad.buffer).setUint32(1 + prefix.length + 32, ctx.keyVersion);
+  return ad;
+}
+
+/** `0x01 ‖ nonce(24) ‖ XChaCha20-Poly1305(plaintext, ad)`; random nonce unless given. */
+export async function sealBackupObject(
+  spaceKey: Uint8Array,
+  ctx: BackupObjectContext,
+  plaintext: Uint8Array,
+  nonce?: Uint8Array,
+): Promise<Uint8Array> {
+  const sodium = await getSodium();
+  const n = nonce ?? sodium.randombytes_buf(BACKUP_NONCE_BYTES);
+  const ct = sodium.crypto_aead_xchacha20poly1305_ietf_encrypt(
+    plaintext,
+    backupAd(ctx),
+    null,
+    n,
+    spaceKey,
+  );
+  const blob = new Uint8Array(1 + n.length + ct.length);
+  blob[0] = BACKUP_FORMAT_VERSION;
+  blob.set(n, 1);
+  blob.set(ct, 1 + n.length);
+  return blob;
+}
+
+/** Throws when the version byte, the key, the context or the bytes do not match. */
+export async function openBackupObject(
+  spaceKey: Uint8Array,
+  ctx: BackupObjectContext,
+  blob: Uint8Array,
+): Promise<Uint8Array> {
+  const sodium = await getSodium();
+  if (blob.length < 1 + BACKUP_NONCE_BYTES + 16)
+    throw new Error('backup object too short');
+  if (blob[0] !== BACKUP_FORMAT_VERSION)
+    throw new Error('unknown backup object version');
+  return sodium.crypto_aead_xchacha20poly1305_ietf_decrypt(
+    null,
+    blob.subarray(1 + BACKUP_NONCE_BYTES),
+    backupAd(ctx),
+    blob.subarray(1, 1 + BACKUP_NONCE_BYTES),
+    spaceKey,
+  );
+}
+
+/** Lowercase hex SHA-256 of the whole blob (what the backend stores and compares). */
+export async function sha256Hex(blob: Uint8Array): Promise<string> {
+  const sodium = await getSodium();
+  return sodium.to_hex(sodium.crypto_hash_sha256(blob));
+}
