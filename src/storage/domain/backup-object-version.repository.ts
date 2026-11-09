@@ -33,20 +33,43 @@ export abstract class BackupObjectVersionRepository {
    */
   abstract usedBytes(orgId: string, spaceId: string): Promise<number>;
 
-  // Diário das gravações no S3 (`s3_write_started_at`) e reparo do bucket.
+  // Diário das gravações no S3 (`s3_write_started_at`) e reparo do bucket. A marca é uma dica "talvez haja uma gravação
+  // no S3 que o índice não tem": gravada numa transação curta ANTES do unit of work que grava no S3 (nunca uma segunda
+  // conexão enquanto se segura outra), mantida se ele falhar, limpa só pelo commit que confirma aquela linha ou pela
+  // varredura (marcas antigas). Marcar não sobrescreve uma marca mais antiga (COALESCE): ela pode ser de uma tentativa
+  // que caiu depois de gravar no S3.
 
-  /**
-   * Marks that an S3 write (copy or delete marker) for these versions is about to start. Called through
-   * `UnitOfWork.detached` (autocommit) so the mark survives a rollback of the unit of work.
-   */
-  abstract markWriteStarted(
+  /** Marks the PENDING versions `versionIds` of the space (a confirmation is about to copy them). */
+  abstract markVersionsWriteStarted(
+    orgId: string,
+    spaceId: string,
+    versionIds: readonly string[],
+    at: Date,
+  ): Promise<void>;
+  /** Marks the live (committed, not superseded) version of each object of the space (a delete is about to start). */
+  abstract markObjectsWriteStarted(
+    orgId: string,
+    spaceId: string,
+    objectIds: readonly string[],
+    at: Date,
+  ): Promise<void>;
+  /** Whether a version of the object carries a mark older than `before` (another, earlier attempt). */
+  abstract hasWriteMarksBefore(
+    orgId: string,
+    objectId: string,
+    before: Date,
+  ): Promise<boolean>;
+  /** Clears the marks of these versions (their S3 write is now in the index). */
+  abstract clearVersionMarks(
     orgId: string,
     versionIds: readonly string[],
   ): Promise<void>;
-  /** Whether any version of the object still carries a write mark (an S3 write that may not be in the index). */
-  abstract hasWriteMarks(orgId: string, objectId: string): Promise<boolean>;
-  /** Clears every write mark of the object (its index state is now the truth). */
-  abstract clearWriteMarks(orgId: string, objectId: string): Promise<void>;
+  /** Clears the object's marks older than `before` (the sweep repaired it; fresher marks stay). */
+  abstract clearWriteMarks(
+    orgId: string,
+    objectId: string,
+    before: Date,
+  ): Promise<void>;
   /** S3 version ids referenced by the committed versions of the object (trash included). */
   abstract committedS3VersionIds(
     orgId: string,

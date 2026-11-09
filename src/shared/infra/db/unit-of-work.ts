@@ -145,14 +145,6 @@ export class UnitOfWork {
     await setTransactionContext(manager, { organizationId, userId, hubId });
   }
 
-  // Roda `work` FORA da transação ativa: o que os repositórios fizerem lá vai em autocommit (ou na própria transação
-  // de `run`/`withContext` chamados dentro), e fica gravado mesmo que a transação de fora seja desfeita. Para diários
-  // de efeitos externos (ex.: "a gravação no S3 começou"). Nunca grave aí uma linha que a transação de fora já travou:
-  // a outra conexão esperaria por ela para sempre.
-  detached<T>(work: () => Promise<T>): Promise<T> {
-    return ambient.exit(work);
-  }
-
   // Roda `work` com o contexto dado e restaura o anterior ao terminar (abre transação se não houver).
   withContext<T>(ctx: UnitOfWorkContext, work: () => Promise<T>): Promise<T> {
     return runWithContext(this.dataSource, ctx, work);

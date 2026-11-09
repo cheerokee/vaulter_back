@@ -13,12 +13,13 @@ import { StorageAccess, type StorageActor } from './storage-access.js';
 
 // Apagar objetos (spec storage-backup §4.2, "Apagar"), tudo ou nada por pedido, idempotente. Exige `memory.delete`:
 // na prática só uma pessoa Gestora do espaço (Sala nenhuma tem a permissão: o Hub com o próprio token recebe 404).
-// Com o espaço travado FOR SHARE (apagar não aumenta o uso), trava os objetos em ordem de id (reparando antes o que
-// tiver marca de uma gravação no S3 que não confirmou) e confere `replacesVersionId` contra a versão viva (409
-// `object-version-conflict`; apagar de novo com a mesma versão não faz nada). Depois: marca o diário (autocommit),
-// delete marker no S3 (a versão fica na lixeira 30 dias), lápide no objeto, `superseded_at` na versão e limpa as
-// marcas. Uma troca de chave pendente não impede apagar (nada novo é cifrado). Se o unit of work rejeitar depois do
-// S3, os objetos são reparados (`repair`): com a lápide confirmada os markers ficam; sem ela, saem.
+// O diário (marca na versão viva de cada objeto) é gravado ANTES, numa transação curta própria. Depois, com o espaço
+// travado FOR SHARE (apagar não aumenta o uso), trava os objetos em ordem de id (reparando antes o que tiver marca mais
+// antiga que a deste pedido) e confere `replacesVersionId` contra a versão viva (409 `object-version-conflict`;
+// apagar de novo com a mesma versão não faz nada). Então: delete marker no S3 (a versão fica na lixeira 30 dias),
+// lápide no objeto, `superseded_at` na versão e limpa as marcas destas versões. Uma troca de chave pendente não impede
+// apagar (nada novo é cifrado). Se o unit of work rejeitar depois do S3, os objetos são reparados (`repair`): com a
+// lápide confirmada os markers ficam; sem ela, saem (as marcas ficam para a varredura).
 @Injectable()
 export class DeleteObjectsUseCase {
   constructor(
@@ -38,6 +39,22 @@ export class DeleteObjectsUseCase {
   ): Promise<void> {
     BackupRules.assertDistinctObjects(items.map((i) => i.objectId));
     const writing: ObjectRef[] = [];
+    // Diário ANTES do unit of work (transação curta própria; veja ConfirmUploadsUseCase).
+    const markedAt = new Date();
+    await this.uow.run(async () => {
+      const space = await this.access.lock(
+        spaceId,
+        actor,
+        'memory.delete',
+        'share',
+      );
+      await this.versions.markObjectsWriteStarted(
+        space.organizationId,
+        space.spaceId,
+        items.map((i) => i.objectId),
+        markedAt,
+      );
+    });
     try {
       await this.uow.run(async () => {
         const space = await this.access.lock(
@@ -59,8 +76,10 @@ export class DeleteObjectsUseCase {
             i.objectId,
           );
           if (!object) throw objectVersionConflict(i.objectId, null);
-          if (await this.versions.hasWriteMarks(orgId, object.id)) {
-            await this.healer.heal(object, { clearMarks: false });
+          if (
+            await this.versions.hasWriteMarksBefore(orgId, object.id, markedAt)
+          ) {
+            await this.healer.heal(object);
           }
           const result = object.delete(i.replacesVersionId, now);
           if (result.outcome === 'deleted') {
@@ -70,9 +89,6 @@ export class DeleteObjectsUseCase {
         }
         if (deleted.length === 0) return;
 
-        await this.uow.detached(() =>
-          this.versions.markWriteStarted(orgId, superseded),
-        );
         for (const object of deleted) {
           writing.push({
             organizationId: orgId,
@@ -86,10 +102,8 @@ export class DeleteObjectsUseCase {
           );
         }
         await this.versions.markSuperseded(orgId, superseded, now);
-        for (const object of deleted) {
-          await this.objects.save(object);
-          await this.versions.clearWriteMarks(orgId, object.id);
-        }
+        for (const object of deleted) await this.objects.save(object);
+        await this.versions.clearVersionMarks(orgId, superseded);
       });
     } catch (error) {
       if (writing.length > 0) await this.healer.repair(writing);

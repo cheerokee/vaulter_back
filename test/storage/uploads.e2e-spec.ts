@@ -787,7 +787,8 @@ describe('storage uploads (e2e)', () => {
     expect(result).toEqual({ objects: 1, removedVersions: 1 });
     expect((await store.head(key))!.versionId).toBe(committedS3);
     const marked = await ds.query(
-      `SELECT 1 FROM storage_object_versions WHERE s3_write_started_at IS NOT NULL`,
+      `SELECT 1 FROM storage_object_versions WHERE object_id = $1 AND s3_write_started_at IS NOT NULL`,
+      [obj.objectId],
     );
     expect(marked).toHaveLength(0);
     // Nothing left to repair; the pending version can still be confirmed normally.
@@ -801,6 +802,50 @@ describe('storage uploads (e2e)', () => {
       }),
       200,
     );
+  });
+
+  it('the journal mark is written before the confirmation transaction and survives its rollback (runtime role, RLS)', async () => {
+    const space = await newSpace('Journal');
+    const hub = await roomHub(space, 'space_editor');
+    const obj = await blobFor(space);
+    const [it1] = (
+      await expectStatus(
+        hubPost(hub, `/hub/spaces/${space.spaceId}/uploads`, {
+          items: [obj.item],
+        }),
+        201,
+      )
+    ).body.items as Intent[];
+    const markOf = async (id: string) => {
+      const ds = await adminDataSource();
+      const rows = (await ds.query(
+        `SELECT s3_write_started_at FROM storage_object_versions WHERE id = $1`,
+        [id],
+      )) as { s3_write_started_at: Date | null }[];
+      return rows[0]!.s3_write_started_at;
+    };
+    expect(await markOf(it1!.uploadId)).toBeNull();
+
+    // Not uploaded yet: the confirmation's unit of work rolls back with 422, the mark (written before it) stays.
+    expectProblem(
+      await hubPost(hub, `/hub/spaces/${space.spaceId}/uploads/confirm`, {
+        uploadIds: [it1!.uploadId],
+      }),
+      422,
+      'upload-mismatch',
+    );
+    const first = await markOf(it1!.uploadId);
+    expect(first).toBeInstanceOf(Date);
+
+    // A retry keeps the OLDER mark (it may stand for an S3 write of the failed attempt) and the commit clears it.
+    await put(it1!, obj.blob);
+    await expectStatus(
+      hubPost(hub, `/hub/spaces/${space.spaceId}/uploads/confirm`, {
+        uploadIds: [it1!.uploadId],
+      }),
+      200,
+    );
+    expect(await markOf(it1!.uploadId)).toBeNull();
   });
 
   it('the index never has a name, type or path column: only ids, sizes, hashes, versions, uploader and dates', async () => {

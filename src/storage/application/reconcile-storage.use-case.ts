@@ -21,12 +21,12 @@ export class ReconcileStorageUseCase {
     now: Date = new Date(),
   ): Promise<{ objects: number; removedVersions: number }> {
     const age = input.olderThanMinutes ?? RECONCILE_DEFAULT_AGE_MINUTES;
-    const refs = await this.versions.staleWriteMarks(
-      new Date(now.getTime() - age * 60_000),
-    );
+    const before = new Date(now.getTime() - age * 60_000);
+    const refs = await this.versions.staleWriteMarks(before);
+    // Only marks older than `before` are cleared: a fresher one may belong to a request still in flight.
     return {
       objects: refs.length,
-      removedVersions: await this.healer.repair(refs),
+      removedVersions: await this.healer.repair(refs, before),
     };
   }
 }

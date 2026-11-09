@@ -714,17 +714,24 @@ pelo que exportam; ninguém importa `storage`.
   travas, para a ordem das versões no S3 ser a do índice. Trade-off aceito: enquanto um lote de confirmação roda (até
   100 cópias), redimensionar, trocar a chave, pôr/tirar membro, tirar da Sala e o gancho de saída da organização
   (todos `FOR UPDATE` no espaço) esperam o lote; confirmações e apagamentos do mesmo espaço correm juntos.
-- **Diário + reparo:** antes de gravar no S3, a confirmação/o apagar marcam `s3_write_started_at` nas versões (em
-  autocommit, `UnitOfWork.detached`: sobrevive ao rollback) e limpam a marca na transação que confirma. Marca que
-  sobra = a gravação pode ter ido ao S3 sem o índice. `BackupObjectHealer` (com a linha do objeto travada) apaga do
-  bucket toda versão/marker que nenhuma versão `committed` referencia (objeto apagado: só versões com dado, os markers
-  ficam). Roda: no próximo toque do objeto (confirmação/apagar com marca), logo depois de um unit of work que rejeitou
-  depois de gravar no S3 (inclusive COMMIT de resultado incerto: o que o COMMIT gravou é referenciado e fica), e na
-  varredura `npm run storage:reconcile` (marcas com mais de 60 min; contexto `app.storage_reconcile`, policy
-  `storage_reconcile_read` só das linhas marcadas). **Só o reparo usa `ObjectStore.deleteVersion`.**
+- **Diário + reparo:** a confirmação/o apagar gravam a marca `s3_write_started_at` nas versões numa **transação curta
+  própria, confirmada ANTES** do unit of work que grava no S3 (junto com a checagem de acesso; `COALESCE`: não
+  sobrescreve uma marca mais antiga), e o commit que confirma limpa só as marcas das próprias linhas. Marca que sobra =
+  a gravação pode ter ido ao S3 sem o índice. `BackupObjectHealer` (com a linha do objeto travada) apaga do bucket toda
+  versão/marker que nenhuma versão `committed` referencia (objeto apagado: só versões com dado, os markers ficam).
+  Roda: no próximo toque do objeto (marca mais antiga que a do pedido), logo depois de um unit of work que rejeitou
+  depois de gravar no S3 (inclusive COMMIT de resultado incerto: o que o COMMIT gravou é referenciado e fica; as marcas
+  ficam, porque uma cópia abortada ainda pode chegar) e na varredura `npm run storage:reconcile` (marcas com mais de
+  60 min, a única que limpa marcas alheias; contexto `app.storage_reconcile`, policy `storage_reconcile_read` só das
+  linhas marcadas). **Só o reparo usa `ObjectStore.deleteVersion`.**
+- **Nunca precisar de uma segunda conexão do pool enquanto se segura uma** (autocommit "por fora" de um `uow.run`
+  aberto): com o pool cheio de transações esperando travas, a espera pela conexão não tem fim e o Postgres não vê o
+  impasse. Grave antes, numa transação própria.
 - Confirmar só quem pediu a intenção (o mesmo Hub ou a mesma pessoa); outro: 404 `upload-not-found`.
 
 ## Banco de dados (TypeORM + migrations)
+- **Pool:** o do driver `pg` (máximo padrão 10 conexões) com `connectionTimeoutMillis` = `DB_POOL_CONNECTION_TIMEOUT_MS`
+  (10 s, em `typeorm.options.ts`): pool esgotado vira erro (500, transações desfeitas) em vez de travar a API.
 - **TypeORM 1.x** + `@nestjs/typeorm`, driver `pg`. Config de conexão em `src/database/typeorm.options.ts`,
   compartilhada entre a aplicação (`DatabaseModule`) e o CLI (`src/database/data-source.ts`). Variáveis do
   `.env` (`DB_*`) são carregadas pelo `ConfigModule` (app) e por `process.loadEnvFile` (CLI).

@@ -3,6 +3,13 @@ import { SnakeNamingStrategy } from '../shared/infra/db/snake-naming.strategy.js
 
 export type DatabaseRole = 'app' | 'migration';
 
+/**
+ * How long a query waits for a free pool connection before failing (pg's default is 0 = forever). With a wait-forever
+ * pool, code that needs a second connection while holding one (and all connections busy) hangs the whole API
+ * silently; with a timeout it becomes an error (500) and the transactions holding connections roll back.
+ */
+export const DB_POOL_CONNECTION_TIMEOUT_MS = 10_000;
+
 // Conexão compartilhada entre a aplicação Nest, o CLI de migrations (data-source.ts) e os testes.
 // - 'app': papel de runtime (DB_APP_*), sem superusuário e sem BYPASSRLS, para o RLS valer de verdade;
 // - 'migration': papel dono do banco (DB_*), usado por migrations, CLI e pelo setup dos testes.
@@ -19,5 +26,7 @@ export function typeOrmOptions(role: DatabaseRole): DataSourceOptions {
     // Schema só muda via migrations.
     namingStrategy: new SnakeNamingStrategy(),
     synchronize: false,
+    // Opções do pool do driver `pg` (máximo padrão: 10 conexões).
+    extra: { connectionTimeoutMillis: DB_POOL_CONNECTION_TIMEOUT_MS },
   };
 }

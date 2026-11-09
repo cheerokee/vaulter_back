@@ -35,12 +35,12 @@ export class BackupObjectHealer {
 
   /**
    * MUST run inside `UnitOfWork.run` with the object row locked `FOR UPDATE`. Returns how many S3 versions were
-   * removed. `clearMarks`: clear the object's write marks too (the repair is complete). The confirmation/delete path
-   * passes false — it clears them in its own commit and must not lock rows it will mark through `detached`.
+   * removed. `clearMarksBefore`: only the age-gated sweep clears marks (those older than it): right after a failure an
+   * aborted S3 request may still land server-side, so the mark must stay until the sweep looks again.
    */
   async heal(
     object: BackupObject,
-    options: { clearMarks: boolean },
+    options: { clearMarksBefore?: Date } = {},
   ): Promise<number> {
     const orgId = object.organizationId;
     const referenced = new Set(
@@ -55,8 +55,13 @@ export class BackupObjectHealer {
       await this.store.deleteVersion(key, v.versionId);
       removed++;
     }
-    if (options.clearMarks)
-      await this.versions.clearWriteMarks(orgId, object.id);
+    if (options.clearMarksBefore) {
+      await this.versions.clearWriteMarks(
+        orgId,
+        object.id,
+        options.clearMarksBefore,
+      );
+    }
     if (removed > 0) {
       this.logger.warn(
         { organizationId: orgId, objectId: object.id, removed },
@@ -67,10 +72,14 @@ export class BackupObjectHealer {
   }
 
   /**
-   * Repairs each object in its own unit of work (locks the row, waits for any writer), clearing the marks. Never
-   * throws: a failure is logged and the marks stay for the next sweep. Returns the removed S3 versions.
+   * Repairs each object in its own unit of work (locks the row, waits for any writer). Marks are cleared only when
+   * `clearMarksBefore` is given (the sweep). Never throws: a failure is logged and the marks stay for the next sweep.
+   * Returns the removed S3 versions.
    */
-  async repair(refs: readonly ObjectRef[]): Promise<number> {
+  async repair(
+    refs: readonly ObjectRef[],
+    clearMarksBefore?: Date,
+  ): Promise<number> {
     let removed = 0;
     for (const ref of refs) {
       try {
@@ -80,7 +89,7 @@ export class BackupObjectHealer {
             ref.spaceId,
             ref.objectId,
           );
-          return object ? this.heal(object, { clearMarks: true }) : 0;
+          return object ? this.heal(object, { clearMarksBefore }) : 0;
         });
       } catch (error) {
         this.logger.error(

@@ -182,40 +182,83 @@ export class BackupObjectVersionTypeormRepository extends BackupObjectVersionRep
     return byteCount(rows[0]?.used ?? '0');
   }
 
-  async markWriteStarted(
+  async markVersionsWriteStarted(
     orgId: string,
+    spaceId: string,
     versionIds: readonly string[],
+    at: Date,
   ): Promise<void> {
-    if (versionIds.length === 0) return;
+    const valid = versionIds.filter((id) => validate(id));
+    if (valid.length === 0) return;
     await runInOrganizationScope(this.dataSource, orgId, (m) =>
       m.query(
-        `UPDATE storage_object_versions SET s3_write_started_at = now()
-          WHERE organization_id = $1 AND id = ANY($2::uuid[])`,
-        [orgId, versionIds],
+        `UPDATE storage_object_versions SET s3_write_started_at = COALESCE(s3_write_started_at, $4)
+          WHERE organization_id = $1 AND space_id = $2 AND id = ANY($3::uuid[]) AND status = 'pending'`,
+        [orgId, spaceId, valid, at],
       ),
     );
   }
 
-  async hasWriteMarks(orgId: string, objectId: string): Promise<boolean> {
+  async markObjectsWriteStarted(
+    orgId: string,
+    spaceId: string,
+    objectIds: readonly string[],
+    at: Date,
+  ): Promise<void> {
+    const valid = objectIds.filter((id) => validate(id));
+    if (valid.length === 0) return;
+    await runInOrganizationScope(this.dataSource, orgId, (m) =>
+      m.query(
+        `UPDATE storage_object_versions SET s3_write_started_at = COALESCE(s3_write_started_at, $4)
+          WHERE organization_id = $1 AND space_id = $2 AND object_id = ANY($3::uuid[])
+            AND status = 'committed' AND superseded_at IS NULL`,
+        [orgId, spaceId, valid, at],
+      ),
+    );
+  }
+
+  async hasWriteMarksBefore(
+    orgId: string,
+    objectId: string,
+    before: Date,
+  ): Promise<boolean> {
     const rows: unknown[] = await runInOrganizationScope(
       this.dataSource,
       orgId,
       (m) =>
         m.query(
           `SELECT 1 FROM storage_object_versions
-            WHERE organization_id = $1 AND object_id = $2 AND s3_write_started_at IS NOT NULL LIMIT 1`,
-          [orgId, objectId],
+            WHERE organization_id = $1 AND object_id = $2 AND s3_write_started_at < $3 LIMIT 1`,
+          [orgId, objectId, before],
         ),
     );
     return rows.length > 0;
   }
 
-  async clearWriteMarks(orgId: string, objectId: string): Promise<void> {
+  async clearVersionMarks(
+    orgId: string,
+    versionIds: readonly string[],
+  ): Promise<void> {
+    if (versionIds.length === 0) return;
     await runInOrganizationScope(this.dataSource, orgId, (m) =>
       m.query(
         `UPDATE storage_object_versions SET s3_write_started_at = NULL
-          WHERE organization_id = $1 AND object_id = $2 AND s3_write_started_at IS NOT NULL`,
-        [orgId, objectId],
+          WHERE organization_id = $1 AND id = ANY($2::uuid[]) AND s3_write_started_at IS NOT NULL`,
+        [orgId, versionIds],
+      ),
+    );
+  }
+
+  async clearWriteMarks(
+    orgId: string,
+    objectId: string,
+    before: Date,
+  ): Promise<void> {
+    await runInOrganizationScope(this.dataSource, orgId, (m) =>
+      m.query(
+        `UPDATE storage_object_versions SET s3_write_started_at = NULL
+          WHERE organization_id = $1 AND object_id = $2 AND s3_write_started_at < $3`,
+        [orgId, objectId, before],
       ),
     );
   }
