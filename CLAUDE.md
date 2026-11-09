@@ -771,8 +771,9 @@ mesmo commit).
   `clock_timestamp()` **depois** de todo o trabalho no S3 e, antes dessas gravações, `uow.limitRemainingTime(
   INDEX_TAIL_TIMEOUT_MS)` (5 min, `transaction_timeout` do Postgres 17+): a transação que não confirmar até lá é
   derrubada e nunca entra (o reparo tira as cópias). Rede de segurança: o Hub faz uma **listagem completa diária**
-  (sem `since`) que **substitui** o estado local (o que não vier vivo é apagado localmente, como a sincronização
-  completa). `POST
+  (sem `since`) que **substitui** o estado local, mas só apaga localmente o que ele já viu confirmado (tem um
+  `versionId`) e não veio vivo; o que ainda não subiu (fila da troca de chave, envio em andamento, cópia de conflito)
+  nunca é apagado por uma listagem. `POST
   .../objects/:objectId/versions/:versionId/download` → `{ url, expiresAt }` (15 min, não revogável: quem perde o
   acesso guarda só a URL que já tinha); versão desconhecida, pendente, de outro objeto ou fora da lixeira: 404
   `version-not-found`.
@@ -930,7 +931,10 @@ Os valores do `.env.example` para os segredos são **só de desenvolvimento**; p
   está pendente); visitante em Hub alheio (pessoa de outra organização usando o Hub); configuração inicial do Hub por
   Bluetooth e idioma; rota de download em lote (hoje uma URL por versão); limpeza física do índice
   (`storage_objects`/`storage_object_versions` depois da lixeira; o runtime não tem `DELETE`); aviso de franquia perto
-  do fim (notificação); endpoint S3 público configurável para dispositivos reais em dev.
+  do fim (notificação); endpoint S3 público configurável para dispositivos reais em dev. **Decisão do Jonas: ação de
+  esvaziar a lixeira do espaço (Gestor) e/ou limite de versões antigas por objeto** — hoje a lixeira conta no uso por
+  30 dias, e um arquivo grande reenviado com frequência enche o espaço e para o backup (a orientação ao Hub em
+  `docs/hubs/hub-lifecycle.md` é não reenviar o que não mudou, usar pedaços imutáveis e manter o manifesto pequeno).
 - Exclusão de conta (LGPD) precisa revogar as sessões.
 - **Agendar `npm run storage:reconcile`** (1x por dia, fora da aplicação) até o pg-boss entrar; aí vira uma tarefa
   dele. Sem a varredura, um objeto que ninguém toca de novo depois de uma queda entre o S3 e o COMMIT pode ter a versão

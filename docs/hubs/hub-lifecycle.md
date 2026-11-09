@@ -285,6 +285,12 @@ objeto). O backend guarda só o índice (ids, tamanho, sha256 do blob, versão d
   uploadedAt }] }`. `versionId` = `uploadId`; guarde-o como a versão atual do objeto.
 - **Apagar:** `POST .../objects/delete` `{ items: [{ objectId, replacesVersionId }] }` → 204 (o objeto fica 30 dias na
   lixeira).
+- **Não reenvie o que não mudou.** Toda versão substituída e todo objeto apagado ficam **30 dias na lixeira e contam no
+  uso do espaço**: um arquivo grande reenviado com frequência enche o espaço sozinho (um manifesto de 10 MB a cada 5 min
+  são ~86 GB por mês) e o backup para (422 `space-storage-full`). Por isso: compare o `sha256` com o da versão atual
+  antes de enviar e pule o que não mudou; conteúdo que muda sempre (conversas, eventos, índice) vai em **pedaços
+  imutáveis** ou deltas (objeto novo por pedaço, nunca o arquivo inteiro de novo); o manifesto fica **pequeno** (só
+  referências aos pedaços).
 - **Erros:** troca de chave pendente → 409 `space-key-rotation-required` (guarde as mudanças numa **fila local** e envie
   depois que um membro trocar a chave pelo app); versão da chave antiga → 409 `space-key-version-stale` (cifre de novo com
   a versão atual); outro Hub gravou antes → 409 `object-version-conflict` (com `currentVersionId`; resolva, por exemplo,
@@ -308,9 +314,12 @@ objeto). O backend guarda só o índice (ids, tamanho, sha256 do blob, versão d
   5 min "no passado".
 - **Listagem completa (substitui o estado local):** **uma vez por dia** (com jitter) e sempre que o Hub perder o
   `since` (estado local perdido, ficou mais de 30 dias sem listar), liste tudo **sem `since`**: o resultado é o estado
-  vivo inteiro. Todo objeto local que **não** veio nela como vivo é tratado como **apagado** (vai para a lixeira local
-  do Hub), como na sincronização completa (`since=0`), que substitui o estado local. É a rede de segurança para
-  qualquer mudança perdida, inclusive apagamentos.
+  vivo inteiro. Só é tratado como **apagado** (vai para a lixeira local do Hub) o objeto local que o Hub **já viu
+  confirmado** no backup (guarda um `versionId` dele: confirmou o envio ou recebeu numa listagem) e que **não** veio
+  nela como vivo. **Nunca apague por uma listagem o que ainda não subiu:** a fila local da troca de chave pendente,
+  envios em andamento (intenção feita, confirmação não), cópias de conflito ainda não enviadas e qualquer objeto sem
+  `versionId` confirmado ficam como estão e seguem na fila de envio. É a rede de segurança para qualquer mudança
+  perdida, inclusive apagamentos.
 - **Lixeira:** `include=trash` (apagados há menos de 30 dias, com a última versão em `currentVersion`) e
   `include=versions&objectId=<id>` (as versões guardadas do objeto, a mais antiga primeiro, com `supersededAt` e
   `current`). Restaurar da lixeira = baixar a versão e **reenviar** como versão nova (não existe "desapagar").
