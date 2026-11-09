@@ -1,5 +1,9 @@
 import type { OrgRoleKey } from '../../domain/membership.js';
-import type { HubLinkPolicy, Organization } from '../../domain/organization.js';
+import type {
+  HubLinkPolicy,
+  Organization,
+  PlatformAppointment,
+} from '../../domain/organization.js';
 
 export type OrganizationView = {
   id: string;
@@ -9,6 +13,14 @@ export type OrganizationView = {
   allowRoomSpaces: boolean;
   plan: string;
   recoveryPublicKey: string | null;
+  /** Last registration/replacement of the kit (the app shows who/when before rewrapping to a new kit). */
+  recoveryKeyChangedAt: Date | null;
+  recoveryKeyChangedByUserId: string | null;
+  /**
+   * Latest platform appointment while it is relevant (until `protectedUntil` + 30 days), else null: the app warns
+   * every member while it is present.
+   */
+  platformAppointment: PlatformAppointment | null;
   /** The caller's organization role. */
   roleKey: OrgRoleKey;
   createdAt: Date;
@@ -18,6 +30,7 @@ export type OrganizationView = {
 export function toOrganizationView(
   org: Organization,
   roleKey: OrgRoleKey,
+  now: Date,
 ): OrganizationView {
   if (!org.createdAt) {
     throw new Error('Organization without createdAt cannot be viewed');
@@ -30,6 +43,9 @@ export function toOrganizationView(
     allowRoomSpaces: org.allowRoomSpaces,
     plan: org.plan,
     recoveryPublicKey: org.recoveryPublicKey,
+    recoveryKeyChangedAt: org.recoveryKeyChangedAt,
+    recoveryKeyChangedByUserId: org.recoveryKeyChangedByUserId,
+    platformAppointment: org.platformAppointmentNotice(now),
     roleKey,
     createdAt: org.createdAt,
     // Recém-criada (ainda sem o valor do banco): igual à criação.

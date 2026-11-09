@@ -1,5 +1,9 @@
 import { DomainValidationError } from '../../shared/domain/errors.js';
-import { Organization } from './organization.js';
+import {
+  Organization,
+  PLATFORM_APPOINTMENT_NOTICE_DAYS,
+  PLATFORM_APPOINTMENT_PROTECTION_DAYS,
+} from './organization.js';
 import { assertRecoveryPublicKey } from './recovery-key.js';
 
 const now = new Date('2026-10-25T10:00:00Z');
@@ -78,19 +82,112 @@ describe('Organization', () => {
     );
   });
 
-  it('registers the recovery key, then replaces it', () => {
+  it('registers the recovery key, then replaces it, recording who changed it and when', () => {
     const org = Organization.create({ name: 'A', now });
-    expect(org.setRecoveryKey(key)).toBe('registered');
+    expect(org.recoveryKeyChangedAt).toBeNull();
+    expect(org.recoveryKeyChangedByUserId).toBeNull();
+    expect(org.setRecoveryKey(key, { userId: 'u1', now })).toBe('registered');
     expect(org.recoveryPublicKey).toBe(key);
-    expect(org.setRecoveryKey(key2)).toBe('replaced');
+    expect(org.recoveryKeyChangedAt).toEqual(now);
+    expect(org.recoveryKeyChangedByUserId).toBe('u1');
+    const later = new Date(now.getTime() + 60_000);
+    expect(org.setRecoveryKey(key2, { userId: 'u2', now: later })).toBe(
+      'replaced',
+    );
     expect(org.recoveryPublicKey).toBe(key2);
+    expect(org.recoveryKeyChangedAt).toEqual(later);
+    expect(org.recoveryKeyChangedByUserId).toBe('u2');
   });
 
-  it('keeps the old key when the new one is invalid', () => {
+  it('keeps the old key (and who changed it) when the new one is invalid', () => {
     const org = Organization.create({ name: 'A', now });
-    org.setRecoveryKey(key);
-    expect(() => org.setRecoveryKey('xx')).toThrow(DomainValidationError);
+    org.setRecoveryKey(key, { userId: 'u1', now });
+    expect(() =>
+      org.setRecoveryKey('xx', { userId: 'u2', now: new Date() }),
+    ).toThrow(DomainValidationError);
     expect(org.recoveryPublicKey).toBe(key);
+    expect(org.recoveryKeyChangedByUserId).toBe('u1');
+    expect(org.recoveryKeyChangedAt).toEqual(now);
+  });
+});
+
+describe('Organization protection after a platform appointment', () => {
+  const DAY = 24 * 60 * 60 * 1000;
+  const plus = (d: Date, ms: number) => new Date(d.getTime() + ms);
+
+  it('is never under protection without an appointment', () => {
+    const org = Organization.create({ name: 'A', now });
+    expect(org.platformAppointment).toBeNull();
+    expect(org.isUnderProtection(now)).toBe(false);
+    expect(() => org.assertNotUnderProtection(now)).not.toThrow();
+    expect(org.platformAppointmentNotice(now)).toBeNull();
+  });
+
+  it(`records the appointment with a ${PLATFORM_APPOINTMENT_PROTECTION_DAYS}-day window`, () => {
+    expect(PLATFORM_APPOINTMENT_PROTECTION_DAYS).toBe(7);
+    const org = Organization.create({ name: 'A', now });
+    org.recordPlatformAppointment('u9', now);
+    expect(org.platformAppointment).toEqual({
+      appointedUserId: 'u9',
+      appointedAt: now,
+      protectedUntil: plus(now, 7 * DAY),
+    });
+  });
+
+  it('blocks before protectedUntil and allows at and after it', () => {
+    const org = Organization.create({ name: 'A', now });
+    org.recordPlatformAppointment('u9', now);
+    const until = plus(now, 7 * DAY);
+    for (const t of [now, plus(now, DAY), plus(until, -1)]) {
+      expect(org.isUnderProtection(t)).toBe(true);
+      const err = (() => {
+        try {
+          org.assertNotUnderProtection(t);
+        } catch (e) {
+          return e;
+        }
+      })();
+      expect(err).toBeInstanceOf(DomainValidationError);
+      expect(err).toMatchObject({
+        code: 'organization-under-protection',
+        details: { protectedUntil: until.toISOString() },
+      });
+    }
+    for (const t of [until, plus(until, 1), plus(until, 30 * DAY)]) {
+      expect(org.isUnderProtection(t)).toBe(false);
+      expect(() => org.assertNotUnderProtection(t)).not.toThrow();
+    }
+  });
+
+  it('a new appointment restarts the window (overwrites the three fields)', () => {
+    const org = Organization.create({ name: 'A', now });
+    org.recordPlatformAppointment('u9', now);
+    const later = plus(now, 6 * DAY);
+    org.recordPlatformAppointment('u8', later);
+    expect(org.platformAppointment).toEqual({
+      appointedUserId: 'u8',
+      appointedAt: later,
+      protectedUntil: plus(later, 7 * DAY),
+    });
+    expect(org.isUnderProtection(plus(now, 8 * DAY))).toBe(true);
+  });
+
+  it(`the notice stays visible until protectedUntil + ${PLATFORM_APPOINTMENT_NOTICE_DAYS} days, then is null`, () => {
+    expect(PLATFORM_APPOINTMENT_NOTICE_DAYS).toBe(30);
+    const org = Organization.create({ name: 'A', now });
+    org.recordPlatformAppointment('u9', now);
+    const until = plus(now, 7 * DAY);
+    const end = plus(until, 30 * DAY);
+    expect(org.platformAppointmentNotice(now)).toEqual(org.platformAppointment);
+    expect(org.platformAppointmentNotice(until)).toEqual(
+      org.platformAppointment,
+    );
+    expect(org.platformAppointmentNotice(plus(end, -1))).toEqual(
+      org.platformAppointment,
+    );
+    expect(org.platformAppointmentNotice(end)).toBeNull();
+    // the stored appointment itself is kept (history)
+    expect(org.platformAppointment).not.toBeNull();
   });
 });
 
@@ -111,6 +208,9 @@ describe('Organization derived flags', () => {
       allowRoomSpaces: true,
       plan: 'free',
       recoveryPublicKey: null,
+      recoveryKeyChangedAt: null,
+      recoveryKeyChangedByUserId: null,
+      platformAppointment: null,
     };
     expect(() =>
       Organization.restore(

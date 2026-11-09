@@ -11,6 +11,17 @@ export function organizationResponse(v: OrganizationView) {
     allowRoomSpaces: v.allowRoomSpaces,
     plan: v.plan,
     recoveryPublicKey: v.recoveryPublicKey,
+    recoveryKeyChangedAt: v.recoveryKeyChangedAt
+      ? v.recoveryKeyChangedAt.toISOString()
+      : null,
+    recoveryKeyChangedByUserId: v.recoveryKeyChangedByUserId,
+    platformAppointment: v.platformAppointment
+      ? {
+          appointedUserId: v.platformAppointment.appointedUserId,
+          appointedAt: v.platformAppointment.appointedAt.toISOString(),
+          protectedUntil: v.platformAppointment.protectedUntil.toISOString(),
+        }
+      : null,
     roleKey: v.roleKey,
     createdAt: v.createdAt.toISOString(),
     updatedAt: v.updatedAt.toISOString(),

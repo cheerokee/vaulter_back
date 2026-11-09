@@ -14,6 +14,16 @@ import type { HubLinkPolicy } from '../../domain/organization.js';
   'ck_organizations_personal_owner',
   `"is_personal" = ("personal_owner_user_id" IS NOT NULL)`,
 )
+// Janela de proteção depois de um admin nomeado pela plataforma: os três campos andam juntos (uma nomeação nova
+// sobrescreve os três). Troca do kit: quando e quem andam juntos.
+@Check(
+  'ck_organizations_platform_appointment',
+  `("platform_appointed_user_id" IS NULL) = ("platform_appointed_at" IS NULL) AND ("platform_appointed_at" IS NULL) = ("protected_until" IS NULL)`,
+)
+@Check(
+  'ck_organizations_recovery_key_changed',
+  `("recovery_key_changed_at" IS NULL) = ("recovery_key_changed_by_user_id" IS NULL)`,
+)
 @Index('ix_organizations_sync_version', ['syncVersion'])
 @Index('uq_organizations_personal_owner', ['personalOwnerUserId'], {
   unique: true,
@@ -38,6 +48,21 @@ export class OrganizationTypeormEntity extends SyncableTypeormEntity {
   @Column({ type: 'text', nullable: true })
   recoveryPublicKey!: string | null;
 
+  @Column({ type: 'timestamptz', nullable: true })
+  recoveryKeyChangedAt!: Date | null;
+
+  @Column({ type: 'uuid', nullable: true })
+  recoveryKeyChangedByUserId!: string | null;
+
+  @Column({ type: 'uuid', nullable: true })
+  platformAppointedUserId!: string | null;
+
+  @Column({ type: 'timestamptz', nullable: true })
+  platformAppointedAt!: Date | null;
+
+  @Column({ type: 'timestamptz', nullable: true })
+  protectedUntil!: Date | null;
+
   @Column({ type: 'uuid', nullable: true })
   personalOwnerUserId!: string | null;
 
@@ -48,4 +73,18 @@ export class OrganizationTypeormEntity extends SyncableTypeormEntity {
     foreignKeyConstraintName: 'fk_organizations_personal_owner',
   })
   personalOwner?: { id: string };
+
+  @ManyToOne('UserTypeormEntity')
+  @JoinColumn({
+    name: 'recovery_key_changed_by_user_id',
+    foreignKeyConstraintName: 'fk_organizations_recovery_key_changed_by',
+  })
+  recoveryKeyChangedBy?: { id: string };
+
+  @ManyToOne('UserTypeormEntity')
+  @JoinColumn({
+    name: 'platform_appointed_user_id',
+    foreignKeyConstraintName: 'fk_organizations_platform_appointed_user',
+  })
+  platformAppointedUser?: { id: string };
 }

@@ -9,7 +9,7 @@ import {
   toOrganizationView,
   type OrganizationView,
 } from './dto/organization-view.js';
-import { loadOrganization } from './load-organization.js';
+import { lockOrganization } from './load-organization.js';
 import { OrganizationAccess } from './organization-access.js';
 
 export type SetRecoveryKeyInput = {
@@ -21,7 +21,10 @@ export type SetRecoveryKeyInput = {
 // 1. formato da chave (barato, 422 sem gastar o Argon2);
 // 2. permissão (não membro 404, membro comum 403), também sem gastar o Argon2;
 // 3. reautenticação (`current-auth-proof-invalid`), FORA da transação, para não segurar conexão no Argon2;
-// 4. na transação: permissão de novo (pode ter mudado no meio), grava e audita.
+// 4. na transação: permissão de novo (pode ter mudado no meio), lê a organização travada (FOR NO KEY UPDATE: a
+//    nomeação pela plataforma grava a janela de proteção na mesma linha), confere a proteção, grava e audita.
+// Janela de proteção depois de um admin nomeado pela plataforma: ninguém registra nem troca o kit (422
+// `organization-under-protection`, com `protectedUntil`). Grava quem trocou e quando (o app avisa os membros).
 // A auditoria não leva metadata: a chave é pública, mas não é preciso copiá-la; a prova nunca entra.
 @Injectable()
 export class SetRecoveryKeyUseCase {
@@ -51,15 +54,20 @@ export class SetRecoveryKeyUseCase {
         actor.userId,
         'org.members.manage',
       );
-      const org = await loadOrganization(this.orgs, orgId);
-      const outcome = org.setRecoveryKey(input.recoveryPublicKey);
+      const now = new Date();
+      const org = await lockOrganization(this.orgs, orgId);
+      org.assertNotUnderProtection(now);
+      const outcome = org.setRecoveryKey(input.recoveryPublicKey, {
+        userId: actor.userId,
+        now,
+      });
       await this.orgs.save(org);
       await this.audit.record({
         organizationId: orgId,
         userId: actor.userId,
         action: `organization.recovery_key.${outcome}`,
       });
-      return toOrganizationView(org, membership.roleKey);
+      return toOrganizationView(org, membership.roleKey, now);
     });
   }
 }

@@ -5,6 +5,23 @@ import { assertRecoveryPublicKey } from './recovery-key.js';
 export const HUB_LINK_POLICIES = ['any_member_hub', 'admin_approved'] as const;
 export type HubLinkPolicy = (typeof HUB_LINK_POLICIES)[number];
 
+/**
+ * Protection window after a platform-appointed admin (decisão do Jonas, 09/11/2026): while it lasts nobody in the
+ * organization replaces/registers the recovery kit or removes a member, so a single platform operator (or someone
+ * they promote) cannot take over the spaces through the kit.
+ */
+export const PLATFORM_APPOINTMENT_PROTECTION_DAYS = 7;
+/** How long after the window the appointment is still shown to members (the app keeps warning about it). */
+export const PLATFORM_APPOINTMENT_NOTICE_DAYS = 30;
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+export type PlatformAppointment = {
+  appointedUserId: string;
+  appointedAt: Date;
+  protectedUntil: Date;
+};
+
 export type OrganizationProps = {
   name: string;
   isPersonal: boolean;
@@ -14,6 +31,11 @@ export type OrganizationProps = {
   allowRoomSpaces: boolean;
   plan: string;
   recoveryPublicKey: string | null;
+  /** When and by whom the recovery kit was last registered or replaced (the app warns members before rewrapping). */
+  recoveryKeyChangedAt: Date | null;
+  recoveryKeyChangedByUserId: string | null;
+  /** Latest platform appointment (overwritten by a new one); null if never. */
+  platformAppointment: PlatformAppointment | null;
   createdAt?: Date;
   updatedAt?: Date;
 };
@@ -40,6 +62,9 @@ export class Organization extends Entity<OrganizationProps> {
       allowRoomSpaces: true,
       plan: 'free',
       recoveryPublicKey: null,
+      recoveryKeyChangedAt: null,
+      recoveryKeyChangedByUserId: null,
+      platformAppointment: null,
       createdAt: input.now,
     });
   }
@@ -57,6 +82,9 @@ export class Organization extends Entity<OrganizationProps> {
       allowRoomSpaces: true,
       plan: 'free',
       recoveryPublicKey: null,
+      recoveryKeyChangedAt: null,
+      recoveryKeyChangedByUserId: null,
+      platformAppointment: null,
       createdAt: input.now,
     });
   }
@@ -66,6 +94,14 @@ export class Organization extends Entity<OrganizationProps> {
     if (props.isPersonal !== (props.personalOwnerUserId !== null)) {
       throw new Error(
         `Organization ${id} is inconsistent: isPersonal and personalOwnerUserId disagree.`,
+      );
+    }
+    if (
+      (props.recoveryKeyChangedAt === null) !==
+      (props.recoveryKeyChangedByUserId === null)
+    ) {
+      throw new Error(
+        `Organization ${id} is inconsistent: recoveryKeyChangedAt and recoveryKeyChangedByUserId disagree.`,
       );
     }
     return new Organization(props, id);
@@ -96,12 +132,64 @@ export class Organization extends Entity<OrganizationProps> {
     this.props = { ...this.props, allowRoomSpaces: allow };
   }
 
-  /** Registers the first key or replaces the current one; validates before touching state. */
-  setRecoveryKey(publicKey: string): 'registered' | 'replaced' {
+  /**
+   * Registers the first key or replaces the current one, recording who and when; validates before touching state.
+   * The protection window is the caller's check (`assertNotUnderProtection`), so the rule reads in the use case.
+   */
+  setRecoveryKey(
+    publicKey: string,
+    by: { userId: string; now: Date },
+  ): 'registered' | 'replaced' {
     const key = assertRecoveryPublicKey(publicKey);
     const outcome = this.props.recoveryPublicKey ? 'replaced' : 'registered';
-    this.props = { ...this.props, recoveryPublicKey: key };
+    this.props = {
+      ...this.props,
+      recoveryPublicKey: key,
+      recoveryKeyChangedAt: by.now,
+      recoveryKeyChangedByUserId: by.userId,
+    };
     return outcome;
+  }
+
+  /** A platform-appointed admin: (re)starts the protection window; a new appointment overwrites the previous one. */
+  recordPlatformAppointment(userId: string, now: Date): void {
+    this.props = {
+      ...this.props,
+      platformAppointment: {
+        appointedUserId: userId,
+        appointedAt: now,
+        protectedUntil: new Date(
+          now.getTime() + PLATFORM_APPOINTMENT_PROTECTION_DAYS * DAY_MS,
+        ),
+      },
+    };
+  }
+
+  isUnderProtection(now: Date): boolean {
+    const until = this.props.platformAppointment?.protectedUntil;
+    return until !== undefined && now.getTime() < until.getTime();
+  }
+
+  /** 422 `organization-under-protection` (with `protectedUntil`) while the window lasts; no early lift. */
+  assertNotUnderProtection(now: Date): void {
+    const appointment = this.props.platformAppointment;
+    if (appointment && this.isUnderProtection(now)) {
+      throw new DomainValidationError(
+        'organization-under-protection',
+        'The organization is under protection after a platform-appointed admin: the recovery key cannot change and members cannot be removed until protectedUntil.',
+        { protectedUntil: appointment.protectedUntil.toISOString() },
+      );
+    }
+  }
+
+  /** The appointment members see: until `PLATFORM_APPOINTMENT_NOTICE_DAYS` after the window ends, then null. */
+  platformAppointmentNotice(now: Date): PlatformAppointment | null {
+    const appointment = this.props.platformAppointment;
+    if (!appointment) return null;
+    const visibleUntil =
+      appointment.protectedUntil.getTime() +
+      PLATFORM_APPOINTMENT_NOTICE_DAYS * DAY_MS;
+    return now.getTime() < visibleUntil ? { ...appointment } : null;
   }
 
   isPersonalOwner(userId: string): boolean {
@@ -125,6 +213,17 @@ export class Organization extends Entity<OrganizationProps> {
   }
   get recoveryPublicKey(): string | null {
     return this.props.recoveryPublicKey;
+  }
+  get recoveryKeyChangedAt(): Date | null {
+    return this.props.recoveryKeyChangedAt;
+  }
+  get recoveryKeyChangedByUserId(): string | null {
+    return this.props.recoveryKeyChangedByUserId;
+  }
+  get platformAppointment(): PlatformAppointment | null {
+    return this.props.platformAppointment
+      ? { ...this.props.platformAppointment }
+      : null;
   }
   get hubLinkPolicy(): HubLinkPolicy {
     return this.props.hubLinkPolicy;

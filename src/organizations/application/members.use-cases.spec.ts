@@ -357,6 +357,44 @@ describe('RemoveMemberUseCase', () => {
     ).rejects.toMatchObject({ code: 'organization-not-found' });
     expectNoLockTaken();
   });
+
+  it('under protection (platform appointment): 422 organization-under-protection after the locked re-check, nothing written', async () => {
+    const org = makeOrganization();
+    org.recordPlatformAppointment(ADMIN2, NOW);
+    kit.setOrganization(org);
+    kit.members.set(ADMIN2, 'org_admin');
+    // the appointee and any other admin alike
+    for (const who of [ADMIN2, ADMIN]) {
+      const err = await useCase()
+        .execute(actor(who), ORG_ID, MEMBER)
+        .catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(DomainValidationError);
+      expect(err).toMatchObject({
+        code: 'organization-under-protection',
+        details: {
+          protectedUntil: org.platformAppointment!.protectedUntil.toISOString(),
+        },
+      });
+    }
+    expectLockFirst();
+    expect(m.memberships.remove).not.toHaveBeenCalled();
+    expect(m.memberRemovedHooks.run).not.toHaveBeenCalled();
+    expect(m.invitations.revokePendingCreatedBy).not.toHaveBeenCalled();
+    expect(m.auditRepo.append).not.toHaveBeenCalled();
+
+    vi.setSystemTime(org.platformAppointment!.protectedUntil);
+    await useCase().execute(actor(ADMIN), ORG_ID, MEMBER);
+    expect(m.memberships.remove).toHaveBeenCalledWith(ORG_ID, MEMBER);
+  });
+
+  it('a plain member still gets 403 (not the protection error) while under protection', async () => {
+    const org = makeOrganization();
+    org.recordPlatformAppointment(ADMIN, NOW);
+    kit.setOrganization(org);
+    await expect(
+      useCase().execute(actor(MEMBER), ORG_ID, ADMIN),
+    ).rejects.toBeInstanceOf(PermissionDeniedError);
+  });
 });
 
 describe('LeaveOrganizationUseCase', () => {
@@ -371,6 +409,14 @@ describe('LeaveOrganizationUseCase', () => {
       d.invitations,
       d.memberRemovedHooks,
     );
+
+  it('leaving is still allowed under protection', async () => {
+    const org = makeOrganization();
+    org.recordPlatformAppointment(ADMIN, NOW);
+    kit.setOrganization(org);
+    await useCase().execute(actor(MEMBER), ORG_ID);
+    expect(m.memberships.remove).toHaveBeenCalledWith(ORG_ID, MEMBER);
+  });
 
   it('a member leaves and member.left is audited', async () => {
     await useCase().execute(actor(MEMBER), ORG_ID);

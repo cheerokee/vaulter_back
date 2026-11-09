@@ -7,6 +7,7 @@ import {
   makeKit,
   makeOrganization,
 } from '../../../test/support/organizations-kit.js';
+import type { Organization } from '../domain/organization.js';
 import type { AuditActor } from '../../shared/application/audit-actor.js';
 import {
   ConflictError,
@@ -139,6 +140,47 @@ describe('OrganizationAdministration', () => {
       ).resolves.toEqual({ joined: false });
       expect(kit.mocks.roles.assignOrgRole).not.toHaveBeenCalled();
       expect(kit.audited()).toEqual([]);
+      expect(kit.mocks.orgs.lockForUpdate).not.toHaveBeenCalled();
+      expect(kit.mocks.orgs.save).not.toHaveBeenCalled();
+    });
+
+    it('an appointment that writes starts the protection window, saved under the organization lock after the admin lock', async () => {
+      await admin().appointAdmin(ORG_ID, MEMBER, PLATFORM, NOW);
+      const t = kit.trace;
+      expect(t.indexOf('roles.lockOrgAdmins')).toBeLessThan(
+        t.indexOf('orgs.lockForUpdate'),
+      );
+      expect(t.indexOf('orgs.lockForUpdate')).toBeLessThan(
+        t.indexOf('orgs.save'),
+      );
+      const saved = kit.mocks.orgs.save.mock.calls[0]![0] as Organization;
+      expect(saved.platformAppointment).toEqual({
+        appointedUserId: MEMBER,
+        appointedAt: NOW,
+        protectedUntil: new Date(NOW.getTime() + 7 * 24 * 60 * 60 * 1000),
+      });
+    });
+
+    it('a registered non-member appointed also starts the window', async () => {
+      await admin().appointAdmin(ORG_ID, STRANGER, PLATFORM, NOW);
+      const saved = kit.mocks.orgs.save.mock.calls[0]![0] as Organization;
+      expect(saved.platformAppointment?.appointedUserId).toBe(STRANGER);
+    });
+
+    it('re-appointing an existing admin does not restart the window; a new appointment does', async () => {
+      const first = new Date(NOW.getTime() - 3 * 24 * 60 * 60 * 1000);
+      const org = makeOrganization();
+      org.recordPlatformAppointment(ADMIN, first);
+      kit.setOrganization(org);
+      await admin().appointAdmin(ORG_ID, ADMIN, PLATFORM, NOW);
+      expect(kit.mocks.orgs.save).not.toHaveBeenCalled();
+      expect(org.platformAppointment?.appointedAt).toEqual(first);
+
+      await admin().appointAdmin(ORG_ID, MEMBER, PLATFORM, NOW);
+      expect(org.platformAppointment).toMatchObject({
+        appointedUserId: MEMBER,
+        appointedAt: NOW,
+      });
     });
 
     it('a personal organization is refused (422 personal-organization-protected)', async () => {

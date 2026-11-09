@@ -27,7 +27,7 @@ export class RemoveMemberUseCase {
 
   execute(actor: Actor, orgId: string, userId: string): Promise<void> {
     return this.uow.run(async () => {
-      const { target, ctx } = await lockMembershipContext(
+      const { target, organization, ctx } = await lockMembershipContext(
         {
           access: this.access,
           orgs: this.orgs,
@@ -38,10 +38,13 @@ export class RemoveMemberUseCase {
         userId,
         { userId: actor.userId, permission: 'org.members.manage' },
       );
+      const now = new Date();
+      // Janela de proteção depois de um admin nomeado pela plataforma: ninguém remove membro (422). A nomeação trava
+      // os mesmos org_admin (lockMembershipContext), então a organização lida aqui já tem a janela confirmada.
+      organization.assertNotUnderProtection(now);
       MembershipRules.assertCanRemove(target, ctx);
       // Lápide no vínculo e na atribuição de papel da organização.
       await this.memberships.remove(orgId, userId);
-      const now = new Date();
       // Módulos dependentes (ex.: espaços) reagem à saída, na mesma transação: se um falhar, nada é removido.
       await this.memberRemovedHooks.run({
         organizationId: orgId,

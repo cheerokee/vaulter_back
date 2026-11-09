@@ -19,9 +19,10 @@ export class ListMyOrganizationsUseCase {
     page: CursorPageRequest,
   ): Promise<CursorPage<OrganizationView>> {
     const result = await this.orgs.listForUser(actor.userId, page);
+    const now = new Date();
     return {
       items: result.items.map((i) =>
-        toOrganizationView(i.organization, i.roleKey),
+        toOrganizationView(i.organization, i.roleKey, now),
       ),
       nextCursor: result.nextCursor,
     };

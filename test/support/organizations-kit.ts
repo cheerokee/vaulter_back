@@ -44,6 +44,9 @@ export function makeOrganization(
       allowRoomSpaces: true,
       plan: 'free',
       recoveryPublicKey: null,
+      recoveryKeyChangedAt: null,
+      recoveryKeyChangedByUserId: null,
+      platformAppointment: null,
       createdAt: new Date('2026-10-01T00:00:00Z'),
       updatedAt: new Date('2026-10-02T00:00:00Z'),
       ...overrides,
@@ -95,6 +98,7 @@ export function makeKit() {
     create: vi.fn(),
     save: vi.fn(),
     findById: vi.fn(),
+    lockForUpdate: vi.fn(),
     findPersonalOf: vi.fn(),
     listForUser: vi.fn(),
   };
@@ -157,6 +161,10 @@ export function makeKit() {
     trace.length = 0;
     orgs.findById.mockImplementation(async (id: string) => {
       tag('orgs.findById');
+      return id === ORG_ID ? organization : null;
+    });
+    orgs.lockForUpdate.mockImplementation(async (id: string) => {
+      tag('orgs.lockForUpdate');
       return id === ORG_ID ? organization : null;
     });
     orgs.save.mockImplementation(async () => tag('orgs.save'));

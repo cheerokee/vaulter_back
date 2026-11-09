@@ -28,7 +28,7 @@ export class CreateOrganizationUseCase {
     const now = new Date();
     const org = Organization.create({ name: input.name, now });
     await this.found(org, actor.userId, now);
-    return toOrganizationView(org, 'org_admin');
+    return toOrganizationView(org, 'org_admin', now);
   }
 
   /** Personal organization of a new account (registration hook): owner = admin, `personal_owner_user_id`. */

@@ -78,6 +78,9 @@ describe('CreateOrganizationUseCase', () => {
       allowRoomSpaces: true,
       plan: 'free',
       recoveryPublicKey: null,
+      recoveryKeyChangedAt: null,
+      recoveryKeyChangedByUserId: null,
+      platformAppointment: null,
       roleKey: 'org_admin',
       createdAt: NOW,
       updatedAt: NOW,
@@ -297,5 +300,114 @@ describe('SetRecoveryKeyUseCase', () => {
     ).rejects.toBeInstanceOf(NotFoundError);
     expect(m.verifier.verify).not.toHaveBeenCalled();
     expect(m.orgs.save).not.toHaveBeenCalled();
+  });
+
+  it('records who changed the kit and when, reading the organization FOR UPDATE after the permission re-check', async () => {
+    const out = await useCase().execute(actor(ADMIN), ORG_ID, {
+      recoveryPublicKey: KEY,
+      currentAuthProof: PROOF,
+    });
+    const saved = m.orgs.save.mock.calls[0]![0] as Organization;
+    expect(saved.recoveryKeyChangedAt).toEqual(NOW);
+    expect(saved.recoveryKeyChangedByUserId).toBe(ADMIN);
+    expect(out).toMatchObject({
+      recoveryKeyChangedAt: NOW,
+      recoveryKeyChangedByUserId: ADMIN,
+    });
+    const inside = kit.trace.filter((t) => !t.endsWith('@out'));
+    expect(inside.indexOf('roles.permissionsOf')).toBeLessThan(
+      inside.indexOf('orgs.lockForUpdate'),
+    );
+    expect(inside.indexOf('orgs.lockForUpdate')).toBeLessThan(
+      inside.indexOf('orgs.save'),
+    );
+    expect(m.orgs.findById).not.toHaveBeenCalled();
+  });
+
+  it('under protection (platform appointment): 422 organization-under-protection for every admin, nothing written', async () => {
+    const org = makeOrganization({ recoveryPublicKey: KEY });
+    org.recordPlatformAppointment(MEMBER, new Date(NOW.getTime() - 1000));
+    kit.setOrganization(org);
+    const err = await useCase()
+      .execute(actor(ADMIN), ORG_ID, {
+        recoveryPublicKey: KEY2,
+        currentAuthProof: PROOF,
+      })
+      .catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(DomainValidationError);
+    expect(err).toMatchObject({
+      code: 'organization-under-protection',
+      details: {
+        protectedUntil: org.platformAppointment!.protectedUntil.toISOString(),
+      },
+    });
+    // the order stays format -> permission -> reauth -> transaction
+    expect(m.verifier.verify).toHaveBeenCalled();
+    expect(m.orgs.save).not.toHaveBeenCalled();
+    expect(m.auditRepo.append).not.toHaveBeenCalled();
+    expect(org.recoveryPublicKey).toBe(KEY);
+  });
+
+  it('registering the first key is refused too while under protection; allowed once the window is over', async () => {
+    const org = makeOrganization();
+    org.recordPlatformAppointment(MEMBER, NOW);
+    kit.setOrganization(org);
+    const input = { recoveryPublicKey: KEY, currentAuthProof: PROOF };
+    await expect(
+      useCase().execute(actor(ADMIN), ORG_ID, input),
+    ).rejects.toMatchObject({ code: 'organization-under-protection' });
+    vi.setSystemTime(org.platformAppointment!.protectedUntil);
+    await expect(
+      useCase().execute(actor(ADMIN), ORG_ID, input),
+    ).resolves.toMatchObject({ recoveryPublicKey: KEY });
+  });
+});
+
+describe('organization view (app warning data)', () => {
+  const DAY = 24 * 60 * 60 * 1000;
+  const getUseCase = () => new GetOrganizationUseCase(d.access, d.orgs);
+
+  it('nothing changed: null kit change and null appointment', async () => {
+    await expect(
+      getUseCase().execute(actor(MEMBER), ORG_ID),
+    ).resolves.toMatchObject({
+      recoveryKeyChangedAt: null,
+      recoveryKeyChangedByUserId: null,
+      platformAppointment: null,
+    });
+  });
+
+  it('shows the kit change and the appointment to any member, until protectedUntil + 30 days', async () => {
+    const at = new Date(NOW.getTime() - 2 * DAY);
+    const org = makeOrganization({
+      recoveryPublicKey: KEY,
+      recoveryKeyChangedAt: at,
+      recoveryKeyChangedByUserId: ADMIN,
+    });
+    org.recordPlatformAppointment(ADMIN, at);
+    kit.setOrganization(org);
+    const appointment = {
+      appointedUserId: ADMIN,
+      appointedAt: at,
+      protectedUntil: new Date(at.getTime() + 7 * DAY),
+    };
+    await expect(
+      getUseCase().execute(actor(MEMBER), ORG_ID),
+    ).resolves.toMatchObject({
+      recoveryKeyChangedAt: at,
+      recoveryKeyChangedByUserId: ADMIN,
+      platformAppointment: appointment,
+    });
+    vi.setSystemTime(new Date(at.getTime() + 37 * DAY - 1));
+    await expect(
+      getUseCase().execute(actor(MEMBER), ORG_ID),
+    ).resolves.toMatchObject({ platformAppointment: appointment });
+    vi.setSystemTime(new Date(at.getTime() + 37 * DAY));
+    await expect(
+      getUseCase().execute(actor(MEMBER), ORG_ID),
+    ).resolves.toMatchObject({
+      platformAppointment: null,
+      recoveryKeyChangedByUserId: ADMIN,
+    });
   });
 });

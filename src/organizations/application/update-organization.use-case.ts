@@ -8,7 +8,7 @@ import {
   toOrganizationView,
   type OrganizationView,
 } from './dto/organization-view.js';
-import { loadOrganization } from './load-organization.js';
+import { lockOrganization } from './load-organization.js';
 import { OrganizationAccess } from './organization-access.js';
 
 export type UpdateOrganizationInput = {
@@ -37,7 +37,8 @@ export class UpdateOrganizationUseCase {
         actor.userId,
         'org.members.manage',
       );
-      const org = await loadOrganization(this.orgs, orgId);
+      // Travada: o save grava a linha inteira e não pode sobrescrever o kit ou a janela de proteção gravados no meio.
+      const org = await lockOrganization(this.orgs, orgId);
       const fields: string[] = [];
       if (input.name !== undefined) {
         org.rename(input.name);
@@ -61,7 +62,7 @@ export class UpdateOrganizationUseCase {
           metadata: { fields },
         });
       }
-      return toOrganizationView(org, membership.roleKey);
+      return toOrganizationView(org, membership.roleKey, new Date());
     });
   }
 }

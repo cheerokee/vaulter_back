@@ -7,7 +7,18 @@ export async function loadOrganization(
   orgs: OrganizationRepository,
   orgId: string,
 ): Promise<Organization> {
-  const org = await orgs.findById(orgId);
+  return orFound(await orgs.findById(orgId));
+}
+
+/** Same, with the row locked until the end of the unit of work (read-modify-write of the organization row). */
+export async function lockOrganization(
+  orgs: OrganizationRepository,
+  orgId: string,
+): Promise<Organization> {
+  return orFound(await orgs.lockForUpdate(orgId));
+}
+
+function orFound(org: Organization | null): Organization {
   if (!org) {
     throw new NotFoundError(
       'organization-not-found',

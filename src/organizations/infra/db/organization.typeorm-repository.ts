@@ -7,7 +7,10 @@ import {
   type CursorPageRequest,
 } from '../../../shared/domain/pagination.js';
 import { runInOrganizationScope } from '../../../shared/infra/db/organization-scope.js';
-import { runWithContext } from '../../../shared/infra/db/unit-of-work.js';
+import {
+  currentManager,
+  runWithContext,
+} from '../../../shared/infra/db/unit-of-work.js';
 import type { OrgRoleKey } from '../../domain/membership.js';
 import type { Organization } from '../../domain/organization.js';
 import {
@@ -52,6 +55,22 @@ export class OrganizationTypeormRepository extends OrganizationRepository {
     const row = await runInOrganizationScope(this.dataSource, orgId, (m) =>
       m.getRepository(OrganizationTypeormEntity).findOne({
         where: { id: orgId },
+      }),
+    );
+    return row ? OrganizationMapper.toDomain(row) : null;
+  }
+
+  // O lock passa do savepoint do contexto para a transação de fora e vale até o fim do UnitOfWork.run.
+  async lockForUpdate(orgId: string): Promise<Organization | null> {
+    if (!currentManager(this.dataSource).queryRunner?.isTransactionActive) {
+      throw new Error(
+        'OrganizationRepository.lockForUpdate requires an active unit of work (call it inside UnitOfWork.run).',
+      );
+    }
+    const row = await runInOrganizationScope(this.dataSource, orgId, (m) =>
+      m.getRepository(OrganizationTypeormEntity).findOne({
+        where: { id: orgId },
+        lock: { mode: 'for_no_key_update' },
       }),
     );
     return row ? OrganizationMapper.toDomain(row) : null;

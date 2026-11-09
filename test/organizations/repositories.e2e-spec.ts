@@ -336,7 +336,10 @@ describe('organizations repositories (e2e, app role)', () => {
       await orgs.create(org);
       org.rename('Acme 2');
       org.setHubLinkPolicy('admin_approved');
-      org.setRecoveryKey(b64(32));
+      const ana = await makeUser('ana@x.com');
+      const changedAt = new Date(now.getTime() + 1000);
+      org.setRecoveryKey(b64(32), { userId: ana, now: changedAt });
+      org.recordPlatformAppointment(ana, changedAt);
       await orgs.save(org);
       const found = await orgs.findById(org.id);
       expect(found).toMatchObject({
@@ -347,7 +350,33 @@ describe('organizations repositories (e2e, app role)', () => {
         isPersonal: false,
         personalOwnerUserId: null,
         recoveryPublicKey: b64(32),
+        recoveryKeyChangedAt: changedAt,
+        recoveryKeyChangedByUserId: ana,
+        platformAppointment: org.platformAppointment,
       });
+      // locked read: only inside a unit of work, same data
+      await expect(orgs.lockForUpdate(org.id)).rejects.toThrow(
+        /requires an active unit of work/,
+      );
+      await expect(
+        uow.run(() => orgs.lockForUpdate(org.id)),
+      ).resolves.toMatchObject({
+        id: org.id,
+        platformAppointment: org.platformAppointment,
+      });
+      // the three appointment columns go together (CHECK)
+      await expect(
+        admin.query(
+          `UPDATE organizations SET protected_until = NULL WHERE id = $1`,
+          [org.id],
+        ),
+      ).rejects.toThrow(/ck_organizations_platform_appointment/);
+      await expect(
+        admin.query(
+          `UPDATE organizations SET recovery_key_changed_by_user_id = NULL WHERE id = $1`,
+          [org.id],
+        ),
+      ).rejects.toThrow(/ck_organizations_recovery_key_changed/);
       expect(found!.createdAt!.toISOString()).toBe(now.toISOString());
       const [{ sync_version }] = (await admin.query(
         `SELECT sync_version FROM organizations WHERE id = $1`,
