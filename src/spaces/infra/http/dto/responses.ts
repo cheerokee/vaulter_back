@@ -36,6 +36,9 @@ export function spaceResponse(v: SpaceView | SpaceDetailsView) {
           storage: {
             quotaBytes: v.storage.quotaBytes,
             usedBytes: v.storage.usedBytes,
+            ...(v.storage.trashBytes !== undefined
+              ? { trashBytes: v.storage.trashBytes }
+              : {}),
           },
         }
       : {}),

@@ -7,13 +7,17 @@ import type { UnitOfWork } from '../../shared/infra/db/unit-of-work.js';
 import { QueryFailedError } from 'typeorm';
 import { BackupObject } from '../domain/backup-object.js';
 import type { BackupObjectRepository } from '../domain/backup-object.repository.js';
-import { BackupObjectVersion } from '../domain/backup-object-version.js';
+import {
+  BackupObjectVersion,
+  type PurgedVersion,
+} from '../domain/backup-object-version.js';
 import type { BackupObjectVersionRepository } from '../domain/backup-object-version.repository.js';
 import {
   MAX_CONFIRM_BATCH_BYTES,
   MAX_OBJECT_BYTES,
 } from '../domain/backup-limits.js';
 import { BackupObjectHealer } from './backup-object-healer.js';
+import { BackupTrash } from './backup-trash.js';
 import { ConfirmUploadsUseCase } from './confirm-uploads.use-case.js';
 import { DeleteObjectsUseCase } from './delete-objects.use-case.js';
 import type { ObjectStore } from './ports/object-store.js';
@@ -128,7 +132,43 @@ function setup() {
     }),
     markSuperseded: vi.fn(async (_o: string, ids: readonly string[]) => {
       trace.push(`superseded:${ids.join(',')}`);
+      for (const id of ids) {
+        const v = versions.get(id);
+        if (v && !v.supersededAt) {
+          versions.set(id, withChanges(v, { supersededAt: dbNow() }));
+        }
+      }
     }),
+    supersededInTrash: vi.fn(async (_o: string, objectId: string) => {
+      trace.push(`trashOf:${objectId}`);
+      return [...versions.values()]
+        .filter(
+          (v) =>
+            v.objectId === objectId &&
+            v.status === 'committed' &&
+            v.supersededAt !== null,
+        )
+        .map((v) => ({ id: v.id, supersededAt: v.supersededAt! }));
+    }),
+    markPurged: vi.fn(
+      async (_o: string, _s: string, ids: readonly string[]) => {
+        trace.push(`purge:${ids.join(',')}`);
+        const out: PurgedVersion[] = [];
+        for (const id of ids) {
+          const v = versions.get(id);
+          if (v?.status !== 'committed' || !v.supersededAt) continue;
+          versions.set(id, withChanges(v, { status: 'purged' }));
+          marks.set(id, dbNow());
+          out.push({
+            id,
+            objectId: v.objectId,
+            s3VersionId: v.s3VersionId!,
+            sizeBytes: v.sizeBytes,
+          });
+        }
+        return out;
+      },
+    ),
     usedBytes: vi.fn(async () => {
       trace.push('usedBytes');
       return usedBytes;
@@ -300,6 +340,7 @@ function setup() {
     storeDep,
     uowDep,
   );
+  const trash = new BackupTrash(versionRepoDep, storeDep);
   const accessDep = access as unknown as StorageAccess;
   return {
     trace,
@@ -342,6 +383,7 @@ function setup() {
       versionRepoDep,
       storeDep,
       healer,
+      trash,
       uowDep,
     ),
     remove: new DeleteObjectsUseCase(
@@ -360,8 +402,23 @@ function cloneObject(o: BackupObject): BackupObject {
   return BackupObject.restore(snapshot(o));
 }
 
-function cloneVersion(v: BackupObjectVersion): BackupObjectVersion {
+function withChanges(
+  v: BackupObjectVersion,
+  over: { supersededAt?: Date; status?: 'purged' },
+): BackupObjectVersion {
+  const c = cloneVersion(v);
   return BackupObjectVersion.restore({
+    ...propsOf(c),
+    ...over,
+  });
+}
+
+function cloneVersion(v: BackupObjectVersion): BackupObjectVersion {
+  return BackupObjectVersion.restore(propsOf(v));
+}
+
+function propsOf(v: BackupObjectVersion) {
+  return {
     id: v.id,
     organizationId: v.organizationId,
     spaceId: v.spaceId,
@@ -376,7 +433,7 @@ function cloneVersion(v: BackupObjectVersion): BackupObjectVersion {
     uploadExpiresAt: v.uploadExpiresAt,
     committedAt: v.committedAt,
     supersededAt: v.supersededAt,
-  });
+  };
 }
 
 function snapshot(o: BackupObject) {
@@ -540,6 +597,8 @@ describe('ConfirmUploadsUseCase', () => {
       `limit:${5 * 60_000}`,
       `saveVersion:${second}`,
       `superseded:${first}`,
+      // The per-object cap of old versions (10): one old version, nothing to purge.
+      `trashOf:${OBJ_A}`,
       `saveObject:${OBJ_A}`,
       'commit',
     ]);
@@ -761,6 +820,87 @@ describe('ConfirmUploadsUseCase', () => {
     ]);
     // The sweep clears only marks older than its threshold: the fresh one of `first` stays.
     expect([...t.marks.keys()]).toEqual([first]);
+  });
+});
+
+describe('per-object cap of old versions (10)', () => {
+  const replaceChain = async (n: number) => {
+    const ids: string[] = [];
+    for (let i = 0; i < n; i++) {
+      const id = (
+        await t.request.execute(
+          HUB,
+          SPACE,
+          [item(OBJ_A, { replacesVersionId: ids.at(-1) ?? null })],
+          NOW,
+        )
+      )[0]!.uploadId;
+      await t.confirm.execute(HUB, SPACE, [id], NOW);
+      ids.push(id);
+    }
+    return ids;
+  };
+
+  it('a confirmation that leaves 11 old versions purges the oldest in the index, then deletes it in S3 after the COMMIT', async () => {
+    const ids = await replaceChain(11); // 10 old versions: at the cap
+    expect(t.mocks.versionRepo.markPurged).not.toHaveBeenCalled();
+    const next = (
+      await t.request.execute(
+        HUB,
+        SPACE,
+        [item(OBJ_A, { replacesVersionId: ids.at(-1)! })],
+        NOW,
+      )
+    )[0]!.uploadId;
+    t.trace.length = 0;
+    await t.confirm.execute(HUB, SPACE, [next], NOW);
+    expect(t.versions.get(ids[0]!)!.status).toBe('purged');
+    expect(
+      [...t.versions.values()].filter(
+        (v) => v.status === 'committed' && v.supersededAt,
+      ),
+    ).toHaveLength(10);
+    // The live version is never touched.
+    expect(t.versions.get(next)!.status).toBe('committed');
+    expect(t.objects.get(OBJ_A)!.liveVersionId).toBe(next);
+    const purge = t.trace.indexOf(`purge:${ids[0]}`);
+    const commit = t.trace.lastIndexOf('commit');
+    const del = t.trace.indexOf(`deleteVersion:${OBJ_A}:s3-1`);
+    expect(purge).toBeGreaterThan(-1);
+    expect(purge).toBeLessThan(commit);
+    expect(del).toBeGreaterThan(commit);
+    // The purged row carries a journal mark (the sweep finishes the S3 delete after a crash).
+    expect(t.marks.has(ids[0]!)).toBe(true);
+  });
+
+  it('a failed S3 delete after the COMMIT does not fail the confirmation', async () => {
+    await replaceChain(11);
+    t.mocks.store.deleteVersion.mockRejectedValueOnce(new Error('S3 down'));
+    const ids = [...t.versions.values()].map((v) => v.id).sort();
+    const next = (
+      await t.request.execute(
+        HUB,
+        SPACE,
+        [item(OBJ_A, { replacesVersionId: ids.at(-1)! })],
+        NOW,
+      )
+    )[0]!.uploadId;
+    await expect(
+      t.confirm.execute(HUB, SPACE, [next], NOW),
+    ).resolves.toHaveLength(1);
+  });
+
+  it('deleting an object applies no cap (its versions stay the full 30 days)', async () => {
+    const ids = await replaceChain(3);
+    t.mocks.versionRepo.supersededInTrash.mockClear();
+    await t.remove.execute(
+      HUB,
+      SPACE,
+      [{ objectId: OBJ_A, replacesVersionId: ids.at(-1)! }],
+      NOW,
+    );
+    expect(t.mocks.versionRepo.supersededInTrash).not.toHaveBeenCalled();
+    expect(t.mocks.versionRepo.markPurged).not.toHaveBeenCalled();
   });
 });
 

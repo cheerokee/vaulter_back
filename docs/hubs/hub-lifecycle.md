@@ -294,6 +294,16 @@ objeto). O backend guarda só o índice (ids, tamanho, sha256 do blob, versão d
   antes de enviar e pule o que não mudou; conteúdo que muda sempre (conversas, eventos, índice) vai em **pedaços
   imutáveis** ou deltas (objeto novo por pedaço, nunca o arquivo inteiro de novo); o manifesto fica **pequeno** (só
   referências aos pedaços).
+- **Controle da lixeira:** cada objeto guarda no máximo **10 versões antigas**: ao confirmar uma versão nova, as
+  substituídas além das 10 mais recentes são apagadas de vez (somem de `include=versions` e o download delas dá 404
+  `version-not-found`). Objeto apagado guarda as versões os 30 dias inteiros. O **Gestor** pode **esvaziar a lixeira**
+  do espaço pelo app (`POST /spaces/:spaceId/backup/trash/empty` `{ currentAuthProof }`, só token de usuário, com
+  reautenticação; até 1000 versões por pedido → `{ purgedVersions, purgedBytes, remainingVersions }`, repita enquanto
+  `remainingVersions > 0`); a versão viva nunca é apagada. Não há rota de Hub para isso.
+- **Avisos no app (recomendação):** `GET /spaces/:id` traz `storage: { quotaBytes, usedBytes, trashBytes }`. Avise o
+  Gestor quando `usedBytes` passar de **80%** de `quotaBytes` e a lixeira (`trashBytes`) for parte relevante disso,
+  oferecendo **"esvaziar a lixeira"** ou **"aumentar o espaço"** (`PUT /spaces/:id/storage-quota`); e avise que o
+  **backup parou** quando um envio for recusado com 422 `space-storage-full`. Os limiares ficam no app.
 - **Erros:** troca de chave pendente → 409 `space-key-rotation-required` (guarde as mudanças numa **fila local** e envie
   depois que um membro trocar a chave pelo app); versão da chave antiga → 409 `space-key-version-stale` (cifre de novo com
   a versão atual); outro Hub gravou antes → 409 `object-version-conflict` (com `currentVersionId`; resolva, por exemplo,
@@ -324,12 +334,13 @@ objeto). O backend guarda só o índice (ids, tamanho, sha256 do blob, versão d
   envios em andamento (intenção feita, confirmação não), cópias de conflito ainda não enviadas e qualquer objeto sem
   `versionId` confirmado ficam como estão e seguem na fila de envio. É a rede de segurança para qualquer mudança
   perdida, inclusive apagamentos.
-- **Lixeira:** `include=trash` (apagados há menos de 30 dias, com a última versão em `currentVersion`) e
+- **Lixeira:** `include=trash` (apagados há menos de 30 dias e ainda não esvaziados, com a última versão em `currentVersion`) e
   `include=versions&objectId=<id>` (as versões guardadas do objeto, a mais antiga primeiro, com `supersededAt` e
   `current`). Restaurar da lixeira = baixar a versão e **reenviar** como versão nova (não existe "desapagar").
 - **Baixar:** `POST .../objects/:objectId/versions/:versionId/download` → `{ url, expiresAt }`: `GET` direto no S3 na
   `url` (15 min); abra com a chave da versão `keyVersion` do espaço (`docs/crypto/space-backup.md`) e confira o
-  `sha256` do blob. Versão desconhecida, pendente ou fora da lixeira: 404 `version-not-found`.
+  `sha256` do blob. Versão desconhecida, pendente, fora da lixeira ou apagada de vez (lixeira esvaziada ou além das 10
+  versões antigas): 404 `version-not-found`.
 - **Restaurar = reinstalar:** Hub queimado → reivindicar o novo, vincular, pôr os espaços e liberar na Sala (§8). O
   Hub recebe a cópia da chave de cada versão pela sincronização (`space_key_grant` com o próprio `hubId`), lista
   tudo (`limit=1000`, sem `since`) e baixa cada versão atual. Respeite os limites (abaixo); com 429, espere o

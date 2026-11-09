@@ -13,13 +13,14 @@ import type { StorageObjectTypeormEntity } from './storage-object.entity.js';
 
 // Versão de um objeto do backup: nasce `pending` na intenção de envio (id uuid v7 do servidor = `uploadId`; reserva
 // o tamanho até `upload_expires_at`), vira `committed` na confirmação (`s3_version_id`, `committed_at`) e `expired`
-// quando uma intenção nova do mesmo objeto por quem envia a encerra. `superseded_at` = foi para a lixeira (30 dias).
+// quando uma intenção nova do mesmo objeto por quem envia a encerra. `superseded_at` = foi para a lixeira (30 dias);
+// `purged` (`purged_at`) = apagada de vez da lixeira (o Gestor esvaziou, ou passou do limite de 10 versões antigas).
 // Só ids, tamanho, sha256 do blob cifrado, versão da chave e quem enviou (um Hub OU uma pessoa). RLS por organização.
 @Entity('storage_object_versions')
 @Unique('uq_storage_object_versions_id_organization', ['id', 'organizationId'])
 @Check(
   'ck_storage_object_versions_status',
-  `"status" IN ('pending', 'committed', 'expired')`,
+  `"status" IN ('pending', 'committed', 'expired', 'purged')`,
 )
 @Check(
   'ck_storage_object_versions_uploader',
@@ -30,7 +31,11 @@ import type { StorageObjectTypeormEntity } from './storage-object.entity.js';
 @Check('ck_storage_object_versions_sha256', `"sha256" ~ '^[0-9a-f]{64}$'`)
 @Check(
   'ck_storage_object_versions_committed',
-  `("status" = 'committed') = ("s3_version_id" IS NOT NULL AND "committed_at" IS NOT NULL)`,
+  `("status" IN ('committed', 'purged')) = ("s3_version_id" IS NOT NULL AND "committed_at" IS NOT NULL)`,
+)
+@Check(
+  'ck_storage_object_versions_purged',
+  `("status" = 'purged') = ("purged_at" IS NOT NULL AND "superseded_at" IS NOT NULL)`,
 )
 @Index('fk_storage_object_versions_organizations_idx', ['organizationId'])
 @Index('fk_storage_object_versions_objects_idx', ['objectId'])
@@ -153,6 +158,10 @@ export class StorageObjectVersionTypeormEntity extends BaseTypeormEntity {
 
   @Column({ type: 'timestamptz', nullable: true })
   supersededAt!: Date | null;
+
+  // Apagada de vez da lixeira (status `purged`; ver migration StorageTrashPurge), no relógio do banco.
+  @Column({ type: 'timestamptz', nullable: true })
+  purgedAt!: Date | null;
 
   // Diário (ver migration StorageWriteJournal): alguma tentativa de gravar no S3 por esta linha (cópia ou delete marker)
   // começou neste instante ou depois (relógio do banco), renovado para a tentativa mais recente. Nunca é limpo no

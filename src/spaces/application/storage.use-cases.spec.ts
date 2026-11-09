@@ -61,6 +61,13 @@ describe('SpaceStorageUsage (provisional port, bound by storage later)', () => {
     expect(() => fresh.use({ usedBytes: async () => 1 })).toThrow();
     fresh.release();
     await expect(fresh.usedBytes(ORG_ID, SPACE_ID)).resolves.toBe(0);
+    // The trash (part of the usage) reads 0 without a source, or with a source that does not tell it.
+    await expect(fresh.trashBytes(ORG_ID, SPACE_ID)).resolves.toBe(0);
+    fresh.use({ usedBytes: async () => 9 });
+    await expect(fresh.trashBytes(ORG_ID, SPACE_ID)).resolves.toBe(0);
+    fresh.release();
+    fresh.use({ usedBytes: async () => 9, trashBytes: async () => 4 });
+    await expect(fresh.trashBytes(ORG_ID, SPACE_ID)).resolves.toBe(4);
   });
 
   it('replace (test seam) swaps the bound source and the restore function puts the previous one back', async () => {
@@ -249,8 +256,8 @@ describe('ResizeSpaceStorageUseCase', () => {
 });
 
 describe('GetSpaceUseCase storage', () => {
-  it('every member sees the size and the usage', async () => {
-    usage.use({ usedBytes: async () => 123 });
+  it('every member sees the size, the usage and the trash part of it', async () => {
+    usage.use({ usedBytes: async () => 123, trashBytes: async () => 23 });
     const view = await new GetSpaceUseCase(
       d.access,
       d.recoveryKit,
@@ -259,6 +266,10 @@ describe('GetSpaceUseCase storage', () => {
       d.room,
       usage,
     ).execute(actor(EDITOR), SPACE_ID);
-    expect(view.storage).toEqual({ quotaBytes: 10 * GiB, usedBytes: 123 });
+    expect(view.storage).toEqual({
+      quotaBytes: 10 * GiB,
+      usedBytes: 123,
+      trashBytes: 23,
+    });
   });
 });

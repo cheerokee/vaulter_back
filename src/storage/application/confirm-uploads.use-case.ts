@@ -7,7 +7,9 @@ import { BackupObjectRepository } from '../domain/backup-object.repository.js';
 import type { BackupObjectVersion } from '../domain/backup-object-version.js';
 import { BackupObjectVersionRepository } from '../domain/backup-object-version.repository.js';
 import { BackupRules } from '../domain/backup-rules.js';
+import type { PurgedVersion } from '../domain/backup-object-version.js';
 import { BackupObjectHealer, type ObjectRef } from './backup-object-healer.js';
+import { BackupTrash } from './backup-trash.js';
 import {
   committedVersionView,
   type CommittedVersionView,
@@ -59,6 +61,10 @@ function sameUploader(
 // rejeitar depois de começar a gravar no S3 (inclusive um COMMIT de resultado incerto), os objetos são reparados numa
 // transação nova (`repair`): só o que nenhuma versão confirmada referencia sai do bucket. As marcas ficam.
 // Espera por trava além de 10 s (`lock_timeout`, posto por `StorageAccess.lock`) = 409 `storage-busy`, repetível.
+// Limite de versões antigas por objeto (10, `MAX_TRASH_VERSIONS_PER_OBJECT`; spec §4.8 "Controle da lixeira"): cada
+// objeto que ganhou versão nova tem as substituídas além das 10 mais recentes apagadas de vez (`BackupTrash.capObject`:
+// `purged` no índice, sob a trava do objeto, no mesmo unit of work) e, só DEPOIS do COMMIT, apagadas do S3
+// (`removeFromBucket`, que nunca falha o pedido: a marca do diário deixa o resto para a varredura).
 @Injectable()
 export class ConfirmUploadsUseCase {
   constructor(
@@ -67,6 +73,7 @@ export class ConfirmUploadsUseCase {
     private readonly versions: BackupObjectVersionRepository,
     private readonly store: ObjectStore,
     private readonly healer: BackupObjectHealer,
+    private readonly trash: BackupTrash,
     private readonly uow: UnitOfWork,
   ) {}
 
@@ -77,6 +84,9 @@ export class ConfirmUploadsUseCase {
     now: Date = new Date(),
   ): Promise<CommittedVersionView[]> {
     const writing: ObjectRef[] = [];
+    let purged: { orgId: string; spaceId: string; versions: PurgedVersion[] } =
+      { orgId: '', spaceId: '', versions: [] };
+    let views: CommittedVersionView[];
     try {
       // Diário ANTES do unit of work (transação curta própria, confirmada; relógio do banco): marca só as intenções
       // pendentes de QUEM confirma, depois da checagem de acesso. Nunca é preciso uma segunda conexão do pool enquanto o
@@ -95,7 +105,7 @@ export class ConfirmUploadsUseCase {
           uploaderOf(actor),
         );
       });
-      return await this.uow.run(async () => {
+      views = await this.uow.run(async () => {
         const space = await this.access.lock(
           spaceId,
           actor,
@@ -152,6 +162,7 @@ export class ConfirmUploadsUseCase {
         }
 
         const superseded: string[] = [];
+        const withOldVersions = new Set<string>();
         for (const version of toCommit) {
           const object = locked.get(version.objectId)!;
           object.assertReplaces(version.replacesVersionId);
@@ -159,7 +170,10 @@ export class ConfirmUploadsUseCase {
             await this.store.head(uploadKey(orgId, space.spaceId, version.id)),
           );
           const { supersededVersionId } = object.commit(version.id);
-          if (supersededVersionId) superseded.push(supersededVersionId);
+          if (supersededVersionId) {
+            superseded.push(supersededVersionId);
+            withOldVersions.add(version.objectId);
+          }
         }
         if (toCommit.length === 0) {
           return uploadIds.map((id) => committedVersionView(found.get(id)!));
@@ -198,6 +212,15 @@ export class ConfirmUploadsUseCase {
         if (superseded.length > 0) {
           await this.versions.markSuperseded(orgId, superseded);
         }
+        // Limite de 10 versões antigas por objeto: as além disso viram `purged` aqui (sob a trava do objeto); o S3 só
+        // depois do COMMIT.
+        const capped: PurgedVersion[] = [];
+        for (const objectId of [...withOldVersions].sort()) {
+          capped.push(
+            ...(await this.trash.capObject(orgId, space.spaceId, objectId)),
+          );
+        }
+        purged = { orgId, spaceId: space.spaceId, versions: capped };
         // As marcas NÃO são limpas aqui: uma cópia abortada de outra tentativa ainda pode chegar ao S3; só a
         // varredura por idade as limpa, depois de reparar o objeto.
         for (const objectId of objectIds) {
@@ -209,5 +232,11 @@ export class ConfirmUploadsUseCase {
       if (writing.length > 0) await this.healer.repair(writing);
       throw lockTimeoutAsBusy(error);
     }
+    await this.trash.removeFromBucket(
+      purged.orgId,
+      purged.spaceId,
+      purged.versions,
+    );
+    return views;
   }
 }

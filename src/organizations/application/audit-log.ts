@@ -27,6 +27,7 @@ export type AuditAction =
   | 'space.recovery_copies_read'
   | 'space.manager_promoted'
   | 'space.pending_grant_declined'
+  | 'space.backup.trash_emptied'
   | 'hub.claimed'
   | 'hub.deregistered'
   | 'hub.organization.requested'

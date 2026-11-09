@@ -14,16 +14,19 @@ import {
   CurrentAuth,
 } from '../../../shared/infra/http/auth.decorators.js';
 import { RATE_LIMITS } from '../../../shared/infra/http/rate-limits.js';
+import { ThrottleReauth } from '../../../shared/infra/http/throttling.decorators.js';
 import { userIdTracker } from '../../../shared/infra/http/user-id.tracker.js';
 import { uuidPipe } from '../../../shared/infra/http/uuid-pipe.js';
 import { ConfirmUploadsUseCase } from '../../application/confirm-uploads.use-case.js';
 import { DeleteObjectsUseCase } from '../../application/delete-objects.use-case.js';
+import { EmptyTrashUseCase } from '../../application/empty-trash.use-case.js';
 import { GetDownloadUrlUseCase } from '../../application/get-download-url.use-case.js';
 import { ListObjectsUseCase } from '../../application/list-objects.use-case.js';
 import { RequestUploadsUseCase } from '../../application/request-uploads.use-case.js';
 import {
   ConfirmUploadsDto,
   DeleteObjectsDto,
+  EmptyTrashDto,
   ListObjectsQueryDto,
   UploadIntentDto,
 } from './dto/backup.dto.js';
@@ -37,7 +40,8 @@ import {
 // Backup com o token de uma PESSOA (o Hub em nome de quem está logado nele; qualquer sessão do membro vale, decisão
 // da Task 5): enviar e apagar com `memory.write` (`space_editor`/`space_manager`; apagar = a mesma permissão de
 // substituir), listar e baixar com `memory.read` (todo membro do espaço, inclusive num Hub fora da Sala). `SpaceAccess`: 404 para não membro, 403 para membro sem a permissão. Mesmos casos de uso das
-// rotas do Hub; limites por usuário.
+// rotas do Hub; limites por usuário. Esvaziar a lixeira: só o Gestor (`space.members.manage`), com reautenticação
+// (orçamento de reautenticação compartilhado, `@ThrottleReauth()`); não existe rota de Hub para isso.
 @ApiTags('storage')
 @Controller('spaces/:spaceId/backup')
 export class SpaceBackupController {
@@ -47,6 +51,7 @@ export class SpaceBackupController {
     private readonly remove: DeleteObjectsUseCase,
     private readonly list: ListObjectsUseCase,
     private readonly download: GetDownloadUrlUseCase,
+    private readonly emptyTrash: EmptyTrashUseCase,
   ) {}
 
   @Throttle({
@@ -145,5 +150,30 @@ export class SpaceBackupController {
         versionId,
       ),
     );
+  }
+
+  /**
+   * Gestor empties the trash of the space for good (old versions and deleted objects still in the 30-day window), at
+   * most 1000 versions per call: the app repeats while `remainingVersions > 0`. The live versions are never touched.
+   */
+  @ThrottleReauth()
+  @ApiBearerAuth()
+  @HttpCode(200)
+  @Post('trash/empty')
+  async doEmptyTrash(
+    @CurrentAuth() auth: AuthContext,
+    @Param('spaceId', uuidPipe('spaceId')) spaceId: string,
+    @Body() dto: EmptyTrashDto,
+  ) {
+    const r = await this.emptyTrash.execute(
+      { userId: auth.userId },
+      spaceId,
+      dto.currentAuthProof,
+    );
+    return {
+      purgedVersions: r.purgedVersions,
+      purgedBytes: r.purgedBytes,
+      remainingVersions: r.remainingVersions,
+    };
   }
 }

@@ -35,3 +35,14 @@ export const MAX_LIST_LIMIT = 1000;
  * Relies on the database `transaction_timeout` being 0 globally (see `UnitOfWork.limitRemainingTime`).
  */
 export const INDEX_TAIL_TIMEOUT_MS = 5 * 60 * 1000;
+/**
+ * Old (superseded) versions kept per object (decisão do Jonas, 2026-11-09): when a confirmation makes a new current
+ * version, the superseded versions of that object beyond the 10 most recent (by `superseded_at`) are purged. A deleted
+ * object keeps its versions for the full 30 days (no cap on delete).
+ */
+export const MAX_TRASH_VERSIONS_PER_OBJECT = 10;
+/**
+ * Versions one "empty the trash" request purges at most (`POST /spaces/:id/backup/trash/empty`): the app repeats
+ * while `remainingVersions > 0`. Bounds the object locks and the S3 deletes of one request.
+ */
+export const MAX_PURGE_BATCH_VERSIONS = 1000;

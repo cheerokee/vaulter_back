@@ -12,8 +12,9 @@ import type { BackupUploader } from '../domain/backup-object-version.js';
 /** Who acts on the backup: the hub with its own token, or a person with a user token (any session). */
 export type StorageActor = { hubId: string } | { userId: string };
 
+/** `space.members.manage` (Gestor): emptying the trash. */
 export type StoragePermission =
-  'memory.read' | 'memory.write' | 'memory.delete';
+  'memory.read' | 'memory.write' | 'memory.delete' | 'space.members.manage';
 
 export function uploaderOf(actor: StorageActor): BackupUploader {
   return 'hubId' in actor ? { hubId: actor.hubId } : { userId: actor.userId };

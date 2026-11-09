@@ -358,7 +358,8 @@ src/organizations/
   via `AuditLog.record` dentro da mesma transação da ação. Ações: `organization.created`, `organization.updated`,
   `organization.recovery_key.registered|replaced`, `member.joined`, `member.left`, `member.removed`,
   `member.role_changed`, `invitation.created`, `invitation.revoked` e as `space.*` do módulo `spaces` (inclusive
-  `space.recovery_copies_read`, quando um admin lê as cópias do kit de um espaço órfão). `metadata`
+  `space.recovery_copies_read`, quando um admin lê as cópias do kit de um espaço órfão) e `space.backup.trash_emptied`
+  (do `storage`, quando o Gestor esvazia a lixeira do backup). `metadata`
   nunca leva segredo/token/cópia trancada.
 - **Assentos:** assento = membro ativo (convite pendente não conta). `SeatPolicy` (hoje ilimitado) é checada ao criar
   e ao aceitar convite. TODO ao entrarem limites reais: travar a linha da organização (`FOR UPDATE`) antes de contar,
@@ -410,7 +411,8 @@ exportam); nenhum dos dois importa `spaces`.
   `space.storage_quota_changed`. O **uso** vem da porta `SpaceStorageUsage` (exportada; sem fonte, 0): o `storage` liga
   a implementação real com `use(source)` em `onModuleInit` (e `release` no destroy). `SpaceStorage.lockQuota` (exportado)
   lê o tamanho com o espaço `FOR SHARE` (instalação no Hub). `GET /spaces/:id`, a criação e o resize trazem
-  `storage: { quotaBytes, usedBytes }`. Bigint do banco vira número por `byteCount` (`shared/infra/db/byte-count.ts`).
+  `storage: { quotaBytes, usedBytes }`; o `GET` traz também `trashBytes` (a parte do uso na lixeira, da porta
+  `SpaceStorageUsage.trashBytes`, opcional na fonte; sem ela, 0). Bigint do banco vira número por `byteCount` (`shared/infra/db/byte-count.ts`).
 - **Fluxo de chaves** (cifra no app; o backend só guarda blobs e valida formato — libsodium, formato em
   `docs/crypto/user-keys.md`, seção da cópia trancada: `0x01 ‖ crypto_box_seal`, 81 bytes, base64url, 108 chars):
   - cada **versão** da chave do espaço é uma linha de `space_keys` (`spaces.current_key_version`); **todo membro tem
@@ -706,8 +708,9 @@ ganha acesso a conteúdo (as chaves ficam com os clientes).
 `docs/superpowers/specs/2026-11-09-storage-backup-design.md`; formato do blob cifrado em `docs/crypto/space-backup.md`;
 o lado do aparelho em `docs/hubs/hub-lifecycle.md` (§9, §10; mudou rota, corpo, erro ou limite do backup, atualize-o no
 mesmo commit).
-- **Fronteiras:** `storage` depende de `spaces` (`SpaceContentAccess`, e a porta `SpaceStorageUsage`, que ele liga) e de
-  `hubs` (`HubDirectory`: organizações de vínculo aprovado do Hub), só pelo que exportam; ninguém importa `storage`.
+- **Fronteiras:** `storage` depende de `spaces` (`SpaceContentAccess`, e a porta `SpaceStorageUsage`, que ele liga), de
+  `hubs` (`HubDirectory`: organizações de vínculo aprovado do Hub), de `identity` (`CurrentAuthProofVerifier`, para
+  esvaziar a lixeira) e de `organizations` (`AuditLog`), só pelo que exportam; ninguém importa `storage`.
   Leituras entre módulos, todas documentadas onde nascem: o `organizations` soma `spaces.storage_quota_bytes` em SQL
   (franquia; veja "Franquia de nuvem" em `organizations`), o `hubs` lê `spaces.storage_quota_bytes` em SQL ao instalar
   (veja "Capacidade do Hub" em `hubs`) e a sincronização do Hub já era exceção. `SpaceStorageUsage` (porta do `spaces`,
@@ -717,7 +720,9 @@ mesmo commit).
   (1 GiB..5 TiB), franquia da organização 50 GiB (só o financeiro da plataforma altera: `PUT /platform/organizations/:orgId/
   storage-quota`, veja `platform`), objeto até 5 GiB (422 `object-too-large`), lote de 100 itens por pedido
   (intenção, confirmação, apagar), URL assinada 15 min, reserva da intenção 24 h, lixeira 30 dias (conta no uso), página
-  de listagem até 1000. O uso do espaço = versões `committed` + lixeira + reservas vivas; não cabe: 422
+  de listagem até 1000, 10 versões antigas por objeto (`MAX_TRASH_VERSIONS_PER_OBJECT`), esvaziar a lixeira em lotes de
+  1000 versões (`MAX_PURGE_BATCH_VERSIONS`). O uso do espaço = versões `committed` + lixeira + reservas vivas (as
+  `purged` não contam); não cabe: 422
   `space-storage-full` (`missingBytes`). Capacidade do Hub: instalar/aumentar além do SSD informado = 422
   `hub-storage-full`; corrida entre instalações no mesmo Hub = 409 `hub-storage-busy` (repetir).
 - **Enviar, confirmar, apagar** (rotas do Hub `/hub/spaces/:spaceId/...` e da pessoa `/spaces/:spaceId/backup/...`, os
@@ -762,7 +767,26 @@ mesmo commit).
   toque do objeto (marca mais antiga que a da tentativa), logo depois de um unit of work que rejeitou depois de gravar
   no S3 (inclusive COMMIT de resultado incerto: o que o COMMIT gravou é referenciado e fica) e na varredura (contexto
   `app.storage_reconcile`, policy `storage_reconcile_read` só das linhas marcadas; como toda confirmação deixa marca,
-  a varredura revisita cada objeto gravado na última janela). **Só o reparo usa `ObjectStore.deleteVersion`.**
+  a varredura revisita cada objeto gravado na última janela). **Só o reparo e a lixeira (`BackupTrash`, versões
+  `purged`) usam `ObjectStore.deleteVersion`.**
+- **Controle da lixeira** (spec §4.8, "Controle da lixeira"; decisão do Jonas de 2026-11-09): status `purged` em
+  `storage_object_versions` (`purged_at`, relógio do banco; migration `StorageTrashPurge`), que sai do uso, das
+  listagens e dos downloads (tudo filtra `committed`; o reparo a trata como não referenciada). (1) **Esvaziar**
+  (`EmptyTrashUseCase`, `POST /spaces/:spaceId/backup/trash/empty` `{ currentAuthProof }`, só token de usuário,
+  `space.members.manage`, `@ThrottleReauth()`): permissão sem trava (404/403) → reautenticação (422
+  `current-auth-proof-invalid`) **antes de qualquer gravação** → no unit of work, espaço FOR SHARE, até 1000 versões da
+  lixeira, objetos FOR UPDATE em ordem de id, `purged` (nunca a versão viva de um objeto vivo: no SQL e em
+  `TrashRules.purgeable`), auditoria `space.backup.trash_emptied` (só se apagou algo) → `{ purgedVersions, purgedBytes,
+  remainingVersions }`; o app repete enquanto `remainingVersions > 0` (cada repetição gasta o orçamento de
+  reautenticação: 5 por 15 min = 5000 versões). Os delete markers dos objetos apagados ficam. (2) **Limite de 10
+  versões antigas por objeto** na confirmação (`BackupTrash.capObject`, sob a trava do objeto, depois do
+  `markSuperseded`); o apagar não aplica limite. **Ordem índice → S3:** `markPurged` grava `purged` e renova a marca do
+  diário na mesma transação; os `deleteVersion` rodam **depois do COMMIT**, fora da trava (`removeFromBucket`, nunca
+  falha o pedido). Queda no meio = versão no bucket sem referência no índice, que a varredura (pela marca) ou o próximo
+  toque do objeto apagam; nunca o índice apontando para uma versão apagada. Fora da trava é seguro: a versão apagada
+  nunca é a atual do S3. A listagem com `since` ainda mostra a lápide cuja última versão foi `purged` (sem versão).
+  `GET /spaces/:id` traz `storage.trashBytes`; recomendação ao app (avisar o Gestor acima de 80% com lixeira
+  relevante; avisar que o backup parou com `space-storage-full`) em `docs/hubs/hub-lifecycle.md` §9.
 - **Nunca precisar de uma segunda conexão do pool enquanto se segura uma** (autocommit "por fora" de um `uow.run`
   aberto): com o pool cheio de transações esperando travas, a espera pela conexão não tem fim e o Postgres não vê o
   impasse. Grave antes, numa transação própria.
@@ -800,7 +824,7 @@ mesmo commit).
   `s3:PutObjectTagging`, `s3:DeleteObject`, `s3:DeleteObjectVersion` e `s3:ListBucketVersions` no bucket; (3) uma
   configuração de **endpoint S3 público** para dispositivos reais em dev: as URLs assinadas saem com o host de
   `AWS_ENDPOINT_URL` (`aws:4566`), que só resolve dentro do Docker; ainda **não existe** (veja Pendências).
-- **Testes:** e2e em `test/storage/` (`object-store`, `quotas`, `uploads`, `downloads`) com o S3 do LocalStack;
+- **Testes:** e2e em `test/storage/` (`object-store`, `quotas`, `uploads`, `downloads`, `trash`) com o S3 do LocalStack;
   unitários ao lado do código com `ObjectStore` simulado. Helpers de Hub em `test/support/hub-client.ts` e
   `hubs-kit.ts`. Pendências do módulo: veja "Pendências antes de produção" (snapshot pago, contratação de franquia,
   classes de armazenamento mais baratas, troca de chave pelo Hub editor da Sala, visitante em Hub alheio, configuração
@@ -943,10 +967,7 @@ Os valores do `.env.example` para os segredos são **só de desenvolvimento**; p
   está pendente); visitante em Hub alheio (pessoa de outra organização usando o Hub); configuração inicial do Hub por
   Bluetooth e idioma; rota de download em lote (hoje uma URL por versão); limpeza física do índice
   (`storage_objects`/`storage_object_versions` depois da lixeira; o runtime não tem `DELETE`); aviso de franquia perto
-  do fim (notificação); endpoint S3 público configurável para dispositivos reais em dev. **Decisão do Jonas: ação de
-  esvaziar a lixeira do espaço (Gestor) e/ou limite de versões antigas por objeto** — hoje a lixeira conta no uso por
-  30 dias, e um arquivo grande reenviado com frequência enche o espaço e para o backup (a orientação ao Hub em
-  `docs/hubs/hub-lifecycle.md` é não reenviar o que não mudou, usar pedaços imutáveis e manter o manifesto pequeno).
+  do fim (notificação); endpoint S3 público configurável para dispositivos reais em dev.
 - Exclusão de conta (LGPD) precisa revogar as sessões.
 - **Agendar `npm run storage:reconcile`** (1x por dia, fora da aplicação) até o pg-boss entrar; aí vira uma tarefa
   dele. Sem a varredura, um objeto que ninguém toca de novo depois de uma queda entre o S3 e o COMMIT pode ter a versão
@@ -987,7 +1008,7 @@ Os valores do `.env.example` para os segredos são **só de desenvolvimento**; p
   | `POST /auth/login` | 10/min por IP **e** 5/min por e-mail normalizado |
   | `POST /auth/refresh` | 60/min por IP |
   | `POST /auth/recovery/lookup` e `POST /auth/recovery/complete` (públicas) | 10/min por IP, **um orçamento só para as duas** (`THROTTLE_GROUPS.accountRecovery`) **e** 5/min por e-mail normalizado, por rota |
-  | `PUT /me/password`, `PUT /me/recovery-code`, `PUT /organizations/:id/recovery-key`, `POST /spaces/:id/recover`, `POST /spaces/:id/recover/copies`, `PUT|DELETE /platform/staff/:userId/roles/:roleKey`, `POST /platform/support-requests` e `.../:id/approve|reject` (reautenticação) | 5 por 15 min por usuário, **um orçamento só para todas** |
+  | `PUT /me/password`, `PUT /me/recovery-code`, `PUT /organizations/:id/recovery-key`, `POST /spaces/:id/recover`, `POST /spaces/:id/recover/copies`, `POST /spaces/:spaceId/backup/trash/empty`, `PUT|DELETE /platform/staff/:userId/roles/:roleKey`, `POST /platform/support-requests` e `.../:id/approve|reject` (reautenticação) | 5 por 15 min por usuário, **um orçamento só para todas** |
   | `POST /invitations/preview` (pública) | 30/min por IP |
   | `POST /invitations/accept` | 10/min por IP |
   | `POST /spaces/:id/keys` (troca da chave do espaço) | 10/h por usuário (`userIdTracker`, contador próprio) |

@@ -9,7 +9,9 @@ import {
   BackupObjectVersion,
   type BackupUploader,
   type BackupVersionStatus,
+  type PurgedVersion,
 } from '../../domain/backup-object-version.js';
+import type { SupersededVersion } from '../../domain/trash-rules.js';
 import { BackupObjectVersionRepository } from '../../domain/backup-object-version.repository.js';
 
 type VersionRow = {
@@ -179,6 +181,102 @@ export class BackupObjectVersionTypeormRepository extends BackupObjectVersionRep
         ),
     );
     return byteCount(rows[0]?.used ?? '0');
+  }
+
+  async trashUsage(
+    orgId: string,
+    spaceId: string,
+  ): Promise<{ versions: number; bytes: number }> {
+    if (!validate(orgId) || !validate(spaceId))
+      return { versions: 0, bytes: 0 };
+    const rows: { versions: number; bytes: string }[] =
+      await runInOrganizationScope(this.dataSource, orgId, (m) =>
+        m.query(
+          `SELECT COUNT(*)::int AS versions, COALESCE(SUM(size_bytes), 0)::text AS bytes
+             FROM storage_object_versions
+            WHERE organization_id = $1 AND space_id = $2 AND deleted_at IS NULL AND status = 'committed'
+              AND superseded_at > now() - make_interval(days => $3)`,
+          [orgId, spaceId, TRASH_DAYS],
+        ),
+      );
+    return {
+      versions: rows[0]?.versions ?? 0,
+      bytes: byteCount(rows[0]?.bytes ?? '0'),
+    };
+  }
+
+  async supersededInTrash(
+    orgId: string,
+    objectId: string,
+  ): Promise<SupersededVersion[]> {
+    const rows: { id: string; superseded_at: Date }[] =
+      await runInOrganizationScope(this.dataSource, orgId, (m) =>
+        m.query(
+          `SELECT id, superseded_at FROM storage_object_versions
+            WHERE organization_id = $1 AND object_id = $2 AND deleted_at IS NULL AND status = 'committed'
+              AND superseded_at > now() - make_interval(days => $3)`,
+          [orgId, objectId, TRASH_DAYS],
+        ),
+      );
+    return rows.map((r) => ({ id: r.id, supersededAt: r.superseded_at }));
+  }
+
+  async trashCandidates(
+    orgId: string,
+    spaceId: string,
+    limit: number,
+  ): Promise<{ id: string; objectId: string }[]> {
+    const rows: { id: string; object_id: string }[] =
+      await runInOrganizationScope(this.dataSource, orgId, (m) =>
+        m.query(
+          `SELECT id, object_id FROM storage_object_versions
+            WHERE organization_id = $1 AND space_id = $2 AND deleted_at IS NULL AND status = 'committed'
+              AND superseded_at > now() - make_interval(days => $3)
+            ORDER BY object_id, id
+            LIMIT $4`,
+          [orgId, spaceId, TRASH_DAYS, limit],
+        ),
+      );
+    return rows.map((r) => ({ id: r.id, objectId: r.object_id }));
+  }
+
+  async markPurged(
+    orgId: string,
+    spaceId: string,
+    versionIds: readonly string[],
+  ): Promise<PurgedVersion[]> {
+    if (versionIds.length === 0) return [];
+    // Nunca a versão viva de um objeto vivo (além de `superseded_at IS NOT NULL`). A marca do diário (renovada para
+    // now(), como as outras) deixa a varredura apagar do S3 o que o pedido não apagou depois do COMMIT.
+    const [rows]: [
+      {
+        id: string;
+        object_id: string;
+        s3_version_id: string;
+        size_bytes: string;
+      }[],
+      number,
+    ] = await runInOrganizationScope(this.dataSource, orgId, (m) =>
+      m.query(
+        `UPDATE storage_object_versions v
+            SET status = 'purged', purged_at = clock_timestamp(), updated_at = now(),
+                s3_write_started_at = GREATEST(COALESCE(v.s3_write_started_at, now()), now())
+          WHERE v.organization_id = $1 AND v.space_id = $2 AND v.id = ANY($3::uuid[])
+            AND v.status = 'committed' AND v.superseded_at IS NOT NULL
+            AND NOT EXISTS (
+              SELECT 1 FROM storage_objects o
+               WHERE o.id = v.object_id AND o.organization_id = v.organization_id
+                 AND o.current_version_id = v.id AND o.deleted_at IS NULL)
+        RETURNING v.id, v.object_id, v.s3_version_id, v.size_bytes`,
+        [orgId, spaceId, versionIds],
+      ),
+    );
+    return rows.map((r) => ({
+      id: r.id,
+      objectId: r.object_id,
+      s3VersionId: r.s3_version_id,
+      sizeBytes: byteCount(r.size_bytes),
+    }));
   }
 
   async markPendingWrites(

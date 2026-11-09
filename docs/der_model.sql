@@ -725,9 +725,11 @@ CREATE TABLE storage_objects (
 );
 
 -- Uma linha por intenção de envio (id = uploadId): pending (reserva o tamanho até upload_expires_at), committed (com
--- s3_version_id) ou expired. superseded_at = foi para a lixeira (30 dias). Quem enviou: um Hub OU uma pessoa
--- (CHECK num_nonnulls = 1). CHECKs no Postgres: status, size_bytes > 0, key_version >= 1, sha256 ~ '^[0-9a-f]{64}$',
--- (status = 'committed') = (s3_version_id e committed_at preenchidos).
+-- s3_version_id), expired ou purged (confirmada e apagada de vez da lixeira: o Gestor esvaziou, ou passou do limite de
+-- 10 versões antigas por objeto; sai do uso, das listagens e dos downloads). superseded_at = foi para a lixeira (30
+-- dias). Quem enviou: um Hub OU uma pessoa (CHECK num_nonnulls = 1). CHECKs no Postgres: status, size_bytes > 0,
+-- key_version >= 1, sha256 ~ '^[0-9a-f]{64}$', (status IN ('committed', 'purged')) = (s3_version_id e committed_at
+-- preenchidos), (status = 'purged') = (purged_at e superseded_at preenchidos).
 CREATE TABLE storage_object_versions (
   id CHAR(36) NOT NULL COMMENT 'uuid v7 do servidor = uploadId',
   created_at DATETIME NOT NULL,
@@ -739,7 +741,7 @@ CREATE TABLE storage_object_versions (
   key_version INT NOT NULL COMMENT 'versão da chave do espaço com que o blob foi cifrado',
   size_bytes BIGINT NOT NULL COMMENT 'tamanho do blob cifrado (até 5 GiB)',
   sha256 CHAR(64) NOT NULL COMMENT 'hash do blob cifrado, hexadecimal minúsculo',
-  status ENUM('pending', 'committed', 'expired') NOT NULL DEFAULT 'pending',
+  status ENUM('pending', 'committed', 'expired', 'purged') NOT NULL DEFAULT 'pending',
   replaces_version_id CHAR(36) NULL COMMENT 'versão que esta substitui (controle de conflito)',
   s3_version_id VARCHAR(1024) NULL COMMENT 'id da versão no S3; toda leitura usa este',
   uploaded_by_hub_id CHAR(36) NULL,
@@ -747,6 +749,7 @@ CREATE TABLE storage_object_versions (
   upload_expires_at DATETIME NOT NULL COMMENT 'fim da reserva e da janela de confirmação (24 h)',
   committed_at DATETIME NULL,
   superseded_at DATETIME NULL COMMENT 'foi para a lixeira (30 dias)',
+  purged_at DATETIME NULL COMMENT 'apagada de vez da lixeira (status purged), relógio do banco',
   s3_write_started_at DATETIME NULL COMMENT 'diário: uma gravação no S3 começou neste instante ou depois (relógio do banco); só a varredura storage:reconcile limpa, depois de 60 min',
   PRIMARY KEY (id),
   UNIQUE INDEX uq_storage_object_versions_id_organization (id, organization_id) COMMENT 'alvo das FKs compostas (filho_id, organization_id)',

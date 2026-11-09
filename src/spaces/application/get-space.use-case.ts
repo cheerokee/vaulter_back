@@ -11,7 +11,7 @@ import { SpaceStorageUsage } from './space-storage-usage.js';
 // Detalhes do espaço, só para membro (o admin fora do espaço recebe 404), com as flags, os Hubs da Sala (`roomHubs`:
 // todo membro pode precisar fazer a troca de chave, que exige uma cópia para cada um; a chave de cifra de cada Hub
 // vem de `GET /hubs/:id`, que todo membro do espaço lê, porque a Sala só existe com vínculo aprovado da
-// organização), o tamanho reservado e o uso e, para o Gestor, a contagem de pendências de trancar (como na lista).
+// organização), o tamanho reservado, o uso e a parte dele na lixeira (`trashBytes`, para o app avisar o Gestor) e, para o Gestor, a contagem de pendências de trancar (como na lista).
 @Injectable()
 export class GetSpaceUseCase {
   constructor(
@@ -29,13 +29,18 @@ export class GetSpaceUseCase {
       actor.userId,
     );
     const versions = await this.keys.versions(space.organizationId, space.id);
+    const base = toSpaceView(
+      space,
+      roleKey,
+      await this.kit.isRewrapRequired(space.organizationId, versions),
+      await this.usage.usedBytes(space.organizationId, space.id),
+    );
     const view = {
-      ...toSpaceView(
-        space,
-        roleKey,
-        await this.kit.isRewrapRequired(space.organizationId, versions),
-        await this.usage.usedBytes(space.organizationId, space.id),
-      ),
+      ...base,
+      storage: {
+        ...base.storage!,
+        trashBytes: await this.usage.trashBytes(space.organizationId, space.id),
+      },
       roomHubs: await this.room.roomHubs(space.organizationId, space.id),
     };
     if (roleKey !== 'space_manager') return view;

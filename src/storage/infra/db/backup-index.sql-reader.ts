@@ -56,7 +56,8 @@ async function asOf(m: EntityManager): Promise<Date> {
 // Leituras do índice do backup (spec storage-backup §4.3), em SQL, sem trava, cada uma no escopo da organização (RLS;
 // fora de um UnitOfWork.run abre a própria transação, e o `asOf` é o `now()` dela, lido antes da consulta). Só versões
 // `committed` com o próprio `s3_version_id`: uma intenção nunca confirmada (objeto criado, sem versão atual) nunca
-// aparece. Lixeira = 30 dias no relógio do banco (como o uso do espaço).
+// aparece, nem uma versão `purged` (apagada de vez da lixeira: some das listagens e dá 404 no download). Lixeira = 30
+// dias no relógio do banco (como o uso do espaço).
 @Injectable()
 export class BackupIndexSqlReader extends BackupIndexReader {
   constructor(private readonly dataSource: DataSource) {
@@ -77,6 +78,14 @@ export class BackupIndexSqlReader extends BackupIndexReader {
     ];
     const param = (value: unknown) => `$${params.push(value)}`;
     const filters: string[] = [];
+    // A lápide cuja última versão foi apagada de vez da lixeira (`purged`) ainda aparece na listagem com `since` (sem
+    // versão): senão um Hub que não listou desde antes do apagar nunca veria a lápide. Na lixeira e na listagem dos
+    // vivos, só versões `committed`.
+    filters.push(
+      listing.include === 'current' && listing.since
+        ? `(v.status = 'committed' OR (o.deleted_at IS NOT NULL AND v.status = 'purged'))`
+        : `v.status = 'committed'`,
+    );
     if (listing.include === 'trash') {
       const days = param(TRASH_DAYS);
       filters.push(
@@ -101,7 +110,7 @@ export class BackupIndexSqlReader extends BackupIndexReader {
            JOIN storage_object_versions v
              ON v.id = o.current_version_id AND v.organization_id = o.organization_id
           WHERE o.organization_id = $1 AND o.space_id = $2
-            AND v.status = 'committed' AND v.deleted_at IS NULL
+            AND v.deleted_at IS NULL
             AND ($3::uuid IS NULL OR o.id > $3::uuid)
             ${filters.map((f) => `AND ${f}`).join(' ')}
           ORDER BY o.id

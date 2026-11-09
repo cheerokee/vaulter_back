@@ -8,7 +8,7 @@ import { BackupObjectVersionRepository } from '../domain/backup-object-version.r
 
 // Liga o uso real dos espaços na porta do `spaces` (`SpaceStorageUsage`, que o `spaces` exporta e não sabe do
 // índice): soma das versões confirmadas atuais e na lixeira de 30 dias mais as reservas das intenções de envio
-// (`BackupObjectVersionRepository.usedBytes`). Quem lê (redimensionar, GET do espaço) já está no escopo certo; a
+// (`BackupObjectVersionRepository.usedBytes`), e a parte da lixeira (`trashUsage`). Quem lê (redimensionar, GET do espaço) já está no escopo certo; a
 // leitura entra na transação dele.
 @Injectable()
 export class BackupSpaceStorageUsage implements OnModuleInit, OnModuleDestroy {
@@ -21,6 +21,8 @@ export class BackupSpaceStorageUsage implements OnModuleInit, OnModuleDestroy {
     this.port.use({
       usedBytes: (organizationId, spaceId) =>
         this.versions.usedBytes(organizationId, spaceId),
+      trashBytes: async (organizationId, spaceId) =>
+        (await this.versions.trashUsage(organizationId, spaceId)).bytes,
     });
   }
 

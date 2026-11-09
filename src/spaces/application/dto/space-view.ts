@@ -1,8 +1,15 @@
 import type { Space } from '../../domain/space.js';
 import type { SpaceRoleKey } from '../../domain/space-membership.js';
 
-/** Reserved size and usage (every stored version, trash included), in bytes. */
-export type SpaceStorageView = { quotaBytes: number; usedBytes: number };
+/**
+ * Reserved size and usage (every stored version, trash included), in bytes. `trashBytes` (only on `GET /spaces/:id`):
+ * the part of `usedBytes` in the trash (old and deleted versions inside the 30-day window).
+ */
+export type SpaceStorageView = {
+  quotaBytes: number;
+  usedBytes: number;
+  trashBytes?: number;
+};
 
 /** Details of a space for one of its members. */
 export type SpaceView = {

@@ -2,7 +2,20 @@ import { DomainValidationError } from '../../shared/domain/errors.js';
 import { UPLOAD_WINDOW_MS } from './backup-limits.js';
 import { BackupRules } from './backup-rules.js';
 
-export type BackupVersionStatus = 'pending' | 'committed' | 'expired';
+/**
+ * `purged`: a committed version removed for good from the trash (the Gestor emptied it, or it fell beyond the per-object
+ * cap of old versions). It no longer counts in the usage, is never listed and never downloadable.
+ */
+export type BackupVersionStatus =
+  'pending' | 'committed' | 'expired' | 'purged';
+
+/** A version the purge just removed from the index: what the bucket delete (after the COMMIT) needs. */
+export type PurgedVersion = {
+  id: string;
+  objectId: string;
+  s3VersionId: string;
+  sizeBytes: number;
+};
 
 /** Who uploaded: the hub with its own token, or a person (the hub on behalf of the logged-in person). */
 export type BackupUploader = { hubId: string } | { userId: string };

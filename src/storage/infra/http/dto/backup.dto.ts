@@ -23,6 +23,7 @@ import {
 } from '../../../domain/backup-limits.js';
 
 const SHA256_HEX = /^[0-9a-f]{64}$/;
+const BASE64URL = /^[A-Za-z0-9_-]+$/;
 const INT32_MAX = 2_147_483_647;
 
 /** One object to upload: ids, key version, size and sha256 of the ENCRYPTED blob (never a name). */
@@ -119,4 +120,12 @@ export class ListObjectsQueryDto {
   @Min(1)
   @Max(MAX_LIST_LIMIT)
   limit: number = 100;
+}
+
+/** Empty the trash of the space (Gestor): the reauthentication proof of the current password. */
+export class EmptyTrashDto {
+  @IsString()
+  @Matches(BASE64URL)
+  @MaxLength(256)
+  currentAuthProof!: string;
 }

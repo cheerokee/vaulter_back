@@ -1,8 +1,12 @@
 import { Injectable } from '@nestjs/common';
 
-/** What the `storage` module implements: every stored version of the space (live, old and in the trash), in bytes. */
+/**
+ * What the `storage` module implements: every stored version of the space (live, old and in the trash), in bytes, and
+ * the trash part of it (old and deleted versions still inside the 30-day window; absent = 0).
+ */
 export type SpaceStorageUsageSource = {
   usedBytes(organizationId: string, spaceId: string): Promise<number>;
+  trashBytes?(organizationId: string, spaceId: string): Promise<number>;
 };
 
 // Porta do uso de um espaço, exportada pelo `spaces`. O índice dos objetos é do `storage` (que depende do `spaces`,
@@ -39,6 +43,13 @@ export class SpaceStorageUsage {
   usedBytes(organizationId: string, spaceId: string): Promise<number> {
     return this.source
       ? this.source.usedBytes(organizationId, spaceId)
+      : Promise.resolve(0);
+  }
+
+  /** The trash part of `usedBytes` (0 without a source): the app warns the Gestor when it is a relevant share. */
+  trashBytes(organizationId: string, spaceId: string): Promise<number> {
+    return this.source?.trashBytes
+      ? this.source.trashBytes(organizationId, spaceId)
       : Promise.resolve(0);
   }
 }

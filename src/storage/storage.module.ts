@@ -1,10 +1,14 @@
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { HubsModule } from '../hubs/hubs.module.js';
+import { IdentityModule } from '../identity/identity.module.js';
+import { OrganizationsModule } from '../organizations/organizations.module.js';
 import { SpacesModule } from '../spaces/spaces.module.js';
 import { BackupObjectHealer } from './application/backup-object-healer.js';
+import { BackupTrash } from './application/backup-trash.js';
 import { ConfirmUploadsUseCase } from './application/confirm-uploads.use-case.js';
 import { DeleteObjectsUseCase } from './application/delete-objects.use-case.js';
+import { EmptyTrashUseCase } from './application/empty-trash.use-case.js';
 import { GetDownloadUrlUseCase } from './application/get-download-url.use-case.js';
 import { ListObjectsUseCase } from './application/list-objects.use-case.js';
 import { BackupIndexReader } from './application/ports/backup-index-reader.js';
@@ -26,10 +30,13 @@ import { S3ObjectStore } from './infra/s3/s3-object-store.js';
 
 /**
  * Encrypted backup of spaces (spec 2026-11-09-storage-backup). Depends on `spaces` (SpaceContentAccess, the usage
- * port it binds) and `hubs` (HubDirectory) through what they export. Exports nothing: no module imports `storage`.
+ * port it binds), `hubs` (HubDirectory), `identity` (CurrentAuthProofVerifier: emptying the trash reauthenticates) and
+ * `organizations` (AuditLog) through what they export. Exports nothing: no module imports `storage`.
  */
 @Module({
   imports: [
+    IdentityModule,
+    OrganizationsModule,
     SpacesModule,
     HubsModule,
     TypeOrmModule.forFeature([
@@ -52,10 +59,12 @@ import { S3ObjectStore } from './infra/s3/s3-object-store.js';
     StorageAccess,
     BackupSpaceStorageUsage,
     BackupObjectHealer,
+    BackupTrash,
     ReconcileStorageUseCase,
     RequestUploadsUseCase,
     ConfirmUploadsUseCase,
     DeleteObjectsUseCase,
+    EmptyTrashUseCase,
     ListObjectsUseCase,
     GetDownloadUrlUseCase,
   ],

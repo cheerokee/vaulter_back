@@ -179,6 +179,30 @@ Hub da Sala só com `space_reader` não envia; o índice derivado é regenerado 
 - **Índice:** versões fora da lixeira saem do índice por uma rotina (pg-boss) com o login dono, alinhada ao S3, e o uso
   do espaço é recalculado.
 
+#### Controle da lixeira *(decisão do Jonas, 2026-11-09: opção "c" + avisos no app)*
+A lixeira conta no uso por 30 dias; um arquivo grande reenviado com frequência enchia o espaço e parava o backup. Dois
+controles, mais os dados para o app avisar:
+- **Esvaziar a lixeira (Gestor):** `POST /spaces/:spaceId/backup/trash/empty` `{ currentAuthProof }` (token de
+  usuário; `space.members.manage`; reautenticação antes de qualquer gravação, no orçamento de reautenticação
+  compartilhado). Apaga de vez toda versão da lixeira do espaço (versões substituídas e versões de objetos apagados,
+  dentro dos 30 dias): no índice vira `purged` (`purged_at`, relógio do banco; sai do uso, das listagens e dos
+  downloads, que dão 404) e no S3 sai com `deleteVersion`. **Nunca** a versão viva de um objeto vivo; os delete
+  markers dos objetos apagados ficam (o ciclo de vida os remove). Até **1000 versões por pedido**
+  (`MAX_PURGE_BATCH_VERSIONS`) → `{ purgedVersions, purgedBytes, remainingVersions }`; o app repete enquanto
+  `remainingVersions > 0`. Auditado `space.backup.trash_emptied` (`spaceId`, `purgedVersions`, `purgedBytes`).
+- **Limite de versões antigas por objeto:** `MAX_TRASH_VERSIONS_PER_OBJECT = 10`. Quando uma confirmação cria uma
+  versão nova, as versões substituídas do objeto além das 10 mais recentes (por `superseded_at`) são apagadas do mesmo
+  jeito. Objeto apagado guarda as versões os 30 dias inteiros (sem limite no apagar).
+- **Segurança (decisão do Claude):** travas na ordem de sempre (espaço FOR SHARE, objetos FOR UPDATE em ordem de id,
+  `lock_timeout` do storage → 409 `storage-busy`). O índice é marcado `purged` (com a marca do diário
+  `s3_write_started_at`) e confirmado **antes** dos `deleteVersion` no S3, que rodam depois do COMMIT: uma queda no
+  meio deixa no bucket uma versão que o índice não referencia (a varredura `storage:reconcile` ou o próximo toque do
+  objeto a apagam; o ciclo de vida de 30 dias também), nunca o índice apontando para uma versão apagada como baixável.
+- **Avisos no app:** `GET /spaces/:id` traz `storage.trashBytes` (bytes da lixeira, parte de `usedBytes`). O app avisa
+  o Gestor quando `usedBytes` passa de 80% de `quotaBytes` e a lixeira é parte relevante disso, oferecendo "esvaziar a
+  lixeira" ou "aumentar o espaço"; e avisa que o backup **parou** quando um envio for recusado com
+  `space-storage-full`. Os limiares ficam no app.
+
 ## 5. Deixado para quem constrói
 1. Nomes exatos de rotas, campos, erros; tamanho do lote; validade das URLs.
 2. Tabelas do índice (objeto e versões), colunas de tamanho/franquia/capacidade, RLS, migrations e DER.

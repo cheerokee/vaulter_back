@@ -131,6 +131,7 @@ describe('storage quotas (e2e)', () => {
       expect(spaceView.body.storage).toEqual({
         quotaBytes: 45 * GiB,
         usedBytes: 0,
+        trashBytes: 0,
       });
     });
 

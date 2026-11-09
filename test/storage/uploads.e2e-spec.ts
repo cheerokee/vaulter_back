@@ -1110,6 +1110,7 @@ describe('storage uploads (e2e)', () => {
         'key_version',
         'object_id',
         'organization_id',
+        'purged_at',
         'replaces_version_id',
         's3_version_id',
         'sha256',
