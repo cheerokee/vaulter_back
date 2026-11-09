@@ -6,7 +6,7 @@ import {
 import { RegistrationHooks } from '../../shared/application/registration-hooks.js';
 import { UnitOfWork } from '../../shared/infra/db/unit-of-work.js';
 import { UserRepository } from '../domain/user.repository.js';
-import { assertDevice } from '../domain/session.js';
+import { assertDeviceWithoutHub } from '../domain/session.js';
 import { User } from '../domain/user.js';
 import { toLoginResult, type LoginResult } from './dto/login-result.js';
 import { AuthProofHasher } from './ports/auth-proof-hasher.js';
@@ -47,7 +47,8 @@ export class RegisterUserUseCase {
     // Validate everything before the (expensive) hash and before touching the repository.
     assertAuthProof(input.authProof);
     assertRecoveryProof(input.recoveryProof);
-    assertDevice(input.device);
+    // Plataforma `hub` recusada antes da prova: a resposta não pode depender dela (seria um oráculo).
+    assertDeviceWithoutHub(input.device);
     User.validateRegistration(input);
 
     const now = new Date();

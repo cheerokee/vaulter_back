@@ -1,5 +1,5 @@
 import { isUuidV7 } from '../../shared/domain/id.js';
-import { Session } from './session.js';
+import { assertDeviceWithoutHub, Session } from './session.js';
 
 const now = new Date('2026-10-24T12:00:00Z');
 const day = 86_400_000;
@@ -142,5 +142,22 @@ describe('Session', () => {
       userAgent: null,
     });
     expect(s.deviceName).toBe('Pixel');
+  });
+});
+
+describe('assertDeviceWithoutHub', () => {
+  it('refuses the hub platform with device-invalid', () => {
+    expect(() =>
+      assertDeviceWithoutHub({ name: 'Sala', platform: 'hub' }),
+    ).toThrow(expect.objectContaining({ code: 'device-invalid' }));
+  });
+
+  it('accepts any other platform', () => {
+    expect(
+      assertDeviceWithoutHub({ name: ' Pixel ', platform: 'android' }),
+    ).toEqual({
+      name: 'Pixel',
+      platform: 'android',
+    });
   });
 });

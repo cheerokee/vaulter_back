@@ -53,6 +53,25 @@ export function assertDevice(device: unknown): {
   return { name, platform: d.platform as DevicePlatform };
 }
 
+/**
+ * `assertDevice` for the routes that open a session WITHOUT a hub (register, account recovery): the `hub` platform is
+ * refused up front, before any proof is checked, so the answer never depends on the account or the proof.
+ * (`/auth/login` refuses it with `invalid-credentials`, after the usual verification, instead.)
+ */
+export function assertDeviceWithoutHub(device: unknown): {
+  name: string;
+  platform: DevicePlatform;
+} {
+  const checked = assertDevice(device);
+  if (checked.platform === 'hub') {
+    throw new DomainValidationError(
+      'device-invalid',
+      'The device name or platform is invalid.',
+    );
+  }
+  return checked;
+}
+
 const DAY_MS = 86_400_000;
 
 function addDays(now: Date, days: number): Date {

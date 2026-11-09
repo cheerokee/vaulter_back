@@ -273,15 +273,16 @@ Hub, como faria para uma pessoa.
     de organização com vínculo aprovado). Quem não tem papel recebe o **mesmo** 401 `invalid-credentials` da senha
     errada e do e-mail desconhecido (sem oráculo). O Hub também confere localmente (conhece os membros pela
     sincronização); o backend é a segunda trava.
-  - **`/auth/login` com `device.platform = 'hub'` dá 401 `invalid-credentials`** (e o cadastro com `hub`, 422
-    `device-invalid`): sessão de Hub só nasce por esta rota.
+  - **`/auth/login` com `device.platform = 'hub'` dá 401 `invalid-credentials`** (e o cadastro e a recuperação da conta
+    com `hub`, 422 `device-invalid`, antes de conferir qualquer prova): sessão de Hub só nasce por esta rota.
   - **A sessão fica presa ao Hub** e cai sozinha (o refresh passa a dar 401 `invalid-refresh-token`; o motivo gravado é
     `hub_access_lost`) quando a pessoa perde todo papel nele: desvincular a organização que dava o papel, a pessoa sair
     ou ser removida da organização, o dono tirar o papel explícito de quem não tem outro (hoje quem tem papel
     explícito segue `hub_user` implícito, então a sessão continua), ou o Hub ser desregistrado (todas as sessões do
     Hub, inclusive a do dono). Sessões da mesma pessoa em outros aparelhos ou em outros Hubs não mudam. Ao receber 401
     no refresh, o Hub descarta a sessão e pede a senha de novo (se ainda tiver papel, entra).
-  - Limites: 10/min por Hub e 5/min por e-mail (a mesma regra do `/auth/login`, com o Hub no lugar do IP).
+  - Limites: 10/min por Hub e 5/min por e-mail (a mesma regra do `/auth/login`, com o Hub no lugar do IP). O contador
+    por e-mail desta rota é **separado** do contador por e-mail do `/auth/login` (cada rota tem o seu).
 - **Offline:** o Hub tem o material trancado da pessoa (vindo da sincronização). A senha deriva a chave (Argon2id,
   `docs/crypto/user-keys.md`) e abre a chave privada dela, que abre as cópias da chave dos espaços.
 - **Sala:** sem login, o Hub abre com a própria chave X25519 as cópias trancadas para ele (passo 8).

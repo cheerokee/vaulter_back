@@ -194,6 +194,45 @@ describe('Account recovery (e2e)', () => {
     await c.login(email, acc.authProof).expect(200);
   }, 60_000);
 
+  it('refuses the hub platform with the same 422 whether the code is right or not, and changes nothing', async () => {
+    const email = 'hubdevice@example.com';
+    const acc = await createClientAccount(PASSWORD_OLD);
+    const reg = await c.register(acc, email).expect(201);
+    const next = await rewrapPrivateKey(acc.privateKey, PASSWORD_NEW);
+    const body = (recoveryProof: string) => ({
+      email,
+      recoveryProof,
+      newAuthProof: next.authProof,
+      newKdfSalt: next.kdfSalt,
+      newKdfParams: next.kdfParams,
+      newEncryptedPrivateKey: next.encryptedPrivateKey,
+      device: { name: 'Sala', platform: 'hub' },
+    });
+
+    const right = await c.recoveryComplete(body(acc.recoveryProof)).expect(422);
+    const wrong = await c
+      .recoveryComplete(body(other.recoveryProof))
+      .expect(422);
+    const unknown = await c
+      .recoveryComplete({ ...body(acc.recoveryProof), email: 'no@example.com' })
+      .expect(422);
+    for (const r of [wrong, unknown]) {
+      expect(r.body.type).toBe(right.body.type);
+      expect(r.body.title).toBe(right.body.title);
+      expect(r.body.detail).toBe(right.body.detail);
+    }
+    expect(right.body.type).toMatch(/device-invalid$/);
+
+    // Nada mudou: a sessão antiga vale, a senha antiga entra e a nova não.
+    await c
+      .http()
+      .get('/me')
+      .set(c.bearer(reg.body.session.accessToken as string))
+      .expect(200);
+    await c.login(email, acc.authProof).expect(200);
+    await c.login(email, next.authProof).expect(401);
+  }, 60_000);
+
   it('keeps an open space readable after recovery', async () => {
     const email = 'space-owner@example.com';
     const owner = await c.spaces.signUpKeyed(email);

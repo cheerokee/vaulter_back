@@ -131,7 +131,8 @@ couber (spec de contas, §12).
   - **sessão presa a um Hub** (`user_sessions.hub_id`, CHECK: plataforma `hub` <=> `hub_id`): só nasce pelo
     `HubSessionIssuer.loginOnHub` (exportado; a checagem de papel é um callback `isAllowed` do `hubs`, rodado na mesma
     transação da criação da sessão). `/auth/login` com `platform: 'hub'` dá o mesmo 401 `invalid-credentials` (depois da
-    mesma verificação, `CredentialCheck`). `HubBoundSessions` (exportado) revoga as sessões de um Hub com o motivo
+    mesma verificação, `CredentialCheck`). Cadastro e recuperação da conta recusam `hub` com 422 `device-invalid` **antes**
+    de qualquer prova (`assertDeviceWithoutHub`; depois dela seria um oráculo do código de recuperação). `HubBoundSessions` (exportado) revoga as sessões de um Hub com o motivo
     `hub_access_lost`, chamado pelo `hubs` dentro do unit of work dele.
   - Formato v1 das chaves do usuário (Argon2id, normalização NFC da senha, vetor de teste):
     [`docs/crypto/user-keys.md`](docs/crypto/user-keys.md).
@@ -861,7 +862,7 @@ Os valores do `.env.example` para os segredos são **só de desenvolvimento**; p
   | `POST /hubs/link-requests` | 10/h por usuário |
   | `POST /hub/link-codes` | 30/h por Hub (`hubIdTracker`) |
   | `GET /hub/sync` | 120/h por Hub (`hubIdTracker`) |
-  | `POST /hub/user-sessions` (login de pessoa pelo Hub) | 10/min por Hub (`hubIdTracker`) **e** 5/min por e-mail normalizado |
+  | `POST /hub/user-sessions` (login de pessoa pelo Hub) | 10/min por Hub (`hubIdTracker`) **e** 5/min por e-mail normalizado (contador **próprio** da rota, separado do `/auth/login`) |
   Rota com `@Throttle` próprio tem contador próprio (por rota); `@ThrottleGroup(THROTTLE_GROUPS.x, tracker?)`
   (`throttling.decorators.ts`) faz rotas dividirem um contador (chave = grupo + tracker, sem a rota); cada grupo é
   UMA constante com nome e limite em `THROTTLE_GROUPS` (`rate-limits.ts`), e o decorator recusa o mesmo grupo com

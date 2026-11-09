@@ -1,7 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { UnitOfWork } from '../../shared/infra/db/unit-of-work.js';
 import { assertAuthProof } from '../domain/crypto-material.js';
-import { assertDevice } from '../domain/session.js';
+import { assertDeviceWithoutHub } from '../domain/session.js';
 import { SessionRepository } from '../domain/session.repository.js';
 import { User } from '../domain/user.js';
 import { UserRepository } from '../domain/user.repository.js';
@@ -53,7 +53,8 @@ export class CompleteRecoveryUseCase {
       encryptedPrivateKey: input.newEncryptedPrivateKey,
     };
     User.validatePasswordChange(newMaterial);
-    assertDevice(input.device);
+    // Plataforma `hub` recusada antes da prova: a resposta não pode depender dela (seria um oráculo).
+    assertDeviceWithoutHub(input.device);
 
     const user = await verifyRecoveryProof(
       this.users,
