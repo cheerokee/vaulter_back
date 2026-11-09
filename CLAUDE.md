@@ -714,16 +714,19 @@ pelo que exportam; ninguém importa `storage`.
   travas, para a ordem das versões no S3 ser a do índice. Trade-off aceito: enquanto um lote de confirmação roda (até
   100 cópias), redimensionar, trocar a chave, pôr/tirar membro, tirar da Sala e o gancho de saída da organização
   (todos `FOR UPDATE` no espaço) esperam o lote; confirmações e apagamentos do mesmo espaço correm juntos.
-- **Diário + reparo:** a confirmação/o apagar gravam a marca `s3_write_started_at` nas versões numa **transação curta
-  própria, confirmada ANTES** do unit of work que grava no S3 (junto com a checagem de acesso; `COALESCE`: não
-  sobrescreve uma marca mais antiga), e o commit que confirma limpa só as marcas das próprias linhas. Marca que sobra =
-  a gravação pode ter ido ao S3 sem o índice. `BackupObjectHealer` (com a linha do objeto travada) apaga do bucket toda
-  versão/marker que nenhuma versão `committed` referencia (objeto apagado: só versões com dado, os markers ficam).
-  Roda: no próximo toque do objeto (marca mais antiga que a do pedido), logo depois de um unit of work que rejeitou
-  depois de gravar no S3 (inclusive COMMIT de resultado incerto: o que o COMMIT gravou é referenciado e fica; as marcas
-  ficam, porque uma cópia abortada ainda pode chegar) e na varredura `npm run storage:reconcile` (marcas com mais de
-  60 min, a única que limpa marcas alheias; contexto `app.storage_reconcile`, policy `storage_reconcile_read` só das
-  linhas marcadas). **Só o reparo usa `ObjectStore.deleteVersion`.**
+- **Diário + reparo:** a marca `s3_write_started_at` quer dizer "alguma tentativa de gravar no S3 por esta linha
+  começou neste instante ou depois", sempre no **relógio do banco**. A confirmação/o apagar a gravam numa **transação
+  curta própria, confirmada ANTES** do unit of work que grava no S3, depois da checagem de acesso e só nas linhas de
+  quem age (intenções do próprio remetente; a versão viva que o apagar indica), **renovando** para `now()`. Sob a trava
+  do objeto, antes de gravar no S3, a tentativa reconfere a própria marca (sumiu = a varredura limpou enquanto o pedido
+  estava parado: 409 `storage-busy`, repetível); **nenhuma gravação no S3 sem marca**. A marca **nunca** é limpa no
+  commit: só a varredura `npm run storage:reconcile` a limpa, e só as mais antigas que 60 min (relógio do banco),
+  depois de reparar o objeto sob a trava. `BackupObjectHealer` (objeto travado) apaga do bucket toda versão/marker que
+  nenhuma versão `committed` referencia (objeto apagado: só versões com dado, os markers ficam). Roda: no próximo
+  toque do objeto (marca mais antiga que a da tentativa), logo depois de um unit of work que rejeitou depois de gravar
+  no S3 (inclusive COMMIT de resultado incerto: o que o COMMIT gravou é referenciado e fica) e na varredura (contexto
+  `app.storage_reconcile`, policy `storage_reconcile_read` só das linhas marcadas; como toda confirmação deixa marca,
+  a varredura revisita cada objeto gravado na última janela). **Só o reparo usa `ObjectStore.deleteVersion`.**
 - **Nunca precisar de uma segunda conexão do pool enquanto se segura uma** (autocommit "por fora" de um `uow.run`
   aberto): com o pool cheio de transações esperando travas, a espera pela conexão não tem fim e o Postgres não vê o
   impasse. Grave antes, numa transação própria.

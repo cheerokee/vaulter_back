@@ -182,39 +182,75 @@ export class BackupObjectVersionTypeormRepository extends BackupObjectVersionRep
     return byteCount(rows[0]?.used ?? '0');
   }
 
-  async markVersionsWriteStarted(
+  async markPendingWrites(
     orgId: string,
     spaceId: string,
     versionIds: readonly string[],
-    at: Date,
-  ): Promise<void> {
+    uploader: BackupUploader,
+  ): Promise<Map<string, Date>> {
     const valid = versionIds.filter((id) => validate(id));
-    if (valid.length === 0) return;
-    await runInOrganizationScope(this.dataSource, orgId, (m) =>
-      m.query(
-        `UPDATE storage_object_versions SET s3_write_started_at = COALESCE(s3_write_started_at, $4)
-          WHERE organization_id = $1 AND space_id = $2 AND id = ANY($3::uuid[]) AND status = 'pending'`,
-        [orgId, spaceId, valid, at],
-      ),
-    );
+    if (valid.length === 0) return new Map();
+    const [hubId, userId] = uploaderColumns(uploader);
+    const [rows]: [{ id: string; mark: Date }[], number] =
+      await runInOrganizationScope(this.dataSource, orgId, (m) =>
+        m.query(
+          `UPDATE storage_object_versions
+              SET s3_write_started_at = GREATEST(COALESCE(s3_write_started_at, now()), now())
+            WHERE organization_id = $1 AND space_id = $2 AND id = ANY($3::uuid[]) AND status = 'pending'
+              AND uploaded_by_hub_id IS NOT DISTINCT FROM $4::uuid
+              AND uploaded_by_user_id IS NOT DISTINCT FROM $5::uuid
+          RETURNING id, s3_write_started_at AS mark`,
+          [orgId, spaceId, valid, hubId, userId],
+        ),
+      );
+    return new Map(rows.map((r) => [r.id, r.mark]));
   }
 
-  async markObjectsWriteStarted(
+  async markLiveWrites(
     orgId: string,
     spaceId: string,
-    objectIds: readonly string[],
-    at: Date,
-  ): Promise<void> {
-    const valid = objectIds.filter((id) => validate(id));
-    if (valid.length === 0) return;
-    await runInOrganizationScope(this.dataSource, orgId, (m) =>
-      m.query(
-        `UPDATE storage_object_versions SET s3_write_started_at = COALESCE(s3_write_started_at, $4)
-          WHERE organization_id = $1 AND space_id = $2 AND object_id = ANY($3::uuid[])
-            AND status = 'committed' AND superseded_at IS NULL`,
-        [orgId, spaceId, valid, at],
-      ),
+    items: readonly { objectId: string; versionId: string }[],
+  ): Promise<Map<string, Date>> {
+    const valid = items.filter(
+      (i) => validate(i.objectId) && validate(i.versionId),
     );
+    if (valid.length === 0) return new Map();
+    const [rows]: [{ id: string; mark: Date }[], number] =
+      await runInOrganizationScope(this.dataSource, orgId, (m) =>
+        m.query(
+          `UPDATE storage_object_versions v
+              SET s3_write_started_at = GREATEST(COALESCE(v.s3_write_started_at, now()), now())
+             FROM unnest($3::uuid[], $4::uuid[]) AS t(object_id, version_id)
+            WHERE v.organization_id = $1 AND v.space_id = $2 AND v.id = t.version_id
+              AND v.object_id = t.object_id AND v.status = 'committed' AND v.superseded_at IS NULL
+          RETURNING v.id, v.s3_write_started_at AS mark`,
+          [
+            orgId,
+            spaceId,
+            valid.map((i) => i.objectId),
+            valid.map((i) => i.versionId),
+          ],
+        ),
+      );
+    return new Map(rows.map((r) => [r.id, r.mark]));
+  }
+
+  async writeMarks(
+    orgId: string,
+    versionIds: readonly string[],
+  ): Promise<Map<string, Date>> {
+    if (versionIds.length === 0) return new Map();
+    const rows: { id: string; mark: Date }[] = await runInOrganizationScope(
+      this.dataSource,
+      orgId,
+      (m) =>
+        m.query(
+          `SELECT id, s3_write_started_at AS mark FROM storage_object_versions
+            WHERE organization_id = $1 AND id = ANY($2::uuid[]) AND s3_write_started_at IS NOT NULL`,
+          [orgId, versionIds],
+        ),
+    );
+    return new Map(rows.map((r) => [r.id, r.mark]));
   }
 
   async hasWriteMarksBefore(
@@ -235,30 +271,17 @@ export class BackupObjectVersionTypeormRepository extends BackupObjectVersionRep
     return rows.length > 0;
   }
 
-  async clearVersionMarks(
-    orgId: string,
-    versionIds: readonly string[],
-  ): Promise<void> {
-    if (versionIds.length === 0) return;
-    await runInOrganizationScope(this.dataSource, orgId, (m) =>
-      m.query(
-        `UPDATE storage_object_versions SET s3_write_started_at = NULL
-          WHERE organization_id = $1 AND id = ANY($2::uuid[]) AND s3_write_started_at IS NOT NULL`,
-        [orgId, versionIds],
-      ),
-    );
-  }
-
   async clearWriteMarks(
     orgId: string,
     objectId: string,
-    before: Date,
+    olderThanMinutes: number,
   ): Promise<void> {
     await runInOrganizationScope(this.dataSource, orgId, (m) =>
       m.query(
         `UPDATE storage_object_versions SET s3_write_started_at = NULL
-          WHERE organization_id = $1 AND object_id = $2 AND s3_write_started_at < $3`,
-        [orgId, objectId, before],
+          WHERE organization_id = $1 AND object_id = $2
+            AND s3_write_started_at < now() - make_interval(mins => $3)`,
+        [orgId, objectId, olderThanMinutes],
       ),
     );
   }
@@ -281,7 +304,7 @@ export class BackupObjectVersionTypeormRepository extends BackupObjectVersionRep
   }
 
   async staleWriteMarks(
-    before: Date,
+    olderThanMinutes: number,
   ): Promise<{ organizationId: string; spaceId: string; objectId: string }[]> {
     // Sem organização no contexto: só a policy storage_reconcile_read (linhas marcadas) deixa ler.
     const rows: {
@@ -294,9 +317,9 @@ export class BackupObjectVersionTypeormRepository extends BackupObjectVersionRep
       (m) =>
         m.query(
           `SELECT DISTINCT organization_id, space_id, object_id FROM storage_object_versions
-            WHERE s3_write_started_at IS NOT NULL AND s3_write_started_at < $1
+            WHERE s3_write_started_at < now() - make_interval(mins => $1)
             ORDER BY organization_id, object_id`,
-          [before],
+          [olderThanMinutes],
         ),
     );
     return rows.map((r) => ({

@@ -18,15 +18,14 @@ export class ReconcileStorageUseCase {
 
   async execute(
     input: { olderThanMinutes?: number } = {},
-    now: Date = new Date(),
   ): Promise<{ objects: number; removedVersions: number }> {
     const age = input.olderThanMinutes ?? RECONCILE_DEFAULT_AGE_MINUTES;
-    const before = new Date(now.getTime() - age * 60_000);
-    const refs = await this.versions.staleWriteMarks(before);
-    // Only marks older than `before` are cleared: a fresher one may belong to a request still in flight.
+    // Database clock on both ends: the candidates and the marks it clears (only those older than `age`, after the
+    // object was repaired under its lock; a fresher mark may belong to a request still in flight).
+    const refs = await this.versions.staleWriteMarks(age);
     return {
       objects: refs.length,
-      removedVersions: await this.healer.repair(refs, before),
+      removedVersions: await this.healer.repair(refs, age),
     };
   }
 }

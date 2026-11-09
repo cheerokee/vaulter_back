@@ -48,6 +48,10 @@ function setup() {
   let s3 = 0;
   let mode: 'normal' | 'commitThenReject' = 'normal';
   let runsBeforeLoss = 0;
+  // The database clock (marks never use the app clock).
+  let dbMillis = Date.parse('2026-11-09T12:00:00Z');
+  const dbNow = () => new Date((dbMillis += 1));
+  let beforeLockObject: (() => void) | undefined;
   const heads = new Map<
     string,
     { sizeBytes: number; sha256Hex: string | null } | null
@@ -89,6 +93,8 @@ function setup() {
       return cloneObject(objects.get(id)!);
     }),
     lockForUpdate: vi.fn(async (_o: string, _s: string, id: string) => {
+      beforeLockObject?.();
+      beforeLockObject = undefined;
       trace.push(`lockObject:${id}`);
       const o = objects.get(id);
       return o ? cloneObject(o) : null;
@@ -123,45 +129,68 @@ function setup() {
       trace.push('usedBytes');
       return usedBytes;
     }),
-    markVersionsWriteStarted: vi.fn(
-      async (_o: string, _s: string, ids: readonly string[], at: Date) => {
-        trace.push(`markVersions:${ids.join(',')}`);
-        for (const id of ids) {
-          if (versions.get(id)?.status === 'pending' && !marks.has(id)) {
-            marks.set(id, at);
-          }
-        }
-      },
-    ),
-    markObjectsWriteStarted: vi.fn(
+    markPendingWrites: vi.fn(
       async (
         _o: string,
         _s: string,
-        objectIds: readonly string[],
-        at: Date,
+        ids: readonly string[],
+        uploader: { hubId?: string; userId?: string },
       ) => {
-        trace.push(`markObjects:${objectIds.join(',')}`);
-        for (const objectId of objectIds) {
-          const live = objects.get(objectId)?.liveVersionId;
-          if (live && !marks.has(live)) marks.set(live, at);
+        trace.push(`markPending:${ids.join(',')}`);
+        const out = new Map<string, Date>();
+        for (const id of ids) {
+          const v = versions.get(id);
+          if (
+            v?.status === 'pending' &&
+            JSON.stringify(v.uploader) === JSON.stringify(uploader)
+          ) {
+            const at = dbNow();
+            marks.set(id, at);
+            out.set(id, at);
+          }
         }
+        return out;
       },
     ),
+    markLiveWrites: vi.fn(
+      async (
+        _o: string,
+        _s: string,
+        items: readonly { objectId: string; versionId: string }[],
+      ) => {
+        trace.push(`markLive:${items.map((x) => x.versionId).join(',')}`);
+        const out = new Map<string, Date>();
+        for (const { objectId, versionId } of items) {
+          if (objects.get(objectId)?.liveVersionId === versionId) {
+            const at = dbNow();
+            marks.set(versionId, at);
+            out.set(versionId, at);
+          }
+        }
+        return out;
+      },
+    ),
+    writeMarks: vi.fn(async (_o: string, ids: readonly string[]) => {
+      trace.push('reconfirm');
+      return new Map(
+        ids.filter((id) => marks.has(id)).map((id) => [id, marks.get(id)!]),
+      );
+    }),
     hasWriteMarksBefore: vi.fn(
       async (_o: string, objectId: string, before: Date) =>
         [...marks].some(
           ([id, at]) => versions.get(id)?.objectId === objectId && at < before,
         ),
     ),
-    clearVersionMarks: vi.fn(async (_o: string, ids: readonly string[]) => {
-      trace.push(`clearVersionMarks:${ids.join(',')}`);
-      for (const id of ids) marks.delete(id);
-    }),
     clearWriteMarks: vi.fn(
-      async (_o: string, objectId: string, before: Date) => {
+      async (_o: string, objectId: string, minutes: number) => {
         trace.push(`clearMarks:${objectId}`);
+        const cutoff = dbNow().getTime() - minutes * 60_000;
         for (const [id, at] of [...marks]) {
-          if (versions.get(id)?.objectId === objectId && at < before) {
+          if (
+            versions.get(id)?.objectId === objectId &&
+            at.getTime() < cutoff
+          ) {
             marks.delete(id);
           }
         }
@@ -172,15 +201,16 @@ function setup() {
         .filter((v) => v.objectId === objectId && v.status === 'committed')
         .map((v) => v.s3VersionId!),
     ),
-    staleWriteMarks: vi.fn(async (before: Date) =>
-      [
+    staleWriteMarks: vi.fn(async (minutes: number) => {
+      const cutoff = dbNow().getTime() - minutes * 60_000;
+      return [
         ...new Set(
           [...marks]
-            .filter(([, at]) => at < before)
+            .filter(([, at]) => at.getTime() < cutoff)
             .map(([id]) => versions.get(id)!.objectId),
         ),
-      ].map((objectId) => ({ organizationId: ORG, spaceId: SPACE, objectId })),
-    ),
+      ].map((objectId) => ({ organizationId: ORG, spaceId: SPACE, objectId }));
+    }),
   };
   const store = {
     presignPut: vi.fn(async (key: string, input: { sizeBytes: number }) => ({
@@ -281,6 +311,10 @@ function setup() {
     heads,
     setUsed: (n: number) => {
       usedBytes = n;
+    },
+    /** Runs once, right before the next object lock (e.g. a sweep clearing a mark). */
+    beforeNextObjectLock: (fn: () => void) => {
+      beforeLockObject = fn;
     },
     /** The COMMIT of the main unit of work of the next confirm/delete (the journal run comes first) is lost. */
     loseNextCommit: () => {
@@ -487,20 +521,60 @@ describe('ConfirmUploadsUseCase', () => {
       // The journal first, in its own short committed transaction.
       'run',
       'lock:memory.write:share',
-      `markVersions:${second}`,
+      `markPending:${second}`,
       'commit',
       'run',
       'lock:memory.write:share',
       `lockObject:${OBJ_A}`,
       `head:${second}`,
+      'reconfirm',
       `copy:${OBJ_A}`,
       `saveVersion:${second}`,
       `superseded:${first}`,
       `saveObject:${OBJ_A}`,
-      `clearVersionMarks:${second}`,
       'commit',
     ]);
-    expect(t.marks.size).toBe(0);
+    // Never cleared on commit: only the sweep clears marks.
+    expect([...t.marks.keys()].sort()).toEqual([first, second].sort());
+  });
+
+  it("a sweep that cleared this attempt's mark before the object lock: 409 storage-busy, no S3 write", async () => {
+    const id = await intent(OBJ_A);
+    t.beforeNextObjectLock(() => t.marks.clear());
+    await expect(
+      t.confirm.execute(HUB, SPACE, [id], NOW),
+    ).rejects.toMatchObject({
+      constructor: ConflictError,
+      code: 'storage-busy',
+    });
+    expect(t.mocks.store.copy).not.toHaveBeenCalled();
+    // A retry marks again and goes through.
+    await expect(
+      t.confirm.execute(HUB, SPACE, [id], NOW),
+    ).resolves.toMatchObject([{ versionId: id }]);
+  });
+
+  it('a delete whose mark was cleared before the object lock: 409 storage-busy, no delete marker', async () => {
+    const v = await intent(OBJ_A);
+    await t.confirm.execute(HUB, SPACE, [v], NOW);
+    t.beforeNextObjectLock(() => t.marks.clear());
+    await expect(
+      t.remove.execute(
+        { userId: 'u' },
+        SPACE,
+        [{ objectId: OBJ_A, replacesVersionId: v }],
+        NOW,
+      ),
+    ).rejects.toMatchObject({ code: 'storage-busy' });
+    expect(t.mocks.store.deleteCurrent).not.toHaveBeenCalled();
+  });
+
+  it("marks only the caller's own intents: another hub cannot mark them", async () => {
+    const id = await intent(OBJ_A);
+    await expect(
+      t.confirm.execute({ hubId: 'other' }, SPACE, [id], NOW),
+    ).rejects.toMatchObject({ code: 'upload-not-found' });
+    expect(t.marks.has(id)).toBe(false);
   });
 
   it('only the uploader confirms: another hub or a person gets 404 upload-not-found', async () => {
@@ -656,8 +730,8 @@ describe('ConfirmUploadsUseCase', () => {
       t.versions.get(first)!.s3VersionId,
       t.versions.get(next)!.s3VersionId,
     ]);
-    // The stale mark of the lost attempt stays for the sweep; the next confirmation clears only its own.
-    expect([...t.marks.keys()]).toEqual([lost]);
+    // Nothing is cleared on commit: the lost attempt's mark stays for the sweep.
+    expect(t.marks.has(lost)).toBe(true);
   });
 
   it('the reconcile sweep repairs objects nobody touches again', async () => {
@@ -669,14 +743,15 @@ describe('ConfirmUploadsUseCase', () => {
     t.bucket.get(key)!.push({ versionId: 'stray', isDeleteMarker: false });
     t.bucket.get(key)!.push({ versionId: 'stray-dm', isDeleteMarker: true });
 
-    await expect(t.reconcile.execute({}, NOW)).resolves.toEqual({
+    await expect(t.reconcile.execute({})).resolves.toEqual({
       objects: 1,
       removedVersions: 2,
     });
     expect(t.bucket.get(key)!.map((v) => v.versionId)).toEqual([
       t.versions.get(first)!.s3VersionId,
     ]);
-    expect(t.marks.size).toBe(0);
+    // The sweep clears only marks older than its threshold: the fresh one of `first` stays.
+    expect([...t.marks.keys()]).toEqual([first]);
   });
 });
 

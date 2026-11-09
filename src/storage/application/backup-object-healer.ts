@@ -35,12 +35,12 @@ export class BackupObjectHealer {
 
   /**
    * MUST run inside `UnitOfWork.run` with the object row locked `FOR UPDATE`. Returns how many S3 versions were
-   * removed. `clearMarksBefore`: only the age-gated sweep clears marks (those older than it): right after a failure an
-   * aborted S3 request may still land server-side, so the mark must stay until the sweep looks again.
+   * removed. `clearMarksOlderThanMinutes`: only the age-gated sweep clears marks (older than that, database clock),
+   * after the repair: an aborted S3 request may still land server-side, so a fresh mark must stay.
    */
   async heal(
     object: BackupObject,
-    options: { clearMarksBefore?: Date } = {},
+    options: { clearMarksOlderThanMinutes?: number } = {},
   ): Promise<number> {
     const orgId = object.organizationId;
     const referenced = new Set(
@@ -55,11 +55,11 @@ export class BackupObjectHealer {
       await this.store.deleteVersion(key, v.versionId);
       removed++;
     }
-    if (options.clearMarksBefore) {
+    if (options.clearMarksOlderThanMinutes !== undefined) {
       await this.versions.clearWriteMarks(
         orgId,
         object.id,
-        options.clearMarksBefore,
+        options.clearMarksOlderThanMinutes,
       );
     }
     if (removed > 0) {
@@ -73,12 +73,12 @@ export class BackupObjectHealer {
 
   /**
    * Repairs each object in its own unit of work (locks the row, waits for any writer). Marks are cleared only when
-   * `clearMarksBefore` is given (the sweep). Never throws: a failure is logged and the marks stay for the next sweep.
+   * `clearMarksOlderThanMinutes` is given (the sweep). Never throws: a failure is logged and the marks stay for the next sweep.
    * Returns the removed S3 versions.
    */
   async repair(
     refs: readonly ObjectRef[],
-    clearMarksBefore?: Date,
+    clearMarksOlderThanMinutes?: number,
   ): Promise<number> {
     let removed = 0;
     for (const ref of refs) {
@@ -89,7 +89,7 @@ export class BackupObjectHealer {
             ref.spaceId,
             ref.objectId,
           );
-          return object ? this.heal(object, { clearMarksBefore }) : 0;
+          return object ? this.heal(object, { clearMarksOlderThanMinutes }) : 0;
         });
       } catch (error) {
         this.logger.error(

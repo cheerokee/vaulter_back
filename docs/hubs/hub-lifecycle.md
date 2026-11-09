@@ -288,7 +288,8 @@ objeto). O backend guarda só o índice (ids, tamanho, sha256 do blob, versão d
   a versão atual); outro Hub gravou antes → 409 `object-version-conflict` (com `currentVersionId`; resolva, por exemplo,
   gravando uma cópia de conflito como objeto novo); espaço cheio → 422 `space-storage-full` (`missingBytes`); objeto
   acima de 5 GiB → 422 `object-too-large` (divida o arquivo); bytes no S3 diferentes do declarado ou PUT não feito →
-  422 `upload-mismatch`; `uploadId` desconhecido, de outro espaço, de outro remetente ou com mais de 1 dia → 404 `upload-not-found`.
+  422 `upload-mismatch`; `uploadId` desconhecido, de outro espaço, de outro remetente ou com mais de 1 dia → 404 `upload-not-found`;
+  409 `storage-busy` (raro) → repita o mesmo pedido.
 
 ## 10. Pessoas usando o Hub
 

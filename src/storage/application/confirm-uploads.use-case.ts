@@ -12,6 +12,7 @@ import {
   type CommittedVersionView,
 } from './dto/backup-views.js';
 import { ObjectStore } from './ports/object-store.js';
+import { assertStillMarked } from './journal.js';
 import { objectVersionConflict, uploadNotFound } from './storage-errors.js';
 import {
   StorageAccess,
@@ -38,19 +39,19 @@ function sameUploader(
 //    senão 404 `upload-not-found` (também fora da janela de 1 dia); uma já confirmada só devolve a versão (repetição
 //    depois de um timeout: nada é copiado de novo);
 // 2. troca de chave pendente / versão da chave (409), reconferidos AQUI porque podem ter mudado depois da intenção;
-// 3. trava os objetos em ordem de id; objeto com marca mais antiga que a deste pedido (uma tentativa que não confirmou)
-//    é reparado antes (`BackupObjectHealer`); na ordem do pedido, confere `replacesVersionId` contra a versão viva (409
+// 3. trava os objetos em ordem de id; objeto com marca mais antiga que as deste pedido (outra tentativa) é reparado
+//    antes (`BackupObjectHealer`); na ordem do pedido, confere `replacesVersionId` contra a versão viva (409
 //    `object-version-conflict`) e o `HEAD` do provisório (tamanho e sha256 iguais aos declarados, senão 422
 //    `upload-mismatch`: nada entra no índice);
-// 4. copia cada provisório para `objects/<objectId>` dentro do S3 (os bytes não passam pelo backend) e grava a versão
-//    (`committed`, `s3VersionId`), a anterior vira lixeira (`superseded_at`), o objeto aponta para a nova e as marcas
-//    DESTA confirmação são limpas.
-// O diário (`s3_write_started_at`) é gravado ANTES, numa transação curta própria (com a checagem de acesso): sobrevive
-// a qualquer falha do unit of work e nunca exige uma segunda conexão enquanto ele segura a dele.
+// 4. reconfere que cada linha ainda tem a marca desta tentativa (senão 409 `storage-busy`), copia cada provisório para
+//    `objects/<objectId>` dentro do S3 (os bytes não passam pelo backend) e grava a versão (`committed`,
+//    `s3VersionId`); a anterior vira lixeira (`superseded_at`) e o objeto aponta para a nova.
+// O diário (`s3_write_started_at`, relógio do banco) é gravado ANTES, numa transação curta própria (depois da checagem
+// de acesso, só nas intenções de quem confirma): sobrevive a qualquer falha do unit of work, nunca exige uma segunda
+// conexão enquanto ele segura a dele e nunca é limpo no commit (só pela varredura por idade).
 // As cópias acontecem sob a trava do objeto, então a ordem das versões no S3 é a do índice. Se o unit of work
 // rejeitar depois de começar a gravar no S3 (inclusive um COMMIT de resultado incerto), os objetos são reparados numa
-// transação nova (`repair`): só o que nenhuma versão confirmada referencia sai do bucket. As marcas ficam (uma cópia
-// abortada ainda pode chegar ao S3 depois): só a varredura por idade as limpa.
+// transação nova (`repair`): só o que nenhuma versão confirmada referencia sai do bucket. As marcas ficam.
 @Injectable()
 export class ConfirmUploadsUseCase {
   constructor(
@@ -69,21 +70,21 @@ export class ConfirmUploadsUseCase {
     now: Date = new Date(),
   ): Promise<CommittedVersionView[]> {
     const writing: ObjectRef[] = [];
-    // Diário ANTES do unit of work (transação curta própria, confirmada): a marca sobrevive a qualquer falha do que
-    // vem depois, e nunca é preciso uma segunda conexão do pool enquanto o unit of work segura a dele.
-    const markedAt = new Date();
-    await this.uow.run(async () => {
+    // Diário ANTES do unit of work (transação curta própria, confirmada; relógio do banco): marca só as intenções
+    // pendentes de QUEM confirma, depois da checagem de acesso. Nunca é preciso uma segunda conexão do pool enquanto o
+    // unit of work segura a dele, e a marca sobrevive a qualquer falha do que vem depois.
+    const marks = await this.uow.run(async () => {
       const space = await this.access.lock(
         spaceId,
         actor,
         'memory.write',
         'share',
       );
-      await this.versions.markVersionsWriteStarted(
+      return this.versions.markPendingWrites(
         space.organizationId,
         space.spaceId,
         uploadIds,
-        markedAt,
+        uploaderOf(actor),
       );
     });
     try {
@@ -121,9 +122,18 @@ export class ConfirmUploadsUseCase {
           );
           // The intent created the row; it never disappears (the runtime has no DELETE).
           if (!object) throw objectVersionConflict(objectId, null);
-          // Marca mais antiga que a nossa = uma tentativa anterior que pode ter gravado no S3 sem o índice.
+          // Marca mais antiga que as desta tentativa = outra tentativa que pode ter gravado no S3 sem o índice.
+          const mine = toCommit
+            .filter((v) => v.objectId === objectId)
+            .map((v) => marks.get(v.id))
+            .filter((d): d is Date => d !== undefined);
           if (
-            await this.versions.hasWriteMarksBefore(orgId, objectId, markedAt)
+            mine.length > 0 &&
+            (await this.versions.hasWriteMarksBefore(
+              orgId,
+              objectId,
+              new Date(Math.min(...mine.map((d) => d.getTime()))),
+            ))
           ) {
             await this.healer.heal(object);
           }
@@ -144,6 +154,16 @@ export class ConfirmUploadsUseCase {
           return uploadIds.map((id) => committedVersionView(found.get(id)!));
         }
 
+        // Nenhuma gravação no S3 sem a marca desta tentativa: reconferida sob a trava dos objetos (uma varredura pode
+        // tê-la limpado se o pedido ficou parado entre o diário e aqui). Sem ela: 409 `storage-busy`, repetível.
+        assertStillMarked(
+          marks,
+          await this.versions.writeMarks(
+            orgId,
+            toCommit.map((v) => v.id),
+          ),
+          toCommit.map((v) => v.id),
+        );
         for (const objectId of objectIds) {
           writing.push({
             organizationId: orgId,
@@ -163,15 +183,11 @@ export class ConfirmUploadsUseCase {
         if (superseded.length > 0) {
           await this.versions.markSuperseded(orgId, superseded, now);
         }
+        // As marcas NÃO são limpas aqui: uma cópia abortada de outra tentativa ainda pode chegar ao S3; só a
+        // varredura por idade as limpa, depois de reparar o objeto.
         for (const objectId of objectIds) {
           await this.objects.save(locked.get(objectId)!);
         }
-        // Só as linhas desta confirmação: a marca de um pedido concorrente do mesmo objeto (ainda esperando a trava)
-        // fica.
-        await this.versions.clearVersionMarks(
-          orgId,
-          toCommit.map((v) => v.id),
-        );
         return uploadIds.map((id) => committedVersionView(found.get(id)!));
       });
     } catch (error) {

@@ -5,6 +5,7 @@ import type request from 'supertest';
 import { newId } from '../../src/shared/domain/id.js';
 import { ObjectStore } from '../../src/storage/application/ports/object-store.js';
 import { ReconcileStorageUseCase } from '../../src/storage/application/reconcile-storage.use-case.js';
+import { BackupObjectRepository } from '../../src/storage/domain/backup-object.repository.js';
 import {
   adminDataSource,
   createTestApp,
@@ -786,11 +787,13 @@ describe('storage uploads (e2e)', () => {
     const result = await app.get(ReconcileStorageUseCase).execute();
     expect(result).toEqual({ objects: 1, removedVersions: 1 });
     expect((await store.head(key))!.versionId).toBe(committedS3);
-    const marked = await ds.query(
-      `SELECT 1 FROM storage_object_versions WHERE object_id = $1 AND s3_write_started_at IS NOT NULL`,
+    // The sweep cleared the aged mark it repaired; the fresh mark of the committed version stays (never cleared on
+    // commit; a later sweep clears it once it is old).
+    const marked = (await ds.query(
+      `SELECT id FROM storage_object_versions WHERE object_id = $1 AND s3_write_started_at IS NOT NULL`,
       [obj.objectId],
-    );
-    expect(marked).toHaveLength(0);
+    )) as { id: string }[];
+    expect(marked.map((r) => r.id)).toEqual([it1!.uploadId]);
     // Nothing left to repair; the pending version can still be confirmed normally.
     expect(await app.get(ReconcileStorageUseCase).execute()).toEqual({
       objects: 0,
@@ -837,7 +840,14 @@ describe('storage uploads (e2e)', () => {
     const first = await markOf(it1!.uploadId);
     expect(first).toBeInstanceOf(Date);
 
-    // A retry keeps the OLDER mark (it may stand for an S3 write of the failed attempt) and the commit clears it.
+    // The mark is the DATABASE clock, refreshed by every attempt and never cleared on commit.
+    const ds = await adminDataSource();
+    const [{ fresh }] = (await ds.query(
+      `SELECT s3_write_started_at BETWEEN now() - interval '1 minute' AND now() AS fresh
+         FROM storage_object_versions WHERE id = $1`,
+      [it1!.uploadId],
+    )) as { fresh: boolean }[];
+    expect(fresh).toBe(true);
     await put(it1!, obj.blob);
     await expectStatus(
       hubPost(hub, `/hub/spaces/${space.spaceId}/uploads/confirm`, {
@@ -845,7 +855,60 @@ describe('storage uploads (e2e)', () => {
       }),
       200,
     );
-    expect(await markOf(it1!.uploadId)).toBeNull();
+    const second = await markOf(it1!.uploadId);
+    expect(second!.getTime()).toBeGreaterThanOrEqual(first!.getTime());
+  });
+
+  it('a sweep clearing the mark between the journal and the main transaction: 409 storage-busy and no unmarked S3 write', async () => {
+    const space = await newSpace('Busy');
+    const hub = await roomHub(space, 'space_editor');
+    const obj = await blobFor(space);
+    const [it1] = (
+      await expectStatus(
+        hubPost(hub, `/hub/spaces/${space.spaceId}/uploads`, {
+          items: [obj.item],
+        }),
+        201,
+      )
+    ).body.items as Intent[];
+    await put(it1!, obj.blob);
+
+    // The sweep runs right after the journal transaction committed, before the object lock.
+    const repo = app.get(BackupObjectRepository);
+    const original = repo.lockForUpdate.bind(repo);
+    const ds = await adminDataSource();
+    const spy = vi
+      .spyOn(repo, 'lockForUpdate')
+      .mockImplementationOnce(async (...args) => {
+        await ds.query(
+          `UPDATE storage_object_versions SET s3_write_started_at = NULL WHERE id = $1`,
+          [it1!.uploadId],
+        );
+        return original(...args);
+      });
+    try {
+      expectProblem(
+        await hubPost(hub, `/hub/spaces/${space.spaceId}/uploads/confirm`, {
+          uploadIds: [it1!.uploadId],
+        }),
+        409,
+        'storage-busy',
+      );
+    } finally {
+      spy.mockRestore();
+    }
+    const key = `orgs/${orgId}/spaces/${space.spaceId}/objects/${obj.objectId}`;
+    expect(await app.get(ObjectStore).listVersions(key)).toEqual([]);
+    expect(await objectRow(obj.objectId)).toMatchObject({
+      current_version_id: null,
+    });
+    // Retryable: the next attempt marks again and commits.
+    await expectStatus(
+      hubPost(hub, `/hub/spaces/${space.spaceId}/uploads/confirm`, {
+        uploadIds: [it1!.uploadId],
+      }),
+      200,
+    );
   });
 
   it('the index never has a name, type or path column: only ids, sizes, hashes, versions, uploader and dates', async () => {

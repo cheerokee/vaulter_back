@@ -33,50 +33,54 @@ export abstract class BackupObjectVersionRepository {
    */
   abstract usedBytes(orgId: string, spaceId: string): Promise<number>;
 
-  // Diário das gravações no S3 (`s3_write_started_at`) e reparo do bucket. A marca é uma dica "talvez haja uma gravação
-  // no S3 que o índice não tem": gravada numa transação curta ANTES do unit of work que grava no S3 (nunca uma segunda
-  // conexão enquanto se segura outra), mantida se ele falhar, limpa só pelo commit que confirma aquela linha ou pela
-  // varredura (marcas antigas). Marcar não sobrescreve uma marca mais antiga (COALESCE): ela pode ser de uma tentativa
-  // que caiu depois de gravar no S3.
+  // Diário das gravações no S3 (`s3_write_started_at`). Uma marca quer dizer "alguma tentativa de gravar no S3 por
+  // esta linha começou neste instante ou depois" (relógio do BANCO). Gravada numa transação curta ANTES do unit of work
+  // que grava no S3 (nunca uma segunda conexão enquanto se segura outra), sempre renovada para now(), NUNCA limpa no
+  // commit: só a varredura limpa, e só marcas mais antigas que o limite, depois de reparar o objeto sob a trava.
 
-  /** Marks the PENDING versions `versionIds` of the space (a confirmation is about to copy them). */
-  abstract markVersionsWriteStarted(
+  /**
+   * Marks the PENDING versions `versionIds` of the space uploaded by `uploader` (only the caller's own intents) with
+   * the database clock; returns the stored mark of each marked row (this attempt's `markedAt`).
+   */
+  abstract markPendingWrites(
     orgId: string,
     spaceId: string,
     versionIds: readonly string[],
-    at: Date,
-  ): Promise<void>;
-  /** Marks the live (committed, not superseded) version of each object of the space (a delete is about to start). */
-  abstract markObjectsWriteStarted(
+    uploader: BackupUploader,
+  ): Promise<Map<string, Date>>;
+  /**
+   * Marks the live (committed, not superseded) versions `items[].versionId` of their objects (a delete is about to
+   * start); returns the stored mark of each marked row.
+   */
+  abstract markLiveWrites(
     orgId: string,
     spaceId: string,
-    objectIds: readonly string[],
-    at: Date,
-  ): Promise<void>;
+    items: readonly { objectId: string; versionId: string }[],
+  ): Promise<Map<string, Date>>;
+  /** Current marks of these versions (rows without a mark are absent). */
+  abstract writeMarks(
+    orgId: string,
+    versionIds: readonly string[],
+  ): Promise<Map<string, Date>>;
   /** Whether a version of the object carries a mark older than `before` (another, earlier attempt). */
   abstract hasWriteMarksBefore(
     orgId: string,
     objectId: string,
     before: Date,
   ): Promise<boolean>;
-  /** Clears the marks of these versions (their S3 write is now in the index). */
-  abstract clearVersionMarks(
-    orgId: string,
-    versionIds: readonly string[],
-  ): Promise<void>;
-  /** Clears the object's marks older than `before` (the sweep repaired it; fresher marks stay). */
+  /** Sweep only: clears the object's marks older than `olderThanMinutes` (database clock). */
   abstract clearWriteMarks(
     orgId: string,
     objectId: string,
-    before: Date,
+    olderThanMinutes: number,
   ): Promise<void>;
   /** S3 version ids referenced by the committed versions of the object (trash included). */
   abstract committedS3VersionIds(
     orgId: string,
     objectId: string,
   ): Promise<string[]>;
-  /** Objects (any organization) with a write mark older than `before`: read in the reconcile context. */
+  /** Objects (any organization) with a mark older than `olderThanMinutes` (database clock), in the reconcile context. */
   abstract staleWriteMarks(
-    before: Date,
+    olderThanMinutes: number,
   ): Promise<{ organizationId: string; spaceId: string; objectId: string }[]>;
 }
