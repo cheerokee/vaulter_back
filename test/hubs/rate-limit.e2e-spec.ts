@@ -205,4 +205,71 @@ describe('hub rate limits (e2e)', () => {
       expect(res.body.type).toMatch(/\/invalid-hub-token$/);
     }
   }, 60_000);
+
+  describe('POST /hub/user-sessions (person login through the hub)', () => {
+    const proof = 'A'.repeat(43);
+    const loginOn = (token: string, email: string, ip = '198.51.100.140') =>
+      h
+        .http()
+        .post('/hub/user-sessions')
+        .set(h.bearer(token))
+        .set('X-Forwarded-For', ip)
+        .send({ email, authProof: proof, device: { name: 'Sala' } });
+    const expect429PerMinute = (res: request.Response) => {
+      expect(res.status).toBe(429);
+      expect(res.headers['content-type']).toMatch(/application\/problem\+json/);
+      expect(res.body.type).toMatch(/\/too-many-requests$/);
+      const retry = Number(res.headers['retry-after']);
+      expect(retry).toBeGreaterThan(0);
+      expect(retry).toBeLessThanOrEqual(60);
+    };
+
+    it('10 per minute per hub, whatever the IP; another hub is not affected', async () => {
+      const tokenA = await h.authenticate(hubA);
+      const tokenB = await h.authenticate(hubB);
+      await admin.query('TRUNCATE rate_limit_hits');
+      // A different e-mail each time: only the per-hub counter grows.
+      for (let i = 0; i < 10; i++) {
+        expect(
+          (
+            await loginOn(
+              tokenA,
+              `nobody${i}@example.com`,
+              `198.51.100.${150 + i}`,
+            )
+          ).status,
+        ).toBe(401);
+      }
+      expect429PerMinute(
+        await loginOn(tokenA, 'nobody-x@example.com', '198.51.100.170'),
+      );
+      expect(
+        (await loginOn(tokenB, 'nobody-y@example.com', '198.51.100.150'))
+          .status,
+      ).toBe(401);
+    }, 60_000);
+
+    it('5 per minute per normalized e-mail across hubs, a counter of its own (the /auth/login one is untouched)', async () => {
+      const tokenA = await h.authenticate(hubA);
+      const tokenB = await h.authenticate(hubB);
+      await admin.query('TRUNCATE rate_limit_hits');
+      for (let i = 0; i < 5; i++) {
+        const token = i % 2 === 0 ? tokenA : tokenB;
+        const email = i % 2 === 0 ? ana.email : `  ${ana.email.toUpperCase()} `;
+        expect((await loginOn(token, email)).status).toBe(401);
+      }
+      expect429PerMinute(await loginOn(tokenB, ana.email, '198.51.100.171'));
+      // The same e-mail on /auth/login has its own budget.
+      const direct = await c
+        .http()
+        .post('/auth/login')
+        .set('X-Forwarded-For', '198.51.100.172')
+        .send({
+          email: ana.email,
+          authProof: ana.account.authProof,
+          device: { name: 'Phone', platform: 'android' },
+        });
+      expect(direct.status).toBe(200);
+    }, 60_000);
+  });
 });

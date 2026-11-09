@@ -154,8 +154,9 @@ export class StorageObjectVersionTypeormEntity extends BaseTypeormEntity {
   @Column({ type: 'timestamptz', nullable: true })
   supersededAt!: Date | null;
 
-  // Uma gravação no S3 (cópia ou delete marker) começou e o índice ainda não confirmou (ver migration
-  // StorageWriteJournal); limpo na transação que confirma ou pelo reparo.
+  // Diário (ver migration StorageWriteJournal): alguma tentativa de gravar no S3 por esta linha (cópia ou delete marker)
+  // começou neste instante ou depois (relógio do banco), renovado para a tentativa mais recente. Nunca é limpo no
+  // commit: só a varredura do reparo o limpa, e só quando tem mais de 60 min.
   @Column({ type: 'timestamptz', nullable: true })
   s3WriteStartedAt!: Date | null;
 }

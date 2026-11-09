@@ -143,7 +143,6 @@ export class OrganizationAdministration {
     orgId: string,
     quotaBytes: number,
     actor: AuditActor,
-    _now: Date,
   ): Promise<{ fromBytes: number; toBytes: number }> {
     if (!validate(orgId)) return Promise.reject(organizationNotFound());
     const origin = auditActorFields(actor);

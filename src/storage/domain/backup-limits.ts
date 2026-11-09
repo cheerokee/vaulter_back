@@ -32,5 +32,6 @@ export const MAX_LIST_LIMIT = 1000;
  * Longest time from the index writes of a confirmation/delete (which stamp `storage_objects.updated_at` with the
  * database clock, after all S3 work) to its COMMIT: past it the transaction is killed (`transaction_timeout`) and never
  * commits. Bounds how far behind a committed `updated_at` can be, so the 1-hour `since` overlap of the listing holds.
+ * Relies on the database `transaction_timeout` being 0 globally (see `UnitOfWork.limitRemainingTime`).
  */
 export const INDEX_TAIL_TIMEOUT_MS = 5 * 60 * 1000;

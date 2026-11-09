@@ -39,7 +39,6 @@ export class SetOrganizationStorageQuotaUseCase {
         organizationId,
         input.quotaBytes,
         { kind: 'platform_staff', staffAction: 'storage_quota_changed' },
-        new Date(),
       );
       await this.audit.record({
         userId: actor.userId,

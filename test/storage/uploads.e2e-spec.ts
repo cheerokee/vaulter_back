@@ -811,6 +811,64 @@ describe('storage uploads (e2e)', () => {
     );
   }, 30_000);
 
+  it('a shrink racing a confirmation or an intent never slips under the usage (reservations count; the space lock serializes)', async () => {
+    const space = await newSpace('Shrink', 2 * GiB);
+    const base = `/spaces/${space.spaceId}/backup`;
+    const resize = (storageQuotaBytes: number) =>
+      c
+        .http()
+        .put(`/spaces/${space.spaceId}/storage-quota`)
+        .set(as(olivia))
+        .send({ storageQuotaBytes });
+    // A reserved (never sent) 1.2 GiB intent and a small object sent and ready to confirm.
+    const reserved = await blobFor(space);
+    await expectStatus(
+      userPost(ana, `${base}/uploads`, {
+        items: [{ ...reserved.item, sizeBytes: Math.floor(1.2 * GiB) }],
+      }),
+      201,
+    );
+    const small = await blobFor(space);
+    const intent = await expectStatus(
+      userPost(ana, `${base}/uploads`, { items: [small.item] }),
+      201,
+    );
+    const [it1] = intent.body.items as Intent[];
+    await put(it1!, small.blob);
+
+    // Confirmation vs shrink to 1 GiB: the reservation is already in the usage, so the shrink is refused either way.
+    const [confirmed, shrunk] = await Promise.all([
+      userPost(ana, `${base}/uploads/confirm`, { uploadIds: [it1!.uploadId] }),
+      resize(GiB),
+    ]);
+    expect(confirmed.status).toBe(200);
+    expectProblem(shrunk, 422, 'space-storage-quota-below-usage');
+
+    // Intent of 0.7 GiB vs shrink to 1.5 GiB: each fits alone, not both; exactly one wins.
+    const more = await blobFor(space);
+    const [moreRes, shrink2] = await Promise.all([
+      userPost(ana, `${base}/uploads`, {
+        items: [{ ...more.item, sizeBytes: Math.floor(0.7 * GiB) }],
+      }),
+      resize(1.5 * GiB),
+    ]);
+    expect([moreRes.status, shrink2.status].sort((a, b) => a - b)).toEqual(
+      shrink2.status === 200 ? [200, 422] : [201, 422],
+    );
+    if (shrink2.status === 200) {
+      expectProblem(moreRes, 422, 'space-storage-full');
+    } else {
+      expectProblem(shrink2, 422, 'space-storage-quota-below-usage');
+    }
+    const view = await expectStatus(
+      c.http().get(`/spaces/${space.spaceId}`).set(as(olivia)),
+      200,
+    );
+    expect(view.body.storage.usedBytes).toBeLessThanOrEqual(
+      view.body.storage.quotaBytes,
+    );
+  });
+
   it('upload ids of another space or unknown are 404 upload-not-found; the body is validated (422)', async () => {
     const space = await newSpace('Ids');
     const other = await newSpace('Other');

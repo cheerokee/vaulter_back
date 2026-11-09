@@ -150,6 +150,8 @@ export class UnitOfWork {
    * (`transaction_timeout`, Postgres >= 17, counted from this call, idle time included) and the transaction never
    * commits; the `run` rejects. Lasts until the end of the transaction (`set_config(..., true)`). For a tail of short
    * writes whose time to COMMIT must be bounded. Requires an active unit of work.
+   * Relies on the server/role `transaction_timeout` being 0 (the default): a global value would count from the start
+   * of the transaction and kill long work (backup confirmations) before the tail; review this before setting one.
    */
   async limitRemainingTime(ms: number): Promise<void> {
     const manager = activeManager(this.dataSource);

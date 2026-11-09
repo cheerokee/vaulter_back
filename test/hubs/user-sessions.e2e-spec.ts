@@ -266,6 +266,44 @@ describe('person login through the hub (e2e)', () => {
       await expectStatus(refresh(anaPhone.refreshToken), 200);
     });
 
+    it('the hub owner leaving the organization unlinks the hub from it and revokes the sessions of who lost access; the owner stays', async () => {
+      const o = await s.orgWithKit(olivia, 'OwnerLeaves');
+      await s.joinOrg(olivia, o.orgId, ana);
+      await s.joinOrg(olivia, o.orgId, bia);
+      const hub = await h.onboard(ana.token, 'Hub da Ana');
+      await expectStatus(
+        c
+          .http()
+          .post(`/hubs/${hub.hubId}/organizations`)
+          .set(as(ana))
+          .send({ organizationId: o.orgId }),
+        201,
+      );
+      const hubToken = await h.authenticate(hub);
+      const biaHub = await loggedIn(hubToken, bia);
+      const anaHub = await loggedIn(hubToken, ana);
+      const biaPhone = await phoneLogin(bia);
+
+      await expectStatus(
+        c.http().post(`/organizations/${o.orgId}/leave`).set(as(ana)),
+        204,
+      );
+
+      problem(await refresh(biaHub.refreshToken), 401, 'invalid-refresh-token');
+      expect((await sessionRow(biaHub.sessionId)).revoked_reason).toBe(
+        'hub_access_lost',
+      );
+      const links = (await admin.query(
+        `SELECT status FROM hub_organization WHERE hub_id = $1 AND organization_id = $2`,
+        [hub.hubId, o.orgId],
+      )) as { status: string }[];
+      expect(links).toEqual([{ status: 'revoked' }]);
+      // The owner keeps the hub (and her session on it); bia's phone is untouched; bia cannot log in there again.
+      await expectStatus(refresh(anaHub.refreshToken), 200);
+      await expectStatus(refresh(biaPhone.refreshToken), 200);
+      problem(await loginOn(hubToken, bia), 401, 'invalid-credentials');
+    });
+
     it('being removed from the organization revokes the hub session', async () => {
       const { orgId, hubToken } = await linkedHub('Removed', [bia]);
       const biaHub = await loggedIn(hubToken, bia);

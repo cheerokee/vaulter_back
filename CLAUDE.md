@@ -748,8 +748,10 @@ mesmo commit).
   (`STORAGE_LOCK_TIMEOUT_MS`, `uow.setLockTimeout`) para o resto da transação da intenção, da confirmação e do apagar:
   esperar mais que isso pelo espaço ou por um objeto = 409 `storage-busy` (55P03, `lockTimeoutAsBusy`), em vez de o
   pedido segurar uma conexão do pool (`DB_POOL_MAX_CONNECTIONS = 10` por instância, em `typeorm.options.ts`).
-- **Diário + reparo:** a marca `s3_write_started_at` quer dizer "alguma tentativa de gravar no S3 por esta linha
-  começou neste instante ou depois", sempre no **relógio do banco**. A confirmação/o apagar a gravam numa **transação
+- **Diário + reparo:** a marca `s3_write_started_at` é o instante (no **relógio do banco**) em que a tentativa mais
+  recente de gravar no S3 por esta linha começou, gravado **antes** de qualquer gravação dela no S3 (o S3 é tocado
+  nesse instante ou depois); cada nova tentativa **renova** a marca para o próprio instante, e marca nenhuma some no
+  commit: só a varredura limpa as que têm mais de 60 min. A confirmação/o apagar a gravam numa **transação
   curta própria, confirmada ANTES** do unit of work que grava no S3, depois da checagem de acesso e só nas linhas de
   quem age (intenções do próprio remetente; a versão viva que o apagar indica), **renovando** para `now()`. Sob a trava
   do objeto, antes de gravar no S3, a tentativa reconfere a própria marca (sumiu = a varredura limpou enquanto o pedido
@@ -783,7 +785,6 @@ mesmo commit).
   .../objects/:objectId/versions/:versionId/download` → `{ url, expiresAt }` (15 min, não revogável: quem perde o
   acesso guarda só a URL que já tinha); versão desconhecida, pendente, de outro objeto ou fora da lixeira: 404
   `version-not-found`.
-
 - **Hub e login de pessoa** (detalhe em `hubs`, "Login de pessoa pelo Hub"): `POST /hub/user-sessions` (token de Hub) abre uma
   sessão de usuário presa ao Hub (`user_sessions.hub_id`, `device_platform = 'hub'`); com ela a pessoa usa as rotas
   `/spaces/:spaceId/backup/...`, inclusive em espaço fora da Sala (leitura). A sessão cai (`hub_access_lost`) quando a
@@ -845,7 +846,10 @@ mesmo commit).
   - Efeitos pós-commit (fila pg-boss, e-mail, chamadas externas) vão **depois** do `run`, não dentro.
   - `uow.limitRemainingTime(ms)` (`transaction_timeout`, contado a partir da chamada, inclusive ocioso): passou, o
     Postgres derruba a conexão e a transação nunca confirma (o `run` rejeita). Para limitar a cauda entre um carimbo
-    de relógio e o COMMIT (ex.: o `since` do backup).
+    de relógio e o COMMIT (ex.: o `since` do backup). **Pressupõe `transaction_timeout` = 0 no servidor e nos papéis**
+    (o padrão): um valor global contaria desde o começo da transação e derrubaria lotes longos do backup antes da
+    cauda (não configurar no banco gerenciado sem rever isto). `uow.setLockTimeout(ms)` faz o mesmo com `lock_timeout`
+    (espera por trava; 55P03, `isLockTimeout`).
   - Contexto do RLS: `uow.setContext({ organizationId?, userId?, hubId? })` grava `app.organization_id` /
     `app.user_id` / `app.hub_id` (Hub autenticado)
     (`set_config(..., true)`) até o fim da transação; fora de `run` lança erro. Para trocar só num trecho (ex.:

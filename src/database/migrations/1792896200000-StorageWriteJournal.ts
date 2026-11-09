@@ -1,10 +1,12 @@
 import { MigrationInterface, QueryRunner } from 'typeorm';
 
 // Diário das gravações no S3 do backup (spec storage-backup §4.2; reparo do índice × bucket):
-// - `storage_object_versions.s3_write_started_at`: gravado em autocommit (fora da transação da confirmação/do apagar)
-//   ANTES da cópia ou do delete marker, e limpo na mesma transação que confirma o índice. Sobrou marcado = a gravação
-//   no S3 pode ter acontecido sem o índice confirmar (queda entre o S3 e o COMMIT): o reparo (`BackupObjectHealer`)
-//   apaga do bucket as versões e markers que nenhuma versão confirmada do índice referencia.
+// - `storage_object_versions.s3_write_started_at`: "alguma tentativa de gravar no S3 por esta linha começou neste
+//   instante ou depois" (relógio do banco). Gravado numa transação curta própria, confirmada ANTES da transação que
+//   copia ou grava o delete marker, e renovado a cada tentativa. NUNCA é limpo no commit (uma cópia abortada de outra
+//   tentativa ainda pode chegar ao S3): só a varredura do reparo limpa as marcas com mais de 60 min, depois de reparar
+//   o objeto. O reparo (`BackupObjectHealer`) apaga do bucket as versões e markers que nenhuma versão confirmada do
+//   índice referencia. (Comentário corrigido depois; o SQL desta migration não mudou.)
 // - Índice parcial só das linhas marcadas (a varredura procura as antigas).
 // - Policy `storage_reconcile_read` (só SELECT, permissiva): com `app.storage_reconcile = 'on'` (contexto de
 //   confiança do backend, só pela varredura `ReconcileStorageUseCase`), o runtime lê as linhas MARCADAS de qualquer
