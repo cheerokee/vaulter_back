@@ -85,11 +85,14 @@ describe('ConversationMessage', () => {
   it('ack is idempotent: the first one wins', () => {
     const m = make();
     const later = new Date(now.getTime() + 5000);
-    expect(m.ack(later)).toBe(true);
+    expect(m.ackedByHubId).toBeNull();
+    expect(m.ack(later, 'hub-a')).toBe(true);
     expect(m.pending).toBe(false);
     expect(m.ackedAt).toBe(later);
-    expect(m.ack(new Date(later.getTime() + 1))).toBe(false);
+    expect(m.ackedByHubId).toBe('hub-a');
+    expect(m.ack(new Date(later.getTime() + 1), 'hub-b')).toBe(false);
     expect(m.ackedAt).toBe(later);
+    expect(m.ackedByHubId).toBe('hub-a');
   });
 
   it('each one deletes only their own messages (403)', () => {

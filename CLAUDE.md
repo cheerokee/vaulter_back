@@ -910,7 +910,12 @@ registra a fonte `conversations`), `hubs` (`HubDirectory`: `ownerOf`,
   `conversation-key-version-stale`), troca pendente = 409 `conversation-key-rotation-required`. Pessoa: nasce
   `pending`; executor: nasce confirmada (CHECK). `sentAt`, `ackedAt`, lápides e `lastMessageAt` no relógio do banco
   (`clock_timestamp()` depois das travas). **Editar** = mensagem nova com `replacesMessageId` (só a própria, viva, do
-  mesmo assunto: 403 / 422 `message-replaces-invalid`), e a substituída vira lápide na mesma transação.
+  mesmo assunto: 403 / 422 `message-replaces-invalid`), e a substituída vira lápide na mesma transação. **Quem
+  confirmou:** o ack grava `acked_by_hub_id` (migration `ConversationMessageAckedBy`); quando o executor troca ou se perde
+  (troca de executor, `HubExecutorLostHooks`, dono do Hub saindo do assunto), `requeueAckedBy` devolve a `pending` o que
+  o Hub antigo confirmou sem mandar mensagem dele depois no assunto (contexto de participante, com o assunto travado).
+  Contrato do Hub (hub-lifecycle.md): executar só depois do 200 do ack; ack 404 = descartar; executor novo trata
+  `pending` como trabalho.
 - **Uso do espaço:** o corpo cifrado conta no uso (spec §4.4.1) por um contador por espaço,
   `conversation_space_usage`, mantido só pelo trigger `trg_conversation_messages_space_usage` (corpo guardado conta;
   com lápide, conta também como lixeira; corpo zerado pela retenção sai). É contador e não `SUM` porque as mensagens só

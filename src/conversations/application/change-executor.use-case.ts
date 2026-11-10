@@ -5,6 +5,7 @@ import { DomainValidationError } from '../../shared/domain/errors.js';
 import { UnitOfWork } from '../../shared/infra/db/unit-of-work.js';
 import { assertVersionsCovered } from '../domain/conversation-keys.js';
 import { ConversationKeyGrantRepository } from '../domain/conversation-key-grant.repository.js';
+import { ConversationMessageRepository } from '../domain/conversation-message.repository.js';
 import { ConversationRepository } from '../domain/conversation.repository.js';
 import { assertExecutorEligible } from '../domain/participation-rules.js';
 import { assertWrappedConversationKey } from '../domain/wrapped-conversation-key.js';
@@ -23,7 +24,8 @@ export type ChangeExecutorInput = {
 // Trocar o executor (spec §4.1): só o DONO (403 `not-conversation-owner`). O Hub novo segue a regra do executor (dono
 // do Hub participa, espaço instalado com vínculo aprovado; 422 `executor-invalid`) e recebe as cópias de TODAS as
 // versões (409 `key-versions-mismatch`). Havendo um executor anterior, ele perde as cópias (lápide) e a troca de chave
-// fica pendente: o antigo conhecia a chave (o novo, ou qualquer participante, faz a troca). Auditado
+// fica pendente: o antigo conhecia a chave (o novo, ou qualquer participante, faz a troca); as mensagens que o antigo
+// confirmou e não respondeu voltam a `pending` (`requeueAckedBy`). Auditado
 // (`conversation.executor_changed`, só ids). Locks: Hub novo -> vínculo -> hub_space (FOR SHARE) -> assunto
 // (FOR UPDATE); a checagem de dono antes das travas é sem lock e se repete sob o lock do assunto.
 @Injectable()
@@ -33,6 +35,7 @@ export class ChangeExecutorUseCase {
     private readonly executors: ConversationExecutors,
     private readonly conversations: ConversationRepository,
     private readonly grants: ConversationKeyGrantRepository,
+    private readonly messages: ConversationMessageRepository,
     private readonly views: ConversationViews,
     private readonly audit: AuditLog,
     private readonly uow: UnitOfWork,
@@ -98,6 +101,8 @@ export class ChangeExecutorUseCase {
           kind: 'hub',
           hubId: previous,
         });
+        // What the old Hub took and never answered goes back to the inbox of the new one.
+        await this.messages.requeueAckedBy(scope, conversation.id, previous);
       }
       if (hubId) {
         for (const g of input.grants) {

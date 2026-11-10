@@ -1,6 +1,7 @@
 import type { AuditLog } from '../../organizations/application/audit-log.js';
 import { newId } from '../../shared/domain/id.js';
 import type { ConversationScope } from '../domain/conversation-actor.js';
+import type { ConversationMessageRepository } from '../domain/conversation-message.repository.js';
 import type { ConversationKeyGrantRepository } from '../domain/conversation-key-grant.repository.js';
 import type { ConversationParticipantRepository } from '../domain/conversation-participant.repository.js';
 import type { ConversationRepository } from '../domain/conversation.repository.js';
@@ -77,12 +78,21 @@ describe('ConversationDeparture', () => {
   };
   const executors = { ownerOf: vi.fn() };
   const audit = { record: vi.fn() };
+  const messages = {
+    requeueAckedBy: vi.fn(
+      async (_s: ConversationScope, _id: string, hub: string) => {
+        calls.push(`requeueAckedBy:${hub === HUB ? 'HUB' : hub}`);
+        return 1;
+      },
+    ),
+  };
   const departure = new ConversationDeparture(
     as<ConversationRepository>(conversations),
     as<ConversationParticipantRepository>(participants),
     as<ConversationKeyGrantRepository>(grants),
     as<ConversationExecutors>(executors),
     as<AuditLog>(audit),
+    as<ConversationMessageRepository>(messages),
   );
   const scope: ConversationScope = {
     organizationId: ORG,
@@ -113,6 +123,8 @@ describe('ConversationDeparture', () => {
     expect(calls).toEqual([
       'save:owner=OTHER:executor=null:rotation=true:deleted=false',
       'removeGrants:HUB',
+      // What the lost executor acknowledged and never answered goes back to the inbox.
+      'requeueAckedBy:HUB',
       'removeGrants:OWNER',
       'removeParticipation:OWNER',
     ]);

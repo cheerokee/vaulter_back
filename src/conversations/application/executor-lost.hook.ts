@@ -11,6 +11,7 @@ import {
 } from '../../shared/application/hub-executor-lost-hooks.js';
 import type { ConversationScope } from '../domain/conversation-actor.js';
 import { ConversationKeyGrantRepository } from '../domain/conversation-key-grant.repository.js';
+import { ConversationMessageRepository } from '../domain/conversation-message.repository.js';
 import { ConversationRepository } from '../domain/conversation.repository.js';
 
 const HOOK_NAME = 'conversations.executor-lost';
@@ -19,7 +20,8 @@ const MAX_ATTEMPTS = 3;
 
 // O Hub deixou de valer numa organização (desregistro, desvínculo) ou num espaço (tirado do Hub): em cada assunto de
 // que ele é executor ali (spec §4.1), `executorHubId` volta a nulo, lápide nas cópias do Hub e troca de chave
-// pendente; as mensagens `pending` continuam esperando um executor novo. Roda dentro da transação de quem emite (o
+// pendente; as mensagens `pending` continuam esperando um executor novo, e as que ele confirmou sem responder voltam a
+// `pending` (`requeueAckedBy`). Roda dentro da transação de quem emite (o
 // `hubs`), depois de Hub, vínculo, hub_space e espaços travados: os assuntos são travados por último, um a um em
 // ordem (espaço, assunto). Erro desfaz a operação do `hubs` inteira.
 // Contexto (migration CreateConversations): os ids vêm do contexto do PRÓPRIO Hub (que só vê onde é executor, sem
@@ -35,6 +37,7 @@ export class ConversationsExecutorLostHook
     private readonly conversations: ConversationRepository,
     private readonly grants: ConversationKeyGrantRepository,
     private readonly audit: AuditLog,
+    private readonly messages: ConversationMessageRepository,
   ) {}
 
   onModuleInit(): void {
@@ -92,6 +95,7 @@ export class ConversationsExecutorLostHook
       conversation.loseExecutor();
       await this.conversations.save(ownerScope, conversation);
       await this.grants.removeFor(ownerScope, id, { kind: 'hub', hubId });
+      await this.messages.requeueAckedBy(ownerScope, id, hubId);
       await this.audit.record({
         organizationId,
         userId: ctx.actorId,

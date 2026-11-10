@@ -444,6 +444,130 @@ describe('conversation messages (e2e)', () => {
       }
     }, 20_000);
 
+    it('executor changed: what the old hub acknowledged and never answered goes back to pending, and the new hub sees it as work', async () => {
+      const conv = await conversation([paulo]);
+      const casaToken = await token(casa);
+      const answered = await k.send(olivia, spaceId, conv.id, conv.keys, {
+        text: 'primeira',
+      });
+      await expectStatus(Promise.resolve(answered.res), 201);
+      await expectStatus(k.hubAck(casaToken, conv.id, answered.id), 200);
+      const reply = await k.hubSend(casaToken, spaceId, conv.id, conv.keys, {
+        text: 'feito',
+      });
+      await expectStatus(Promise.resolve(reply.res), 201);
+      const taken = await k.send(olivia, spaceId, conv.id, conv.keys, {
+        text: 'segunda',
+      });
+      await expectStatus(Promise.resolve(taken.res), 201);
+      await expectStatus(k.hubAck(casaToken, conv.id, taken.id), 200);
+      expect(
+        (await messageRows(conv.id)).map((r) => [r.id, r.pending]),
+      ).toEqual([
+        [answered.id, false],
+        [reply.id, false],
+        [taken.id, false],
+      ]);
+
+      await expectStatus(
+        k.changeExecutor(
+          olivia,
+          spaceId,
+          conv.id,
+          hubRecipientOf(pauloHub),
+          conv.keys,
+        ),
+        200,
+      );
+      const rows = await messageRows(conv.id);
+      expect(rows.map((r) => [r.id, r.pending, r.acked_at === null])).toEqual([
+        [answered.id, false, false],
+        [reply.id, false, false],
+        [taken.id, true, true],
+      ]);
+      // The new executor backfills the conversation and finds the message as work (pending), never lost.
+      const pauloToken = await token(pauloHub);
+      const page = await expectStatus(
+        request(app.getHttpServer())
+          .get('/hub/conversations/changes')
+          .query({ conversationId: conv.id, since: 0 })
+          .set(bearer(pauloToken)),
+        200,
+      );
+      const item = (
+        page.body.items as { type: string; data: Record<string, unknown> }[]
+      ).find(
+        (i) => i.type === 'conversation_message' && i.data.id === taken.id,
+      );
+      expect(item?.data).toMatchObject({ pending: true, ackedAt: null });
+      // The old hub can no longer ack it (404: not the executor); the new one can.
+      expectProblem(
+        await k.hubAck(casaToken, conv.id, taken.id),
+        404,
+        'conversation-not-found',
+      );
+      await expectStatus(
+        k.hubAck(await token(pauloHub), conv.id, taken.id),
+        200,
+      );
+    });
+
+    it('executor lost (space removed from the hub): what it acknowledged without answering goes back to pending', async () => {
+      const sp = await s.create(olivia, orgId, kitPublicKey, 'Caixa', {
+        storageQuotaBytes: GiB,
+      });
+      await expectStatus(Promise.resolve(sp.res), 201);
+      await hubs.addSpace(olivia, casa.hubId, sp.spaceId);
+      const conv = await conversation([], sp.spaceId);
+      const sent = await k.send(olivia, sp.spaceId, conv.id, conv.keys);
+      await expectStatus(Promise.resolve(sent.res), 201);
+      await expectStatus(k.hubAck(await token(casa), conv.id, sent.id), 200);
+
+      await hubs.removeSpace(olivia, casa.hubId, sp.spaceId);
+      expect(await conversationRow(conv.id)).toMatchObject({
+        executor_hub_id: null,
+      });
+      expect((await messageRows(conv.id))[0]).toMatchObject({
+        pending: true,
+        acked_at: null,
+      });
+    });
+
+    it('the owner of the executor hub leaves the conversation: the executor goes and its unanswered acks go back to pending', async () => {
+      // Paulo's hub executes Olivia's conversation (Paulo participates); Paulo leaves.
+      const created = await k.create(olivia, spaceId);
+      await expectStatus(Promise.resolve(created.res), 201);
+      const conv = { id: created.id, keys: created.keys as ConversationKeys };
+      await expectStatus(
+        k.share(olivia, spaceId, conv.id, [recipientOf(paulo)], conv.keys),
+        200,
+      );
+      await expectStatus(
+        k.changeExecutor(
+          olivia,
+          spaceId,
+          conv.id,
+          hubRecipientOf(pauloHub),
+          conv.keys,
+        ),
+        200,
+      );
+      const sent = await k.send(olivia, spaceId, conv.id, conv.keys);
+      await expectStatus(Promise.resolve(sent.res), 201);
+      await expectStatus(
+        k.hubAck(await token(pauloHub), conv.id, sent.id),
+        200,
+      );
+      await expectStatus(k.leave(paulo, spaceId, conv.id), 204);
+      expect(await conversationRow(conv.id)).toMatchObject({
+        executor_hub_id: null,
+      });
+      expect((await messageRows(conv.id))[0]).toMatchObject({
+        pending: true,
+        acked_at: null,
+      });
+    });
+
     it("without an executor the person's messages wait as pending", async () => {
       const conv = await k.create(olivia, spaceId);
       await expectStatus(Promise.resolve(conv.res), 201);

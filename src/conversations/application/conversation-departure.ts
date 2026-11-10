@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { AuditLog } from '../../organizations/application/audit-log.js';
 import type { ConversationScope } from '../domain/conversation-actor.js';
 import { ConversationKeyGrantRepository } from '../domain/conversation-key-grant.repository.js';
+import { ConversationMessageRepository } from '../domain/conversation-message.repository.js';
 import { ConversationParticipantRepository } from '../domain/conversation-participant.repository.js';
 import { ConversationRepository } from '../domain/conversation.repository.js';
 import type { Conversation } from '../domain/conversation.js';
@@ -20,7 +21,8 @@ export type DepartureResult = {
 // troca pendente, lápide do assunto), a lápide nas cópias do Hub que deixa de valer e nas cópias de quem sai, e por
 // ÚLTIMO a lápide da participação: quando quem sai é o próprio `scope`, depois dela o assunto some para ele.
 // - dono sai e há outros: o participante mais antigo vira dono;
-// - quem sai é o dono do Hub executor: o executor sai junto (lápide nas cópias do Hub);
+// - quem sai é o dono do Hub executor: o executor sai junto (lápide nas cópias do Hub; o que ele confirmou sem
+//   responder volta a `pending`);
 // - último participante sai: lápide no assunto (privado é privado);
 // - sempre: troca de chave pendente.
 @Injectable()
@@ -31,6 +33,7 @@ export class ConversationDeparture {
     private readonly grants: ConversationKeyGrantRepository,
     private readonly executors: ConversationExecutors,
     private readonly audit: AuditLog,
+    private readonly messages: ConversationMessageRepository,
   ) {}
 
   async depart(
@@ -62,6 +65,7 @@ export class ConversationDeparture {
         kind: 'hub',
         hubId: lostExecutorHubId,
       });
+      await this.messages.requeueAckedBy(scope, id, lostExecutorHubId);
       await this.audit.record({
         organizationId: conversation.organizationId,
         userId: input.actorId,

@@ -57,6 +57,7 @@ export class ConversationMessageTypeormRepository extends ConversationMessageRep
         {
           pending: message.pending,
           ackedAt: message.ackedAt,
+          ackedByHubId: message.ackedByHubId,
           encryptedBody: message.encryptedBody,
           deletedAt: message.deletedAt,
         },
@@ -70,6 +71,28 @@ export class ConversationMessageTypeormRepository extends ConversationMessageRep
       `SELECT clock_timestamp() AS now`,
     );
     return rows[0]!.now;
+  }
+
+  async requeueAckedBy(
+    scope: ConversationScope,
+    conversationId: string,
+    hubId: string,
+  ): Promise<number> {
+    const raw: unknown = await inScope(this.dataSource, scope, (m) =>
+      m.query(
+        `UPDATE conversation_messages msg
+            SET pending = true, acked_at = NULL, acked_by_hub_id = NULL, updated_at = now()
+          WHERE msg.organization_id = $1 AND msg.conversation_id = $2 AND msg.acked_by_hub_id = $3
+            AND msg.deleted_at IS NULL
+            AND NOT EXISTS (
+              SELECT 1 FROM conversation_messages reply
+               WHERE reply.organization_id = msg.organization_id AND reply.conversation_id = msg.conversation_id
+                 AND reply.author_hub_id = $3 AND reply.sent_at > msg.sent_at)
+        RETURNING msg.id`,
+        [scope.organizationId, conversationId, hubId],
+      ),
+    );
+    return updatedRows<{ id: string }>(raw).length;
   }
 
   async listPending(

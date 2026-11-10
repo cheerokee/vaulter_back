@@ -79,6 +79,7 @@ export function messageToDomain(
       replacesMessageId: e.replacesMessageId,
       pending: e.pending,
       ackedAt: e.ackedAt,
+      ackedByHubId: e.ackedByHubId,
       sentAt: e.sentAt,
       createdAt: e.createdAt,
       deletedAt: e.deletedAt,
@@ -102,6 +103,7 @@ export function messageToInsert(
     replacesMessageId: m.replacesMessageId,
     pending: m.pending,
     ackedAt: m.ackedAt,
+    ackedByHubId: m.ackedByHubId,
     sentAt: m.sentAt,
     ...(m.createdAt ? { createdAt: m.createdAt } : {}),
   };

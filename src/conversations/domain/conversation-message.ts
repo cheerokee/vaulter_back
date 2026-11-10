@@ -25,6 +25,8 @@ export type ConversationMessageProps = {
   /** Inbox: a person's message waits until the executor acknowledges it. */
   pending: boolean;
   ackedAt: Date | null;
+  /** The executor Hub that acknowledged it (a person's message); null while pending and for a Hub's own message. */
+  ackedByHubId: string | null;
   sentAt: Date;
   createdAt?: Date;
   deletedAt: Date | null;
@@ -64,6 +66,7 @@ export class ConversationMessage extends Entity<ConversationMessageProps> {
         // The executor's own message is born acknowledged.
         pending: !fromHub,
         ackedAt: fromHub ? input.now : null,
+        ackedByHubId: null,
         sentAt: input.sentAt,
         createdAt: input.now,
         deletedAt: null,
@@ -105,9 +108,14 @@ export class ConversationMessage extends Entity<ConversationMessageProps> {
   }
 
   /** The executor took it. The first ack wins; returns whether this call changed anything. */
-  ack(now: Date): boolean {
+  ack(now: Date, hubId: string): boolean {
     if (!this.props.pending) return false;
-    this.props = { ...this.props, pending: false, ackedAt: now };
+    this.props = {
+      ...this.props,
+      pending: false,
+      ackedAt: now,
+      ackedByHubId: hubId,
+    };
     return true;
   }
 
@@ -158,6 +166,9 @@ export class ConversationMessage extends Entity<ConversationMessageProps> {
   }
   get ackedAt(): Date | null {
     return this.props.ackedAt;
+  }
+  get ackedByHubId(): string | null {
+    return this.props.ackedByHubId;
   }
   get sentAt(): Date {
     return this.props.sentAt;

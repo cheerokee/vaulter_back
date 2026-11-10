@@ -42,12 +42,17 @@ import type { ConversationTypeormEntity } from './conversation.entity.js';
   `("author_hub_id" IS NULL) OR (NOT "pending")`,
 )
 @Check('ck_conversation_messages_replaces', `"replaces_message_id" <> "id"`)
+@Check(
+  'ck_conversation_messages_acked_by',
+  `("acked_by_hub_id" IS NULL) OR (NOT "pending")`,
+)
 @Index('ix_conversation_messages_sync_version', ['syncVersion'])
 @Index('fk_conversation_messages_organizations_idx', ['organizationId'])
 @Index('fk_conversation_messages_conversations_idx', ['conversationId'])
 @Index('fk_conversation_messages_author_users_idx', ['authorUserId'])
 @Index('fk_conversation_messages_author_hubs_idx', ['authorHubId'])
 @Index('fk_conversation_messages_replaces_idx', ['replacesMessageId'])
+@Index('fk_conversation_messages_acked_by_hubs_idx', ['ackedByHubId'])
 @Index('ix_conversation_messages_pending', ['conversationId'], {
   where: `"pending" AND "deleted_at" IS NULL`,
 })
@@ -137,6 +142,17 @@ export class ConversationMessageTypeormEntity extends DeviceIdSyncableTypeormEnt
 
   @Column({ type: 'timestamptz', nullable: true })
   ackedAt!: Date | null;
+
+  /** The executor Hub that acknowledged a person's message (migration ConversationMessageAckedBy). */
+  @Column({ type: 'uuid', nullable: true })
+  ackedByHubId!: string | null;
+
+  @ManyToOne('HubTypeormEntity')
+  @JoinColumn({
+    name: 'acked_by_hub_id',
+    foreignKeyConstraintName: 'fk_conversation_messages_acked_by_hubs',
+  })
+  ackedByHub?: { id: string };
 
   @Column({ type: 'timestamptz' })
   sentAt!: Date;

@@ -22,6 +22,17 @@ export abstract class ConversationMessageRepository {
    * after the locks, so the times of one conversation follow the order of its writes.
    */
   abstract databaseNow(): Promise<Date>;
+  /**
+   * The executor changed or was lost: every live message of the conversation that `hubId` acknowledged and that has no
+   * later message authored by that Hub in the conversation (it never answered: it may have died with it in its queue)
+   * goes back to `pending`, so the next executor takes it. Returns how many. Inside `UnitOfWork.run`, with the
+   * conversation locked, in a PARTICIPANT's scope (the Hub may no longer see the conversation).
+   */
+  abstract requeueAckedBy(
+    scope: ConversationScope,
+    conversationId: string,
+    hubId: string,
+  ): Promise<number>;
   /** Live pending messages of the conversation (inbox), ascending by sentAt then id. */
   abstract listPending(
     scope: ConversationScope,

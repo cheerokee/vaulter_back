@@ -6,6 +6,7 @@ import type {
 import { ConflictError } from '../../shared/domain/errors.js';
 import { newId } from '../../shared/domain/id.js';
 import type { ConversationScope } from '../domain/conversation-actor.js';
+import type { ConversationMessageRepository } from '../domain/conversation-message.repository.js';
 import type { ConversationKeyGrantRepository } from '../domain/conversation-key-grant.repository.js';
 import type { ConversationRepository } from '../domain/conversation.repository.js';
 import { Conversation } from '../domain/conversation.js';
@@ -64,11 +65,13 @@ describe('ConversationsExecutorLostHook', () => {
   };
   const grants = { removeFor: vi.fn() };
   const audit = { record: vi.fn() };
+  const messages = { requeueAckedBy: vi.fn() };
   const hook = new ConversationsExecutorLostHook(
     as<HubExecutorLostHooks>({ register: vi.fn(), unregister: vi.fn() }),
     as<ConversationRepository>(conversations),
     as<ConversationKeyGrantRepository>(grants),
     as<AuditLog>(audit),
+    as<ConversationMessageRepository>(messages),
   );
   const userOf = (s: ConversationScope) =>
     s.actor.kind === 'user' ? s.actor.userId : `hub:${s.actor.hubId}`;
@@ -106,6 +109,11 @@ describe('ConversationsExecutorLostHook', () => {
       kind: 'hub',
       hubId: HUB,
     });
+    // In the owner's scope too: what the hub acknowledged and never answered goes back to pending.
+    expect(messages.requeueAckedBy).toHaveBeenCalledTimes(1);
+    const [requeueScope, requeueId, requeueHub] = messages.requeueAckedBy.mock
+      .calls[0]! as [ConversationScope, string, string];
+    expect([userOf(requeueScope), requeueId, requeueHub]).toEqual([B, ID, HUB]);
     expect(audit.record).toHaveBeenCalledWith(
       expect.objectContaining({ action: 'conversation.executor_lost' }),
     );
@@ -128,5 +136,6 @@ describe('ConversationsExecutorLostHook', () => {
     expect(conversations.lockById).toHaveBeenCalledTimes(3);
     expect(conversations.save).not.toHaveBeenCalled();
     expect(grants.removeFor).not.toHaveBeenCalled();
+    expect(messages.requeueAckedBy).not.toHaveBeenCalled();
   });
 });

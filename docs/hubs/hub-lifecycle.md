@@ -465,7 +465,13 @@ organização está aprovado). Rotas com o token de Hub:
     antes do item `conversation`** (a ordem é só por `sync_version`): guarde-os e aplique quando o `conversation`
     chegar (na mesma passada ou na seguinte); não descarte nem trate como erro;
   - **caixa de entrada:** toda `conversation_message` com `pending: true` e autor pessoa é trabalho a pegar; depois de
-    guardar localmente, chame o `ack` (abaixo). Confirmar de novo é seguro;
+    guardar localmente, chame o `ack` (abaixo). Confirmar de novo é seguro. **Contrato do ack:** só execute a mensagem
+    depois do **200** do ack (é ele que diz que ela é sua); ack com **404** (`conversation-not-found`: você não é mais o
+    executor; `message-not-found`: apagada) = **descarte** a mensagem sem executar. Um Hub que vira executor trata
+    toda mensagem `pending` como trabalho, inclusive as que o executor anterior confirmou e não respondeu: quando o
+    executor troca ou se perde (troca pelo dono, desvínculo, desregistro, espaço tirado do Hub, dono do Hub saindo do
+    assunto), o backend devolve a `pending` toda mensagem que o Hub antigo confirmou sem mandar nenhuma mensagem dele
+    depois no assunto (ela chega de novo no feed com `pending: true`);
   - **troca de chave pelo executor:** quando o item `conversation` vier com `keyRotationRequired: true`, o Hub **não
     pode mandar mensagem nem anexo** (409 `conversation-key-rotation-required`); ele (ou qualquer participante) faz a
     troca com `POST /hub/conversations/:id/keys`, e o assunto volta a aceitar mensagens. Enquanto pendente, guarde o que
