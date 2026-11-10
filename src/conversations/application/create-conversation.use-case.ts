@@ -5,7 +5,10 @@ import { SpaceAccess } from '../../spaces/application/space-access.js';
 import type { ConversationScope } from '../domain/conversation-actor.js';
 import { conversationIdConflict } from '../domain/conversation-errors.js';
 import { ConversationKeyGrantRepository } from '../domain/conversation-key-grant.repository.js';
-import type { ConversationState } from '../domain/conversation-state.js';
+import {
+  assertInitialState,
+  type ConversationState,
+} from '../domain/conversation-state.js';
 import { ConversationRepository } from '../domain/conversation.repository.js';
 import { Conversation } from '../domain/conversation.js';
 import { assertWrappedConversationKey } from '../domain/wrapped-conversation-key.js';
@@ -16,7 +19,7 @@ import type { ConversationView } from './dto/conversation-view.js';
 export type CreateConversationInput = {
   /** UUID v7 generated on the device (it is in the encryption AD). */
   id: string;
-  /** Defaults to `na_fila` (a demand waiting for the executor). */
+  /** `na_fila` (default: a demand waiting for the executor) or `aviso`; else 422 `conversation-state-invalid`. */
   state?: ConversationState;
   encryptedHeader: string;
   /** Version 1 sealed for the creator. */
@@ -81,7 +84,7 @@ export class CreateConversationUseCase {
         createdByUserId: userId,
         ownerUserId: userId,
         executorHubId: input.executor?.hubId ?? null,
-        state: input.state ?? 'na_fila',
+        state: assertInitialState('user', input.state ?? 'na_fila'),
         encryptedHeader: input.encryptedHeader,
         now: new Date(),
       });

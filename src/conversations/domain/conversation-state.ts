@@ -24,3 +24,26 @@ export function assertConversationState(raw: string): ConversationState {
   }
   return raw as ConversationState;
 }
+
+/**
+ * States a conversation may be created in: a person opens a demand (`na_fila`) or a note (`aviso`); the Hub opens only
+ * the copilot's notice (`aviso`); work states come later from the executor. Else 422 `conversation-state-invalid`.
+ */
+export const INITIAL_STATES = {
+  user: ['na_fila', 'aviso'],
+  hub: ['aviso'],
+} as const satisfies Record<'user' | 'hub', readonly ConversationState[]>;
+
+export function assertInitialState(
+  by: 'user' | 'hub',
+  raw: string,
+): ConversationState {
+  const state = assertConversationState(raw);
+  if (!(INITIAL_STATES[by] as readonly string[]).includes(state)) {
+    throw new DomainValidationError(
+      'conversation-state-invalid',
+      'A conversation cannot be created in this state.',
+    );
+  }
+  return state;
+}

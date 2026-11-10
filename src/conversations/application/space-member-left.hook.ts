@@ -16,7 +16,7 @@ const HOOK_NAME = 'conversations.space-member-left';
 // Quem sai do espaço (sai, é tirado, ou sai da organização: o `spaces` emite uma vez por espaço) sai de todos os
 // assuntos daquele espaço (spec §4.2), com a mesma saída de "sair do assunto" (`ConversationDeparture`: dono novo,
 // executor que sai junto se ela era dona do Hub, lápide quando era a última, troca pendente). Roda dentro da transação
-// da saída, com o espaço JÁ travado pelo `spaces` (FOR UPDATE): os assuntos vêm depois, um a um em ordem de id, cada
+// da saída, com o espaço JÁ travado pelo `spaces` (FOR UPDATE): os assuntos vêm depois, um a um em ordem (espaço, assunto), cada
 // um no contexto de quem sai (ainda participante; a lápide da participação dela é a última gravação de cada assunto).
 // Erro desfaz a saída do espaço.
 @Injectable()

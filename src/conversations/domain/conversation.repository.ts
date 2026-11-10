@@ -31,13 +31,16 @@ export abstract class ConversationRepository {
     scope: ConversationScope,
     conversation: Conversation,
   ): Promise<void>;
-  /** Live conversations of a space where the user is a live participant, ascending by id. */
+  /** Live conversations of a space where the user is a live participant, by (space id, id): the multi-lock order. */
   abstract idsWithParticipant(
     scope: ConversationScope,
     spaceId: string,
     userId: string,
   ): Promise<string[]>;
-  /** Live conversations of the organization whose executor is the Hub (only of `spaceId` when given), ascending by id. */
+  /**
+   * Live conversations of the organization whose executor is the Hub (only of `spaceId` when given), by (space id, id):
+   * every path that locks several conversations locks them in this order.
+   */
   abstract idsWithExecutor(
     scope: ConversationScope,
     hubId: string,

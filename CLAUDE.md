@@ -491,8 +491,8 @@ consulta só de leitura (veja Sincronização).
 - **Ordem de locks dos Hubs:** linha do Hub (`HubRepository.lockForShare`; `lockForUpdate` no desregistro;
   `lockForStorage` = `FOR NO KEY UPDATE` ao instalar espaço e no aumento de espaço, serializando quem mexe no que está
   instalado contra a capacidade; sempre o primeiro lock) -> linha do vínculo (`HubOrganizationRepository.lockForUpdate`; `lockForShare` na liberação da Sala
-  e ao pôr espaço) -> `hub_space` -> espaço -> Gestores -> assuntos (`conversations`, sempre por último, em ordem de
-  id; o gancho `HubExecutorLostHooks` roda depois da Sala no desregistro, no desvínculo e ao tirar espaço). Desvincular segura o vínculo `FOR UPDATE` antes de
+  e ao pôr espaço) -> `hub_space` -> espaço -> Gestores -> assuntos (`conversations`, sempre por último, em ordem
+  (espaço, assunto); o gancho `HubExecutorLostHooks` roda depois da Sala no desregistro, no desvínculo e ao tirar espaço). Desvincular segura o vínculo `FOR UPDATE` antes de
   `revokeRoomForOrganization`. O gancho de saída do espaço (`hubs.space-member-left`) roda com o espaço já travado e
   **só lê** vínculos. O gancho de saída da organização do `hubs` tem duas fases em `MemberRemovedHooks`: `order: -10`
   só trava (Hub -> vínculos do dono com a organização -> linhas de hub_space), antes do `spaces`; `order: +10`
@@ -869,7 +869,9 @@ vivo ou executor) e "quem sai grava por último" no cabeçalho da migration `Cre
   `conversation.executor_lost`. Auditoria também de `conversation.shared`, `conversation.participant_removed`,
   `conversation.executor_changed` (só ids).
 - **Ordem de locks:** Hub -> vínculo -> hub_space (FOR SHARE, `lockExecutorCandidate`) -> espaço (FOR SHARE ao criar e
-  compartilhar) -> assunto (FOR UPDATE) -> participações.
+  compartilhar) -> assunto (FOR UPDATE) -> participações. Vários assuntos na mesma transação: sempre **(espaço,
+  assunto) em ordem** (`idsWithExecutor`/`idsWithParticipant` ordenam por `space_id, id`; a saída da organização emite
+  a saída de cada espaço em ordem de id do espaço). Ordem só pelo id do assunto dá deadlock com o executor perdido.
 - **Testes:** e2e em `test/conversations/` com a cripto real (`test/support/conversation-crypto.ts`) e os helpers de
   `test/support/conversations-kit.ts` (criar/compartilhar/trocar chave pela HTTP, pessoas em lote, estado cru).
 

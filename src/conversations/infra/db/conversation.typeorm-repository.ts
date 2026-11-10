@@ -100,6 +100,9 @@ export class ConversationTypeormRepository extends ConversationRepository {
     if (!result.affected) throw conversationNotFound();
   }
 
+  // Toda rota que trava vários assuntos os trava em ordem (espaço, assunto): a saída da organização emite a saída de
+  // cada espaço em ordem de id do espaço, e o executor perdido numa organização inteira percorre todos os espaços.
+  // Ordem só por id daria deadlock (40P01) entre as duas.
   async idsWithParticipant(
     scope: ConversationScope,
     spaceId: string,
@@ -110,7 +113,7 @@ export class ConversationTypeormRepository extends ConversationRepository {
         `SELECT id FROM conversations
           WHERE organization_id = $1 AND space_id = $2 AND $3 = ANY (participant_user_ids)
             AND deleted_at IS NULL
-          ORDER BY id`,
+          ORDER BY space_id, id`,
         [scope.organizationId, spaceId, userId],
       ),
     );
@@ -127,7 +130,7 @@ export class ConversationTypeormRepository extends ConversationRepository {
         `SELECT id FROM conversations
           WHERE organization_id = $1 AND executor_hub_id = $2 AND deleted_at IS NULL
             AND ($3::uuid IS NULL OR space_id = $3::uuid)
-          ORDER BY id`,
+          ORDER BY space_id, id`,
         [scope.organizationId, hubId, spaceId],
       ),
     );

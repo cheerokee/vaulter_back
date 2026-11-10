@@ -4,6 +4,7 @@ import {
   type OnModuleInit,
 } from '@nestjs/common';
 import { AuditLog } from '../../organizations/application/audit-log.js';
+import { ConflictError } from '../../shared/domain/errors.js';
 import {
   HubExecutorLostHooks,
   type HubExecutorLostContext,
@@ -20,10 +21,11 @@ const MAX_ATTEMPTS = 3;
 // que ele é executor ali (spec §4.1), `executorHubId` volta a nulo, lápide nas cópias do Hub e troca de chave
 // pendente; as mensagens `pending` continuam esperando um executor novo. Roda dentro da transação de quem emite (o
 // `hubs`), depois de Hub, vínculo, hub_space e espaços travados: os assuntos são travados por último, um a um em
-// ordem de id. Erro desfaz a operação do `hubs` inteira.
+// ordem (espaço, assunto). Erro desfaz a operação do `hubs` inteira.
 // Contexto (migration CreateConversations): os ids vêm do contexto do PRÓPRIO Hub (que só vê onde é executor, sem
 // lock); a escrita roda no contexto do DONO do assunto (sempre participante), nunca no do Hub, cuja linha nova não
-// passaria pela policy dele (42501). O dono pode mudar entre a leitura e o lock (sucessão): lê de novo.
+// passaria pela policy dele (42501). O dono pode mudar entre a leitura e o lock (sucessão): lê de novo, até
+// MAX_ATTEMPTS; sem conseguir, 409 `conversation-owner-changing` (desfaz a operação do `hubs`, que pode ser repetida).
 @Injectable()
 export class ConversationsExecutorLostHook
   implements OnModuleInit, OnModuleDestroy
@@ -58,32 +60,51 @@ export class ConversationsExecutorLostHook
       ctx.spaceId,
     );
     for (const id of ids) {
-      for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
-        const seen = await this.conversations.findById(hubScope, id);
-        if (!seen || !seen.isExecutor(hubId)) break;
-        const ownerScope: ConversationScope = {
-          organizationId,
-          actor: { kind: 'user', userId: seen.ownerUserId },
-        };
-        const conversation = await this.conversations.lockById(ownerScope, id);
-        if (!conversation || !conversation.isOwner(seen.ownerUserId)) continue;
-        if (!conversation.isExecutor(hubId)) break;
-        conversation.loseExecutor();
-        await this.conversations.save(ownerScope, conversation);
-        await this.grants.removeFor(ownerScope, id, { kind: 'hub', hubId });
-        await this.audit.record({
-          organizationId,
-          userId: ctx.actorId,
-          action: 'conversation.executor_lost',
-          metadata: {
-            conversationId: id,
-            spaceId: conversation.spaceId,
-            hubId,
-            reason: ctx.reason,
-          },
-        });
-        break;
+      if (!(await this.clear(ctx, hubScope, id))) {
+        // Nunca deixar o Hub como executor (com cópias vivas e sem troca pendente) e confirmar a operação do `hubs`:
+        // o erro desfaz tudo e o pedido pode ser repetido.
+        throw new ConflictError(
+          'conversation-owner-changing',
+          'A conversation changed owner repeatedly while its executor was being removed; try again.',
+        );
       }
     }
+  }
+
+  /** True when the conversation no longer has the hub as executor (cleared here or already gone). */
+  private async clear(
+    ctx: HubExecutorLostContext,
+    hubScope: ConversationScope,
+    id: string,
+  ): Promise<boolean> {
+    const { hubId, organizationId } = ctx;
+    for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+      const seen = await this.conversations.findById(hubScope, id);
+      if (!seen || !seen.isExecutor(hubId)) return true;
+      const ownerScope: ConversationScope = {
+        organizationId,
+        actor: { kind: 'user', userId: seen.ownerUserId },
+      };
+      const conversation = await this.conversations.lockById(ownerScope, id);
+      // O dono mudou (ou saiu) entre a leitura e o lock: lê de novo.
+      if (!conversation || !conversation.isOwner(seen.ownerUserId)) continue;
+      if (!conversation.isExecutor(hubId)) return true;
+      conversation.loseExecutor();
+      await this.conversations.save(ownerScope, conversation);
+      await this.grants.removeFor(ownerScope, id, { kind: 'hub', hubId });
+      await this.audit.record({
+        organizationId,
+        userId: ctx.actorId,
+        action: 'conversation.executor_lost',
+        metadata: {
+          conversationId: id,
+          spaceId: conversation.spaceId,
+          hubId,
+          reason: ctx.reason,
+        },
+      });
+      return true;
+    }
+    return false;
   }
 }

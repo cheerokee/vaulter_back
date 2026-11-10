@@ -16,7 +16,10 @@ import {
 } from '../domain/conversation-errors.js';
 import { ConversationKeyGrantRepository } from '../domain/conversation-key-grant.repository.js';
 import { ConversationParticipantRepository } from '../domain/conversation-participant.repository.js';
-import type { ConversationState } from '../domain/conversation-state.js';
+import {
+  assertInitialState,
+  type ConversationState,
+} from '../domain/conversation-state.js';
 import { ConversationRepository } from '../domain/conversation.repository.js';
 import { Conversation } from '../domain/conversation.js';
 import { assertParticipantCapacity } from '../domain/participation-rules.js';
@@ -30,7 +33,7 @@ export type HubCreateConversationInput = {
   spaceId: string;
   /** The person the conversation is opened for: owner and first participant. */
   ownerUserId: string;
-  /** Defaults to `aviso` (the copilot's notice). */
+  /** Only `aviso` (the copilot's notice, the default); else 422 `conversation-state-invalid`. */
   state?: ConversationState;
   encryptedHeader: string;
   /** Version 1 sealed for each participant: the owner and, when it is someone else, the hub owner. */
@@ -109,7 +112,7 @@ export class HubCreateConversationUseCase {
         createdByUserId: ownerUserId,
         ownerUserId,
         executorHubId: hubId,
-        state: input.state ?? 'aviso',
+        state: assertInitialState('hub', input.state ?? 'aviso'),
         encryptedHeader: input.encryptedHeader,
         now: new Date(),
       });

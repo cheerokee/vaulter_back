@@ -78,7 +78,10 @@ describe('conversations lifecycle (e2e)', () => {
     members: [KeyedUser, string][],
     installOn: [KeyedUser, ClaimedHub][] = [],
   ) => {
-    const sp = await s.create(olivia, orgId, kitPublicKey, name);
+    // 1 GiB (the minimum): the organization's quota fits every space of the suite.
+    const sp = await s.create(olivia, orgId, kitPublicKey, name, {
+      storageQuotaBytes: 1024 ** 3,
+    });
     await expectStatus(Promise.resolve(sp.res), 201);
     for (const [u, role] of members) {
       await expectStatus(
@@ -240,6 +243,23 @@ describe('conversations lifecycle (e2e)', () => {
       });
       expectProblem(notInstalled.res, 422, 'executor-invalid');
       expect(await conversationRow(other.id)).toBeNull();
+    });
+
+    it('the initial state: a person opens `na_fila` or `aviso`, the hub only `aviso` (422 otherwise)', async () => {
+      const aviso = await k.create(olivia, spaceId, { state: 'aviso' });
+      expect(aviso.res.status).toBe(201);
+      expect(aviso.res.body.state).toBe('aviso');
+      const working = await k.create(olivia, spaceId, { state: 'trabalhando' });
+      expectProblem(working.res, 422, 'conversation-state-invalid');
+      const hubQueued = await k.hubCreate(
+        casa,
+        await token(casa),
+        spaceId,
+        recipientOf(olivia),
+        [recipientOf(olivia)],
+        { state: 'na_fila' },
+      );
+      expectProblem(hubQueued.res, 422, 'conversation-state-invalid');
     });
 
     it('a non-member of the space gets 404 space-not-found', async () => {
@@ -891,6 +911,114 @@ describe('conversations lifecycle (e2e)', () => {
         404,
         'conversation-not-found',
       );
+    });
+  });
+
+  // Saída da ORGANIZAÇÃO: o `spaces` emite a saída de cada espaço (em ordem de id) e o `hubs` desvincula os Hubs de quem
+  // sai (executor perdido numa organização inteira), tudo numa transação; os assuntos se travam em ordem (espaço, assunto).
+  describe('leaving the organization', () => {
+    it('removed from the organization: succession, executor out, sole conversations end, rotation pending', async () => {
+      const xavier = await s.signUpKeyed('xavier@example.com', 'Xavier');
+      const yara = await s.signUpKeyed('yara@example.com', 'Yara');
+      for (const u of [xavier, yara]) await s.joinOrg(olivia, orgId, u);
+      const hx = await h.onboard(xavier.token, 'Xavier');
+      const link = await hubs.link(xavier, hx.hubId, orgId);
+      if (link.status !== 'approved') {
+        await hubs.approve(olivia, hx.hubId, orgId);
+      }
+      const members: [KeyedUser, string][] = [
+        [xavier, 'space_editor'],
+        [yara, 'space_editor'],
+      ];
+      const sa = await newSpace('OrgA', members, [[xavier, hx]]);
+      const sb = await newSpace('OrgB', members, [[xavier, hx]]);
+
+      const c1 = await k.create(xavier, sa.spaceId, {
+        executor: hubRecipientOf(hx),
+      });
+      await expectStatus(Promise.resolve(c1.res), 201);
+      await expectStatus(
+        k.share(xavier, sa.spaceId, c1.id, [recipientOf(yara)], c1.keys),
+        200,
+      );
+      const c2 = await k.create(xavier, sb.spaceId, {
+        executor: hubRecipientOf(hx),
+      });
+      await expectStatus(Promise.resolve(c2.res), 201);
+      const c3 = await k.create(yara, sb.spaceId);
+      await expectStatus(Promise.resolve(c3.res), 201);
+      await expectStatus(
+        k.share(yara, sb.spaceId, c3.id, [recipientOf(xavier)], c3.keys),
+        200,
+      );
+
+      await expectStatus(
+        c
+          .http()
+          .delete(`/organizations/${orgId}/members/${xavier.userId}`)
+          .set(c.bearer(olivia.token)),
+        204,
+      );
+
+      expect(await conversationRow(c1.id)).toMatchObject({
+        owner_user_id: yara.userId,
+        executor_hub_id: null,
+        key_rotation_required: true,
+        deleted: false,
+        participant_user_ids: [yara.userId],
+      });
+      expect((await liveGrants(c1.id)).map(([, w]) => w)).toEqual([
+        yara.userId,
+      ]);
+      expect(await conversationRow(c2.id)).toMatchObject({
+        deleted: true,
+        participant_user_ids: [],
+      });
+      expect(await liveGrants(c2.id)).toEqual([]);
+      expect(await conversationRow(c3.id)).toMatchObject({
+        owner_user_id: yara.userId,
+        key_rotation_required: true,
+        participant_user_ids: [yara.userId],
+      });
+      // Yara (now the owner) rotates for exactly herself.
+      const v2 = await newConversationKey();
+      await expectStatus(
+        k.rotate(
+          yara,
+          sa.spaceId,
+          c1.id,
+          await k.rotationBody(2, v2, [recipientOf(yara)], []),
+        ),
+        200,
+      );
+    });
+
+    it('leaving the organization: the owner leaves, the oldest participant takes over', async () => {
+      const wanda = await s.signUpKeyed('wanda@example.com', 'Wanda');
+      const yuri = await s.signUpKeyed('yuri@example.com', 'Yuri');
+      for (const u of [wanda, yuri]) await s.joinOrg(olivia, orgId, u);
+      const sp = await newSpace('OrgSai', [
+        [wanda, 'space_editor'],
+        [yuri, 'space_reader'],
+      ]);
+      const conv = await k.create(wanda, sp.spaceId);
+      await expectStatus(Promise.resolve(conv.res), 201);
+      await expectStatus(
+        k.share(wanda, sp.spaceId, conv.id, [recipientOf(yuri)], conv.keys),
+        200,
+      );
+      await expectStatus(
+        c
+          .http()
+          .post(`/organizations/${orgId}/leave`)
+          .set(c.bearer(wanda.token)),
+        204,
+      );
+      expect(await conversationRow(conv.id)).toMatchObject({
+        owner_user_id: yuri.userId,
+        key_rotation_required: true,
+        participant_user_ids: [yuri.userId],
+      });
     });
   });
 });
