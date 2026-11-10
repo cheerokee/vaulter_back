@@ -34,7 +34,14 @@ export class ConversationRetention {
     private readonly retentionDays = CONVERSATION_RETENTION_DAYS,
   ) {}
 
+  /**
+   * Throws `RetentionLoginError` (before touching anything) when the login does not ignore RLS: with FORCE RLS it would
+   * see no row and report zeros, and deleting tombstoned content after 30 days is a privacy promise.
+   */
   async execute(): Promise<ConversationRetentionResult> {
+    if (!(await this.store.bypassesRowSecurity())) {
+      throw new RetentionLoginError();
+    }
     const result: ConversationRetentionResult = {
       conversations: 0,
       messages: 0,
@@ -71,5 +78,15 @@ export class ConversationRetention {
       }
     }
     return result;
+  }
+}
+
+export class RetentionLoginError extends Error {
+  constructor() {
+    super(
+      'conversations:retention needs a login that ignores row-level security (superuser or BYPASSRLS); ' +
+        'see CLAUDE.md, Pendências, "Agendar npm run conversations:retention".',
+    );
+    this.name = 'RetentionLoginError';
   }
 }

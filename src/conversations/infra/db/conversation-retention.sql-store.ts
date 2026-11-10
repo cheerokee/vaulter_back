@@ -21,6 +21,13 @@ export class ConversationRetentionSqlStore extends ConversationRetentionStore {
     super();
   }
 
+  async bypassesRowSecurity(): Promise<boolean> {
+    const rows: { ok: boolean }[] = await this.dataSource.query(
+      `SELECT rolsuper OR rolbypassrls AS ok FROM pg_roles WHERE rolname = current_user`,
+    );
+    return rows[0]?.ok === true;
+  }
+
   async candidates(retentionDays: number): Promise<RetentionCandidate[]> {
     const rows: { organization_id: string; id: string }[] =
       await this.dataSource.query(

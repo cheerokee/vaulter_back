@@ -16,7 +16,10 @@ import type { ConversationMessageRepository } from '../domain/conversation-messa
 import { Conversation } from '../domain/conversation.js';
 import { MAX_CONVERSATION_PURGE_ATTACHMENTS } from '../domain/conversation-limits.js';
 import type { ConversationAccess } from './conversation-access.js';
-import { ConversationRetention } from './conversation-retention.js';
+import {
+  ConversationRetention,
+  RetentionLoginError,
+} from './conversation-retention.js';
 import { EmptyConversationTrashUseCase } from './empty-conversation-trash.use-case.js';
 import type { ConversationRetentionStore } from './ports/conversation-retention-store.js';
 
@@ -212,6 +215,7 @@ describe('ConversationRetention', () => {
   it('one conversation at a time, S3 after each commit; a failing conversation does not stop the others', async () => {
     const trace: string[] = [];
     const store = {
+      bypassesRowSecurity: vi.fn(async () => true),
       candidates: vi.fn(async () => [a, b]),
       purge: vi.fn(async (c: typeof a) => {
         trace.push(`purge:${c === a ? 'a' : 'b'}`);
@@ -257,6 +261,7 @@ describe('ConversationRetention', () => {
 
   it('versions the S3 call did not delete are not counted as removed', async () => {
     const store = {
+      bypassesRowSecurity: vi.fn(async () => true),
       candidates: vi.fn(async () => [b]),
       purge: vi.fn(async () => ({
         messages: 0,
@@ -275,5 +280,22 @@ describe('ConversationRetention', () => {
       as<ObjectStore>(objects),
     ).execute();
     expect(r).toMatchObject({ attachments: 1, removedVersions: 0, failed: 0 });
+  });
+
+  it('a login that does not ignore RLS fails before reading anything (never a silent zero)', async () => {
+    const store = {
+      bypassesRowSecurity: vi.fn(async () => false),
+      candidates: vi.fn(async () => [a]),
+      purge: vi.fn(),
+    };
+    const objects = { deleteVersions: vi.fn() };
+    await expect(
+      new ConversationRetention(
+        as<ConversationRetentionStore>(store),
+        as<ObjectStore>(objects),
+      ).execute(),
+    ).rejects.toBeInstanceOf(RetentionLoginError);
+    expect(store.candidates).not.toHaveBeenCalled();
+    expect(store.purge).not.toHaveBeenCalled();
   });
 });

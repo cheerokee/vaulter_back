@@ -1,6 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import type { INestApplication } from '@nestjs/common';
 import request from 'supertest';
+import { DataSource } from 'typeorm';
 import type { Response } from 'supertest';
 import { ConversationRetention } from '../../src/conversations/application/conversation-retention.js';
 import { ConversationRetentionSqlStore } from '../../src/conversations/infra/db/conversation-retention.sql-store.js';
@@ -521,6 +522,18 @@ describe('conversations: move, retention and trash (e2e)', () => {
         storageBefore.trashBytes - m1Bytes - a1.size,
       );
 
+      // The preflight: the owner login ignores RLS here; the runtime login does not (FORCE RLS would hide every row).
+      expect(
+        await new ConversationRetentionSqlStore(
+          await adminDataSource(),
+        ).bypassesRowSecurity(),
+      ).toBe(true);
+      expect(
+        await new ConversationRetentionSqlStore(
+          app.get(DataSource),
+        ).bypassesRowSecurity(),
+      ).toBe(false);
+
       // Nothing more to do.
       expect(await retention()).toMatchObject({
         conversations: 0,
@@ -643,5 +656,65 @@ describe('conversations: move, retention and trash (e2e)', () => {
         remainingAttachments: 0,
       });
     });
+  });
+
+  it('the executor hub deletes only its own attachments', async () => {
+    const conv = await open(olivia, spaceA, [], { executor: true });
+    const hubToken = await h.authenticate(casa);
+    const id = newId();
+    const blob = await sealAttachment(
+      conv.keys[0]!,
+      { spaceId: spaceA, conversationId: conv.id, recordId: id, keyVersion: 1 },
+      randomBytes(200),
+    );
+    const hubBase = `/hub/conversations/${conv.id}/attachments`;
+    const intent = await expectStatus(
+      http()
+        .post(hubBase)
+        .set(bearer(hubToken))
+        .send({
+          id,
+          keyVersion: 1,
+          sizeBytes: blob.length,
+          sha256: await sha256Hex(blob),
+        }),
+      201,
+    );
+    const up = intent.body.upload as {
+      url: string;
+      headers: Record<string, string>;
+    };
+    expect(
+      (
+        await fetch(up.url, {
+          method: 'PUT',
+          headers: up.headers,
+          body: new Uint8Array(blob),
+        })
+      ).status,
+    ).toBe(200);
+    await expectStatus(
+      http().post(`${hubBase}/${id}/confirm`).set(bearer(hubToken)),
+      200,
+    );
+    const personal = await upload(olivia, spaceA, conv);
+    expectProblem(
+      await http().delete(`${hubBase}/${personal.id}`).set(bearer(hubToken)),
+      403,
+      'not-conversation-owner',
+    );
+    await expectStatus(
+      http().delete(`${hubBase}/${id}`).set(bearer(hubToken)),
+      204,
+    );
+    await expectStatus(
+      http().delete(`${hubBase}/${id}`).set(bearer(hubToken)),
+      204,
+    );
+    expect(await attachmentRow(id)).toMatchObject({
+      status: 'committed',
+      deleted: true,
+    });
+    expect(await attachmentRow(personal.id)).toMatchObject({ deleted: false });
   });
 });

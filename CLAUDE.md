@@ -988,8 +988,10 @@ registra a fonte `conversations`), `hubs` (`HubDirectory`: `ownerOf`,
     contador; nunca o espaço), S3 depois do COMMIT. Os triggers de uso tiram os bytes (mensagem de assunto com lápide
     conta como usada, não lixeira, até a retenção). **Roda com o login DONO** (`typeOrmOptions('migration')`, aberto
     só pelo CLI; a API nunca segura essa conexão): assunto cujo último participante saiu é invisível a todo contexto de
-    runtime e o trigger de uso precisa vê-lo; o dono precisa ignorar o RLS (Pendências). Idempotente; erro num assunto
-    é registrado e a rotina segue.
+    runtime e o trigger de uso precisa vê-lo; o dono precisa ignorar o RLS (Pendências). **Antes de tudo confere**
+    `rolsuper OR rolbypassrls` do login (`bypassesRowSecurity`): sem isso falha com `RetentionLoginError` e o CLI sai
+    com código 1 (nunca um "nada a fazer" silencioso). Idempotente; erro num assunto é registrado, a rotina segue e o
+    CLI sai com código 1 (`failed > 0`).
   - **`storage.trashBytes`** (`GET /spaces/:id`) inclui a lixeira dos assuntos, que só os donos (ou a retenção) esvaziam;
     decisão: documentar (app avisa, `docs/app/pendencias-do-app.md`) em vez de separar o número.
 - **Testes:** e2e em `test/conversations/` com a cripto real (`test/support/conversation-crypto.ts`) e os helpers de

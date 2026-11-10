@@ -3,7 +3,8 @@
 //   npm run conversations:retention
 // Conecta com o login DONO do .env (DB_USERNAME; veja `ConversationRetentionSqlStore`) só para essa rotina; o S3 vem da
 // configuração da API. Agendar 1x por dia fora da aplicação, ANTES do `storage:reconcile` (que apaga o que o S3 não
-// apagou desta vez), até o pg-boss entrar (CLAUDE.md, Pendências).
+// apagou desta vez), até o pg-boss entrar (CLAUDE.md, Pendências). Sai com código 1 quando o login não ignora o RLS
+// (nada seria apagado) ou quando algum assunto falhou.
 import { existsSync } from 'node:fs';
 import { NestFactory } from '@nestjs/core';
 import { Logger } from 'nestjs-pino';
@@ -28,6 +29,12 @@ async function main(): Promise<void> {
       app.get(ObjectStore),
     ).execute();
     console.log(JSON.stringify(result));
+    // Some conversation could not be purged (logged): the scheduler must see the failure.
+    if (result.failed > 0) process.exitCode = 1;
+  } catch (error) {
+    // Includes RetentionLoginError (the login cannot see past FORCE RLS): never a silent "nothing to do".
+    console.error(error instanceof Error ? error.message : error);
+    process.exitCode = 1;
   } finally {
     if (owner.isInitialized) await owner.destroy();
     await app.close();

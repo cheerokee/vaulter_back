@@ -274,6 +274,10 @@ describe('conversation feeds (e2e)', () => {
         expect(keys(items).filter((k) => /s3|uploadExpires/i.test(k))).toEqual(
           [],
         );
+        // Values: no S3 host, signature or object key (none of these can come out of base64url by chance).
+        expect(JSON.stringify(items)).not.toMatch(
+          /amazonaws|X-Amz-|\/conversations\//,
+        );
       }
 
       // Bruno is a member of the space and of the organization, with the right ids in hand: nothing.
