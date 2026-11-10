@@ -29,6 +29,11 @@ import { DeviceIdSyncableTypeormEntity } from './device-id.entity-base.js';
   `"header_key_version" >= 1 AND "header_key_version" <= "current_key_version"`,
 )
 @Check('ck_conversations_header_length', `length("encrypted_header") <= 21846`)
+// Cabeçalho nulo só com lápide (retenção; migration ConversationsHardening).
+@Check(
+  'ck_conversations_header_retention',
+  `("encrypted_header" IS NOT NULL) OR ("deleted_at" IS NOT NULL)`,
+)
 @Check('ck_conversations_moved_from', `"moved_from_conversation_id" <> "id"`)
 @Index('ix_conversations_sync_version', ['syncVersion'])
 @Index('fk_conversations_organizations_idx', ['organizationId'])

@@ -21,7 +21,12 @@ export abstract class ConversationRepository {
     scope: ConversationScope,
     id: string,
   ): Promise<Conversation | null>;
-  /** Writes the mutable fields (owner, executor, state, times, key versions, header, tombstone); never the participants. */
+  /**
+   * Writes the mutable fields (owner, executor, state, times, key versions, header, tombstone); never the participants.
+   * The new row must stay visible to the scope: clearing or replacing the executor (`loseExecutor`, `changeExecutor`)
+   * must run in a PARTICIPANT's user scope (e.g. the Hub owner), never in the Hub's own scope (Postgres 42501). Throws
+   * `conversation-not-found` when nothing was updated (not visible).
+   */
   abstract save(
     scope: ConversationScope,
     conversation: Conversation,

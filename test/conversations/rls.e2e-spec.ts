@@ -657,6 +657,121 @@ describe('conversations: tables and row-level security (e2e, app role)', () => {
     );
   });
 
+  it('a Hub that stops being the executor is cleared in a participant`s context, never in its own (42501)', async () => {
+    const s = await seed();
+    const asHub = hubScope(s.orgA, s.hub);
+    const asAna = userScope(s.orgA, s.ana);
+
+    // No contexto do próprio Hub: a linha nova (executor nulo) não passa pela policy de SELECT dele.
+    const seenByHub = (await conversations.findById(asHub, s.conversationId))!;
+    expect(seenByHub.loseExecutor()).toBe(true);
+    await expect(conversations.save(asHub, seenByHub)).rejects.toSatisfy(
+      (e) => pgCode(e) === '42501',
+    );
+    expect(
+      (await conversations.findById(asAna, s.conversationId))?.executorHubId,
+    ).toBe(s.hub);
+
+    // No contexto de um participante (a dona do Hub): passa, e o Hub perde tudo menos a própria cópia com lápide.
+    await uow.run(async () => {
+      const c = (await conversations.lockById(asAna, s.conversationId))!;
+      expect(c.loseExecutor()).toBe(true);
+      await conversations.save(asAna, c);
+      expect(
+        await grants.removeFor(asAna, s.conversationId, {
+          kind: 'hub',
+          hubId: s.hub,
+        }),
+      ).toBe(1);
+    });
+    const after = await conversations.findById(asAna, s.conversationId);
+    expect(after?.executorHubId).toBeNull();
+    expect(after?.keyRotationRequired).toBe(true);
+    expect(
+      await visibleCounts({ organizationId: s.orgA, hubId: s.hub }),
+    ).toEqual({
+      conversations: 0,
+      conversation_participants: 0,
+      conversation_key_grants: 1,
+      conversation_messages: 0,
+      conversation_attachments: 0,
+    });
+  });
+
+  it('the identity columns of the rows never change (a participation cannot move to another conversation)', async () => {
+    const s = await seed();
+    const ctx = { organizationId: s.orgA, userId: s.ana };
+    const other = Conversation.create({
+      id: newId(),
+      organizationId: s.orgA,
+      spaceId: s.space,
+      createdByUserId: s.ana,
+      ownerUserId: s.ana,
+      executorHubId: null,
+      state: 'na_fila',
+      encryptedHeader: blob(60),
+      now,
+    });
+    await conversations.create(userScope(s.orgA, s.ana), other);
+    const refuse = (sql: string, params: unknown[]) =>
+      expect(asApp(ctx, sql, params)).rejects.toSatisfy(
+        (e) => pgCode(e) === '23514',
+      );
+
+    await refuse(
+      `UPDATE conversation_participants SET conversation_id = $1 WHERE conversation_id = $2 AND user_id = $3`,
+      [other.id, s.conversationId, s.bia],
+    );
+    await refuse(
+      `UPDATE conversation_participants SET user_id = $1 WHERE conversation_id = $2 AND user_id = $3`,
+      [s.caio, s.conversationId, s.bia],
+    );
+    await refuse(
+      `UPDATE conversation_key_grants SET conversation_id = $1 WHERE conversation_id = $2`,
+      [other.id, s.conversationId],
+    );
+    await refuse(
+      `UPDATE conversation_key_grants SET user_id = $1 WHERE conversation_id = $2 AND user_id = $3`,
+      [s.caio, s.conversationId, s.bia],
+    );
+    await refuse(
+      `UPDATE conversation_messages SET conversation_id = $1 WHERE id = $2`,
+      [other.id, s.fromAna.id],
+    );
+    await refuse(
+      `UPDATE conversation_attachments SET key_version = 2 WHERE id = $1`,
+      [s.attachment.id],
+    );
+    const space2 = Space.create({ organizationId: s.orgA, name: 'Outro', now });
+    await spaces.create(space2);
+    await refuse(`UPDATE conversations SET space_id = $1 WHERE id = $2`, [
+      space2.id,
+      s.conversationId,
+    ]);
+    // O resto continua gravável (tombstone, ack...).
+    expect(
+      await participants.remove(userScope(s.orgA, s.ana), other.id, s.ana),
+    ).toBe(true);
+  });
+
+  it('the header is null only after the tombstone (retention)', async () => {
+    const s = await seed();
+    const ctx = { organizationId: s.orgA, userId: s.ana };
+    await expect(
+      asApp(
+        ctx,
+        `UPDATE conversations SET encrypted_header = NULL, header_key_version = NULL WHERE id = $1`,
+        [s.conversationId],
+      ),
+    ).rejects.toSatisfy((e) => pgCode(e) === '23514');
+    const raw = await asApp(
+      ctx,
+      `UPDATE conversations SET deleted_at = now(), encrypted_header = NULL, header_key_version = NULL WHERE id = $1`,
+      [s.conversationId],
+    );
+    expect(updatedCount(raw)).toBe(1);
+  });
+
   it('lockById requires a unit of work', async () => {
     const s = await seed();
     await expect(

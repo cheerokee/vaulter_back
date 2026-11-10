@@ -63,9 +63,12 @@ const CHILD_TABLES = [
 //   comando, sem erro. Todo o resto que quem sai grava na conversa (dono novo, executor, lápide da conversa, lápide das
 //   próprias cópias) vem ANTES da lápide da participação: depois dela, a conversa some para essa pessoa. Por isso o
 //   WITH CHECK do UPDATE de `conversations` é `true` (o USING já exige a conversa visível).
-// - Escrita pelo contexto de quem é afetado: cascatas (saída do espaço, Hub que deixa de valer) rodam com o
-//   `app.user_id` de quem sai ou com o `app.hub_id` do Hub (ou de um participante), nunca com um contexto "de confiança"
-//   que abra todas as conversas.
+// - Escrita pelo contexto de quem é afetado: a saída de uma pessoa (do assunto ou do espaço) roda com o `app.user_id`
+//   de quem sai. Hub que deixa de valer (executor_hub_id volta a nulo, lápide nas cópias do Hub) roda SEMPRE no contexto
+//   de um PARTICIPANTE (`app.user_id`, ex.: o dono do Hub, que participa pela regra do executor, ou o dono do assunto),
+//   NUNCA no `app.hub_id` do próprio Hub: com executor_hub_id nulo a linha nova não passa pela policy de SELECT do Hub
+//   (42501), e as cópias dele deixam de ser graváveis por ele. Nunca um contexto "de confiança" que abra todas as
+//   conversas. (Comentário corrigido depois, na migration ConversationsHardening; o SQL desta não mudou.)
 // - Ordem de locks: conversa (`FOR UPDATE`, `lockById`) antes das participações; o trigger trava a conversa depois da
 //   linha da participação, então quem mexe em participações sem travar a conversa antes arrisca deadlock.
 export class CreateConversations1792896400000 implements MigrationInterface {

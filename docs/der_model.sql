@@ -778,7 +778,9 @@ CREATE TABLE storage_object_versions (
 -- CreateConversations). participant_user_ids é derivado das participações vivas por trigger (a policy não consulta
 -- outra tabela: sem recursão) e nunca é gravado pela aplicação. CHECKs no Postgres: state na lista,
 -- current_key_version >= 1, encrypted_header e header_key_version juntos (1..current_key_version), cabeçalho até
--- 16 KiB (21846 caracteres base64url), moved_from_conversation_id <> id.
+-- 16 KiB (21846 caracteres base64url), cabeçalho nulo só com lápide, moved_from_conversation_id <> id. Colunas de
+-- identidade (organização, espaço, conversa, pessoa/Hub, versão da chave) não mudam depois do INSERT, nesta e nas
+-- tabelas filhas (trigger trg_<tabela>_immutable, migration ConversationsHardening).
 CREATE TABLE conversations (
   id CHAR(36) NOT NULL COMMENT 'gerado no aparelho (uuid v7; entra no AD da cifra), sem default',
   created_at DATETIME NOT NULL,

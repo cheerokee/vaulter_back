@@ -152,7 +152,10 @@ export class Conversation extends Entity<ConversationProps> {
     };
   }
 
-  /** The executor stopped being valid (Hub deregistered, unlinked, space removed, owner left). */
+  /**
+   * The executor stopped being valid (Hub deregistered, unlinked, space removed, owner left). Persist it (and tombstone
+   * the Hub's key copies) in a participant's user scope, never the Hub's own: the Hub can no longer see the row.
+   */
   loseExecutor(): boolean {
     if (this.props.executorHubId === null) return false;
     this.changeExecutor(null);
