@@ -527,6 +527,16 @@ describe('conversations: move, retention and trash (e2e)', () => {
         headers: 1,
         failed: 0,
       });
+      // Retention runs as the owner (BYPASSRLS), on rows no runtime context sees: every row it wrote got its
+      // version at commit (ConversationFeedCommitOrder).
+      const [{ pending }] = (await (
+        await adminDataSource()
+      ).query(
+        `SELECT (SELECT count(*) FROM conversation_messages WHERE sync_pending)
+              + (SELECT count(*) FROM conversation_attachments WHERE sync_pending)
+              + (SELECT count(*) FROM conversations WHERE sync_pending) AS pending`,
+      )) as [{ pending: string }];
+      expect(Number(pending)).toBe(0);
 
       const rows = await messageRows(conv.id);
       const body = (id: string) =>

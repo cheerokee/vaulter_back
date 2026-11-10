@@ -2,7 +2,6 @@ import { Injectable } from '@nestjs/common';
 import { validate } from 'uuid';
 import { DataSource, type EntityManager } from 'typeorm';
 import { DomainValidationError } from '../../../shared/domain/errors.js';
-import { XID_SYNC_VERSION_SHIFT } from '../../../shared/infra/db/migration-helpers.js';
 import {
   runInTransaction,
   runWithContext,
@@ -34,26 +33,23 @@ import {
 // The hub's organizations are only the approved, live links (`HubDirectory.approvedOrganizationIds`): the executor
 // policy has no link condition, so this list is what keeps an unlinked organization out.
 //
-// SAFE HORIZON (commit order × sync_version; migration ConversationFeedSafeHorizon, `useXidSyncVersion`): the versions
-// of these tables are `writer xid8 << 16 | row`. With `xmin` = the oldest transaction still running in this snapshot,
-// every version below `xmin << 16` is final (its transaction ended) and every write still to come is at or above it.
-// A visible row at or above that bound (committed by a transaction newer than one still running) is `unsafe`:
-// `heldBackFrom` = the bound, and the page stops below it, so `nextSince` never passes a version an in-flight
-// transaction may still commit.
+// COMMIT ORDER (migration ConversationFeedCommitOrder, `addCommitOrderedSyncVersion`): the versions of these tables are
+// assigned AT COMMIT, in commit order, from one sequence under one advisory lock. A snapshot that sees version V sees
+// every committed row with a version <= V, so `nextSince` never passes a version that can still commit; no horizon,
+// nothing held back, no dependency on other transactions. Only `sync_pending = false` rows are served (every committed
+// row is; the filter documents it).
 type Row = Record<string, unknown> & {
   sv: string;
   deleted: boolean;
-  unsafe: boolean;
 };
-// $1 reader (user or hub id), $2 since, $3 limit, $4 organization, $5 conversation filter (or null), $6 safe bound,
-// $7 the Hub a person's session is bound to (or null): only the conversations it executes.
+// $1 reader (user or hub id), $2 since, $3 limit, $4 organization, $5 conversation filter (or null),
+// $6 the Hub a person's session is bound to (or null): only the conversations it executes.
 type Params = [
   readerId: string,
   since: string,
   limit: number,
   organizationId: string,
   conversationId: string | null,
-  bound: string,
   sessionHubId: string | null,
 ];
 
@@ -73,12 +69,12 @@ const item = (
 const iso = (v: unknown) => (v instanceof Date ? v.toISOString() : v);
 
 // The conversation is in the reader's scope (beyond the RLS, which says the same). A person's session bound to a Hub
-// ($7) only reaches what that Hub executes.
+// ($6) only reaches what that Hub executes.
 const IN_SCOPE = (reader: ConversationFeedReader, alias: string) =>
   reader.kind === 'user'
     ? `$1::uuid = ANY (${alias}.participant_user_ids)
-       AND ($7::uuid IS NULL OR ${alias}.executor_hub_id = $7::uuid)`
-    : `${alias}.executor_hub_id = $1::uuid AND $7::uuid IS NULL`;
+       AND ($6::uuid IS NULL OR ${alias}.executor_hub_id = $6::uuid)`
+    : `${alias}.executor_hub_id = $1::uuid AND $6::uuid IS NULL`;
 
 // A LIVE conversation in scope. Children of a tombstoned conversation never reach the feeds (a moved conversation keeps
 // its participants, copies and executor): its own tombstone is the whole signal, also on a `since=0` resync.
@@ -95,12 +91,10 @@ const NOT_UNDER_TOMBSTONE = (reader: ConversationFeedReader, table: string) =>
                   AND c.deleted_at IS NOT NULL AND ${IN_SCOPE(reader, 'c')})`;
 
 const PAGE = (table: string) =>
-  `${table}.organization_id = $4 AND ${table}.sync_version > $2::bigint
+  `${table}.organization_id = $4 AND ${table}.sync_version > $2::bigint AND NOT ${table}.sync_pending
      AND ($5::uuid IS NULL OR ${table}.${table === 'cv' ? 'id' : 'conversation_id'} = $5::uuid)`;
 
-// The version and the safe-horizon flag of every row (see SAFE HORIZON).
-const VERSION = (table: string) =>
-  `${table}.sync_version::text AS sv, ${table}.sync_version >= $6::bigint AS unsafe`;
+const VERSION = (table: string) => `${table}.sync_version::text AS sv`;
 
 @Injectable()
 export class ConversationChangesSqlReader extends ConversationChangesReader {
@@ -131,13 +125,8 @@ export class ConversationChangesSqlReader extends ConversationChangesReader {
       await tx.query(
         'SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY',
       );
-      // The first statement fixes the snapshot of the whole transaction; its xmin gives the safe bound.
-      const [{ bound }] = (await tx.query(
-        `SELECT (pg_snapshot_xmin(pg_current_snapshot())::text::bigint << ${XID_SYNC_VERSION_SHIFT})::text AS bound`,
-      )) as [{ bound: string }];
       const organizationIds = [...(await query.organizationIds())].sort();
       const batches: ConversationSyncBatch[] = [];
-      let heldBackFrom: bigint | null = null;
       for (const organizationId of organizationIds) {
         const ctx: UnitOfWorkContext =
           query.reader.kind === 'user'
@@ -150,16 +139,14 @@ export class ConversationChangesSqlReader extends ConversationChangesReader {
             query.limit,
             organizationId,
             query.conversationId,
-            bound,
             query.reader.kind === 'user'
               ? (query.reader.sessionHubId ?? null)
               : null,
           ]),
         );
-        batches.push(...read.batches);
-        if (read.unsafe) heldBackFrom = BigInt(bound);
+        batches.push(...read);
       }
-      return { organizationIds, batches, heldBackFrom };
+      return { organizationIds, batches };
     });
   }
 }
@@ -168,14 +155,12 @@ async function readOrganization(
   m: EntityManager,
   reader: ConversationFeedReader,
   params: Params,
-): Promise<{ batches: ConversationSyncBatch[]; unsafe: boolean }> {
-  let unsafe = false;
+): Promise<ConversationSyncBatch[]> {
   const batch = async (
     sql: string,
     map: (r: Row) => ConversationSyncItem,
   ): Promise<ConversationSyncBatch> => {
     const rows: Row[] = await m.query(sql, params);
-    if (rows.some((r) => r.unsafe)) unsafe = true;
     return { items: rows.map(map), truncated: rows.length >= params[2] };
   };
   const out: ConversationSyncBatch[] = [];
@@ -218,7 +203,7 @@ async function readOrganization(
   // through a session bound to a Hub (only what that Hub executes).
   const ownParticipation =
     reader.kind === 'user'
-      ? `($7::uuid IS NULL AND p.user_id = $1::uuid AND ${NOT_UNDER_TOMBSTONE(reader, 'p')}) OR `
+      ? `($6::uuid IS NULL AND p.user_id = $1::uuid AND ${NOT_UNDER_TOMBSTONE(reader, 'p')}) OR `
       : '';
   out.push(
     await batch(
@@ -245,7 +230,7 @@ async function readOrganization(
               g.deleted_at IS NOT NULL AS deleted, ${VERSION('g')}
          FROM conversation_key_grants g
         WHERE ${PAGE('g')} AND ${ownCopy} = $1::uuid AND ${NOT_UNDER_TOMBSTONE(reader, 'g')}
-          AND ($7::uuid IS NULL OR ${CONVERSATION_OF(reader, 'g')})
+          AND ($6::uuid IS NULL OR ${CONVERSATION_OF(reader, 'g')})
         ORDER BY g.sync_version LIMIT $3`,
       (r) =>
         item(
@@ -318,5 +303,5 @@ async function readOrganization(
         ),
     ),
   );
-  return { batches: out, unsafe };
+  return out;
 }

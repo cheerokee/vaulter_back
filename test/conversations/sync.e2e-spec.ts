@@ -651,10 +651,33 @@ describe('conversation feeds (e2e)', () => {
       expect(signal().waiting()).toBe(before);
     }, 60_000);
   });
-  // Ordem de commit × sync_version (horizonte seguro, migration ConversationFeedSafeHorizon): a mensagem A pega a
-  // versão menor numa transação que fica aberta; a B (outro espaço, outro assunto, o mesmo executor) pega a maior e
-  // confirma antes. O feed não pode entregar B com um `nextSince` que pule A quando A confirmar.
-  describe('commit order × sync_version (safe horizon)', () => {
+  // Versões atribuídas no COMMIT, na ordem dos commits (migration ConversationFeedCommitOrder,
+  // `addCommitOrderedSyncVersion`): quem confirma depois pega versão maior, sem depender de outras transações do banco.
+  describe('commit-ordered versions', () => {
+    const FEED_TABLES = [
+      'conversations',
+      'conversation_participants',
+      'conversation_key_grants',
+      'conversation_messages',
+      'conversation_attachments',
+    ];
+    const owner = () => adminDataSource();
+    const maxVersion = async () => {
+      const [{ v }] = (await (
+        await owner()
+      ).query(
+        `SELECT COALESCE(MAX(v), 0)::text AS v FROM (${FEED_TABLES.map((t) => `SELECT MAX(sync_version) AS v FROM ${t}`).join(' UNION ALL ')}) m`,
+      )) as [{ v: string }];
+      return Number(v);
+    };
+    const pendingRows = async () => {
+      const [{ n }] = (await (
+        await owner()
+      ).query(
+        `SELECT (${FEED_TABLES.map((t) => `(SELECT count(*) FROM ${t} WHERE sync_pending)`).join(' + ')})::int AS n`,
+      )) as [{ n: number }];
+      return n;
+    };
     // Two spaces: in the same space the second send would wait for the first on the usage counter row.
     let space2: string;
     beforeAll(async () => {
@@ -672,139 +695,216 @@ describe('conversation feeds (e2e)', () => {
       await expectStatus(Promise.resolve(b.res), 201);
       return { id: b.id, keys: b.keys as ConversationKeys };
     };
-
-    it('two messages committed in inverted order both reach the executor (long poll) and the person, with no full sync', async () => {
-      const convA = await conversation([]);
-      const b = await otherConversation();
-
-      const hubCursor = await cursorOf((q) => hubFeed(casaToken, q));
-      const userCursor = await cursorOf((q) => feed(olivia, q));
-
-      // A: written inside a transaction the test holds open (the app's own unit of work and use case).
+    /** Sends A through the app's own unit of work and use case, in a transaction held open until `release`. */
+    const holdOpenSend = async (convA: {
+      id: string;
+      keys: ConversationKeys;
+    }) => {
       const uow = app.get(UnitOfWork);
       const sending = app.get(SendMessageUseCase);
       const aId = newId();
       let release!: () => void;
       const gate = new Promise<void>((r) => (release = r));
       let written!: () => void;
-      const wroteA = new Promise<void>((r) => (written = r));
+      const wrote = new Promise<void>((r) => (written = r));
+      const encryptedBody = await k.messageBody(
+        convA.keys[0]!,
+        spaceId,
+        convA.id,
+        aId,
+        1,
+        'primeiro a gravar, confirma depois',
+      );
       const held = uow.run(async () => {
         await sending.byUser(
           { userId: olivia.userId, sessionId: newId() },
           spaceId,
           convA.id,
-          {
-            id: aId,
-            keyVersion: 1,
-            encryptedBody: await k.messageBody(
-              convA.keys[0]!,
-              spaceId,
-              convA.id,
-              aId,
-              1,
-              'primeiro, confirma depois',
-            ),
-            replacesMessageId: null,
-          },
+          { id: aId, keyVersion: 1, encryptedBody, replacesMessageId: null },
         );
         written();
         await gate;
       });
+      await wrote;
+      return { aId, release, held };
+    };
+
+    it('inverted commit order: the later commit is served at once, the earlier one comes after it with a higher version; nextSince never skips (executor long poll and person)', async () => {
+      const convA = await conversation([]);
+      const b = await otherConversation();
+      const hubCursor = await cursorOf((q) => hubFeed(casaToken, q));
+      const userCursor = await cursorOf((q) => feed(olivia, q));
+
+      const { aId, release, held } = await holdOpenSend(convA);
       try {
-        await wroteA;
-        // B: a higher version, committed first.
+        // B: written after A, committed first.
         const sentB = await k.send(olivia, space2, b.id, b.keys, {
-          text: 'segundo, confirma antes',
+          text: 'segundo a gravar, confirma antes',
         });
         await expectStatus(Promise.resolve(sentB.res), 201);
 
-        // While A is in flight, B is held back: nothing at or above B's version, the cursor does not pass it.
-        const early = await hubFeed(casaToken, { since: hubCursor });
-        expect(early.items.some((i) => i.data.id === sentB.id)).toBe(false);
-        const earlyUser = await feed(olivia, { since: userCursor });
-        expect(earlyUser.items.some((i) => i.data.id === sentB.id)).toBe(false);
+        // B is served right away (no wait for A), and A is not there yet.
+        const early = await drainHub(casaToken, hubCursor);
+        const earlyIds = early.items.map((i) => i.data.id);
+        expect(earlyIds).toContain(sentB.id);
+        expect(earlyIds).not.toContain(aId);
+        const earlyUser = await drainUser(olivia, userCursor);
+        expect(earlyUser.items.map((i) => i.data.id)).toContain(sentB.id);
+        expect(earlyUser.items.map((i) => i.data.id)).not.toContain(aId);
 
-        // The executor long-polls from where it was; A commits during the wait.
-        const poll = hubFeed(casaToken, { since: hubCursor, wait: 10 });
+        // The executor long-polls from the cursor that already passed B; A commits during the wait.
+        const poll = hubFeed(casaToken, { since: early.cursor, wait: 10 });
         await new Promise((r) => setTimeout(r, 300));
         release();
         await held;
         const page = await poll;
-        const ids = (await drainHub(casaToken, hubCursor)).items
-          .concat(page.items)
-          .filter((i) => i.type === 'conversation_message')
-          .map((i) => i.data.id);
-        expect(ids).toEqual(expect.arrayContaining([aId, sentB.id]));
-        // Strictly from the long poll's own cursor too: nothing was skipped.
-        const fromPoll = page.items.map((i) => i.data.id);
-        expect(fromPoll).toEqual(expect.arrayContaining([aId, sentB.id]));
+        const a = page.items.find(
+          (i) => i.type === 'conversation_message' && i.data.id === aId,
+        );
+        expect(a).toBeDefined();
+        const bItem = early.items.find((i) => i.data.id === sentB.id)!;
+        expect(a!.syncVersion).toBeGreaterThan(bItem.syncVersion);
 
-        const personIds = (await drainUser(olivia, userCursor)).items
-          .filter((i) => i.type === 'conversation_message')
-          .map((i) => i.data.id);
-        expect(personIds).toEqual(expect.arrayContaining([aId, sentB.id]));
+        // The person, from the cursor that already passed B, gets A too.
+        const after = await drainUser(olivia, earlyUser.cursor);
+        expect(after.items.map((i) => i.data.id)).toContain(aId);
       } finally {
         release();
         await held.catch(() => undefined);
       }
     }, 30_000);
 
-    it('a page held back by an in-flight transaction never advances the cursor past it (person feed, step by step)', async () => {
-      const convA = await conversation([]);
-      const convB = await otherConversation();
-      const cursor = await cursorOf((q) => feed(olivia, q));
-      const uow = app.get(UnitOfWork);
-      const sending = app.get(SendMessageUseCase);
-      const aId = newId();
-      let release!: () => void;
-      const gate = new Promise<void>((r) => (release = r));
-      let written!: () => void;
-      const wroteA = new Promise<void>((r) => (written = r));
-      const held = uow.run(async () => {
-        await sending.byUser(
-          { userId: olivia.userId, sessionId: newId() },
-          spaceId,
-          convA.id,
-          {
-            id: aId,
-            keyVersion: 1,
-            encryptedBody: await k.messageBody(
-              convA.keys[0]!,
-              spaceId,
-              convA.id,
-              aId,
-              1,
-              'em voo',
-            ),
-            replacesMessageId: null,
-          },
-        );
-        written();
-        await gate;
-      });
+    it('an unrelated long transaction (row lock held open on another table) does not delay a message reaching the executor (< 2 s)', async () => {
+      const conv = await conversation([ana]);
+      const cursor = await cursorOf((q) => hubFeed(casaToken, q));
+      const qr = (await owner()).createQueryRunner();
+      await qr.connect();
       try {
-        await wroteA;
-        const sentB = await k.send(olivia, space2, convB.id, convB.keys, {
-          text: 'ja confirmada',
-        });
-        await expectStatus(Promise.resolve(sentB.res), 201);
-        const page = await feed(olivia, { since: cursor });
-        expect(page.items.some((i) => i.data.id === sentB.id)).toBe(false);
-        // Whatever came, the cursor stays below B's version (B's own rows are all held back).
-        expect(page.items.every((i) => i.syncVersion <= page.nextSince)).toBe(
-          true,
-        );
-        release();
-        await held;
-        const after = (await drainUser(olivia, page.nextSince)).items.map(
-          (i) => i.data.id,
-        );
-        expect(after).toEqual(expect.arrayContaining([aId, sentB.id]));
+        await qr.startTransaction();
+        await qr.query('SELECT pg_current_xact_id()');
+        await qr.query('SELECT 1 FROM users WHERE id = $1 FOR UPDATE', [
+          bruno.userId,
+        ]);
+        const poll = hubFeed(casaToken, { since: cursor, wait: 20 });
+        await new Promise((r) => setTimeout(r, 300));
+        const sendAt = Date.now();
+        const sent = await send(ana, conv, 'nao espera ninguem');
+        const page = await poll;
+        expect(Date.now() - sendAt).toBeLessThan(2_000);
+        expect(page.items.map((i) => i.data.id)).toContain(sent.id);
       } finally {
-        release();
-        await held.catch(() => undefined);
+        await qr.rollbackTransaction().catch(() => undefined);
+        await qr.release();
       }
     }, 30_000);
+
+    it('a cursor equal to the greatest version already served returns only newer rows', async () => {
+      const conv = await conversation([]);
+      await cursorOf((q) => hubFeed(casaToken, q));
+      const old = await maxVersion();
+      const [{ next }] = (await (
+        await owner()
+      ).query(
+        `SELECT last_value::text AS next FROM conversation_sync_version_seq`,
+      )) as [{ next: string }];
+      expect(Number(next)).toBeGreaterThanOrEqual(old);
+      const sent = await send(olivia, conv, 'depois do cursor');
+      const page = await drainHub(casaToken, old);
+      expect(page.items.length).toBeGreaterThan(0);
+      expect(page.items.every((i) => i.syncVersion > old)).toBe(true);
+      expect(of(page.items, conv.id).length).toBe(page.items.length);
+      expect(page.items.map((i) => i.data.id)).toContain(sent.id);
+    });
+
+    it('the special RLS write paths commit and every row they wrote gets its version: leave (WHERE CURRENT OF), the last participant leaving, executor lost in a participant context', async () => {
+      const before = await maxVersion();
+      const anaCursor = await cursorOf((q) => feed(ana, q));
+      // Ana leaves: the participants trigger rewrites the conversation with WHERE CURRENT OF, and at commit the
+      // conversation is no longer visible in her context.
+      const conv1 = await conversation([ana]);
+      await expectStatus(k.leave(ana, spaceId, conv1.id), 204);
+      // Olivia, the last participant, leaves: the conversation becomes invisible to every runtime context.
+      const conv2 = await conversation([]);
+      await expectStatus(k.leave(olivia, spaceId, conv2.id), 204);
+      // The space leaves the Hub: executor lost, written in the conversation owner's context.
+      const conv3 = await otherConversation();
+      await hubs.removeSpace(olivia, casa.hubId, space2);
+
+      expect(await pendingRows()).toBe(0);
+      const rows = (await (
+        await owner()
+      ).query(
+        `SELECT id, sync_version::text AS v, executor_hub_id, participant_user_ids, deleted_at IS NOT NULL AS gone
+           FROM conversations WHERE id = ANY($1)`,
+        [[conv1.id, conv2.id, conv3.id]],
+      )) as {
+        id: string;
+        v: string;
+        executor_hub_id: string | null;
+        participant_user_ids: string[];
+        gone: boolean;
+      }[];
+      const byId = new Map(rows.map((r) => [r.id, r]));
+      expect(byId.get(conv1.id)!.participant_user_ids).not.toContain(
+        ana.userId,
+      );
+      expect(byId.get(conv2.id)!.gone).toBe(true);
+      expect(byId.get(conv3.id)!.executor_hub_id).toBeNull();
+      for (const r of rows) expect(Number(r.v)).toBeGreaterThan(before);
+      const grants = (await (
+        await owner()
+      ).query(
+        `SELECT sync_version::text AS v FROM conversation_key_grants
+          WHERE conversation_id = $1 AND hub_id = $2 AND deleted_at IS NOT NULL`,
+        [conv3.id, casa.hubId],
+      )) as { v: string }[];
+      expect(grants.length).toBeGreaterThan(0);
+      for (const g of grants) expect(Number(g.v)).toBeGreaterThan(before);
+
+      // Ana's feed brings the tombstone of her own participation.
+      const anaItems = (await drainUser(ana, anaCursor)).items;
+      expect(
+        anaItems.some(
+          (i) =>
+            i.type === 'conversation_participant' &&
+            i.data.conversationId === conv1.id &&
+            i.deleted,
+        ),
+      ).toBe(true);
+    }, 30_000);
+
+    it('more than 70,000 rows in one transaction: every row gets its own version and paging delivers all of them', async () => {
+      const conv = await conversation([]);
+      const cursor = await maxVersion();
+      const N = 70_001;
+      await (
+        await owner()
+      ).transaction(async (m) => {
+        await m.query(
+          `INSERT INTO conversation_messages
+             (id, organization_id, conversation_id, author_user_id, key_version, encrypted_body, body_bytes, pending,
+              sent_at)
+           SELECT uuidv7(), c.organization_id, c.id, c.owner_user_id, 1, 'AAAA', 3, true, clock_timestamp()
+             FROM conversations c, generate_series(1, $2::int)
+            WHERE c.id = $1`,
+          [conv.id, N],
+        );
+      });
+      const [stats] = (await (
+        await owner()
+      ).query(
+        `SELECT count(*)::int AS n, count(DISTINCT sync_version)::int AS d, bool_or(sync_pending) AS pending
+           FROM conversation_messages WHERE conversation_id = $1`,
+        [conv.id],
+      )) as [{ n: number; d: number; pending: boolean }];
+      expect(stats).toEqual({ n: N, d: N, pending: false });
+      const ids = new Set(
+        (await drainUser(olivia, cursor, { conversationId: conv.id })).items
+          .filter((i) => i.type === 'conversation_message')
+          .map((i) => i.data.id),
+      );
+      expect(ids.size).toBe(N);
+    }, 300_000);
   });
   // Sessão aberta por um Hub (`POST /hub/user-sessions`): "privado é privado" — ela só alcança os assuntos cujo
   // executor é esse mesmo Hub, em toda rota de usuário dos assuntos e no feed da pessoa.

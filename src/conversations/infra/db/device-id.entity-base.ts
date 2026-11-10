@@ -7,7 +7,8 @@ import {
 } from 'typeorm';
 
 // Base das tabelas sincronizáveis cujo id vem do aparelho (conversa, mensagem, anexo: o id entra no AD da cifra), sem
-// default no banco. sync_version é preenchido por trigger (bigint volta como string no driver pg).
+// default no banco. sync_version é preenchido por trigger (bigint volta como string no driver pg); sync_pending também
+// (provisória até o COMMIT dar a versão; migration ConversationFeedCommitOrder).
 export abstract class DeviceIdSyncableTypeormEntity {
   @PrimaryColumn('uuid')
   id!: string;
@@ -23,4 +24,13 @@ export abstract class DeviceIdSyncableTypeormEntity {
 
   @Column({ type: 'bigint', insert: false, update: false })
   syncVersion!: string;
+
+  @Column({
+    type: 'boolean',
+    default: true,
+    insert: false,
+    update: false,
+    select: false,
+  })
+  syncPending!: boolean;
 }

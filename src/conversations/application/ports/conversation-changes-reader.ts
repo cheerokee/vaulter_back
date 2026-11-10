@@ -40,13 +40,6 @@ export type ConversationChangesQuery = {
 export type ConversationChangesRead = {
   organizationIds: string[];
   batches: ConversationSyncBatch[];
-  /**
-   * SAFE HORIZON: when a visible row was written by a transaction newer than one still running (whose versions,
-   * invisible to this snapshot, may be lower), the bound below which every version is final; null when every row read
-   * is below it. The page holds back everything at or above it, so `nextSince` never jumps over a version committed
-   * later.
-   */
-  heldBackFrom: bigint | null;
 };
 
 /**

@@ -1,6 +1,7 @@
 /**
  * One item of a `sync_version` feed (the hub sync, the conversation feeds). `syncVersion` comes from the global
- * `sync_version_seq`; `deleted` is a tombstone (then `data` carries only the item's key fields).
+ * `sync_version_seq` (hub sync) or from `conversation_sync_version_seq`, assigned at commit (conversation feeds);
+ * `deleted` is a tombstone (then `data` carries only the item's key fields).
  */
 export type SyncItemOf<T extends string> = {
   type: T;
@@ -27,19 +28,17 @@ export type SyncPageOf<T extends string> = {
  * Merges the batches of one snapshot into one page (shared by every `sync_version` feed).
  * - Horizon: a truncated batch only proves completeness up to its last `syncVersion`; items of other batches above
  *   the lowest such horizon are held back for the next page (otherwise `nextSince` would jump over unread rows).
- * - Ties: one row can feed several items (same `syncVersion`). A page never splits such a group: it stops before it,
- *   or, when the group alone is larger than `limit`, returns the whole group (the only case a page exceeds `limit`).
+ * - Ties: one row can feed several items (same `syncVersion`; the hub sync's `member`). A page never splits such a
+ *   group: it stops before it, or, when the group alone is larger than `limit`, returns the whole group (the only case
+ *   a page exceeds `limit`). The conversation feeds have no ties (one item per row, versions from a sequence).
  * - Order: `syncVersion`, then `typeOrder`, then the JSON of `data` (deterministic).
  * - `nextSince` = the last item's `syncVersion`, or `since` when the page is empty.
- * - `heldBackFrom` (optional, exclusive): items at or above it are held back too, like a truncated batch's horizon (the
- *   conversation feeds' safe horizon: a version an in-flight transaction may still commit lies below it).
  */
 export function mergeSyncBatches<T extends string>(
   batches: SyncBatchOf<T>[],
   since: bigint,
   limit: number,
   typeOrder: readonly T[],
-  heldBackFrom: bigint | null = null,
 ): SyncPageOf<T> {
   const rank = new Map<T, number>(typeOrder.map((t, i) => [t, i]));
   const compare = (a: SyncItemOf<T>, b: SyncItemOf<T>): number => {
@@ -53,7 +52,7 @@ export function mergeSyncBatches<T extends string>(
     return ka < kb ? -1 : ka > kb ? 1 : 0;
   };
 
-  let horizon: bigint | null = heldBackFrom === null ? null : heldBackFrom - 1n;
+  let horizon: bigint | null = null;
   for (const b of batches) {
     const last = b.items.at(-1);
     if (!b.truncated || !last) continue;

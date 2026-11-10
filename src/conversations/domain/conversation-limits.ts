@@ -27,9 +27,3 @@ export const CONVERSATION_LONG_POLLS_TOTAL = 1_000;
 export const CONVERSATION_LONG_POLL_DEGRADED_REREAD_MS = 5_000;
 /** Attachments purged per "empty the conversation's trash" request (one S3 `DeleteObjects` call). */
 export const MAX_CONVERSATION_PURGE_ATTACHMENTS = 1_000;
-
-/**
- * An empty page held back by the safe horizon (a write still in flight elsewhere, whose commit may not wake this hub):
- * the long poll re-reads after this long instead of waiting for a wake.
- */
-export const CONVERSATION_LONG_POLL_HELD_BACK_REREAD_MS = 1_000;

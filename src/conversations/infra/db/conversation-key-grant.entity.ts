@@ -36,6 +36,16 @@ import type { ConversationTypeormEntity } from './conversation.entity.js';
 @Index('fk_conversation_key_grants_users_idx', ['userId'])
 @Index('fk_conversation_key_grants_hubs_idx', ['hubId'])
 export class ConversationKeyGrantTypeormEntity extends SyncableTypeormEntity {
+  // Provisória até o COMMIT dar a versão (trigger; migration ConversationFeedCommitOrder).
+  @Column({
+    type: 'boolean',
+    default: true,
+    insert: false,
+    update: false,
+    select: false,
+  })
+  syncPending!: boolean;
+
   @Column({ type: 'uuid' })
   organizationId!: string;
 
