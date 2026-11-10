@@ -613,6 +613,52 @@ describe('conversations: move, retention and trash (e2e)', () => {
     });
   });
 
+  describe('retention in bounded batches', () => {
+    it('a conversation larger than one batch is purged over several transactions; the header goes with the last one', async () => {
+      const gone = await open(olivia, spaceA, []);
+      const ids = [];
+      for (const text of ['um', 'dois', 'tres']) {
+        ids.push(await send(olivia, spaceA, gone, text));
+      }
+      const x1 = await upload(olivia, spaceA, gone);
+      const x2 = await upload(olivia, spaceA, gone);
+      await expectStatus(k.leave(olivia, spaceA, gone.id), 204);
+      await backdate('conversations', gone.id, 31);
+
+      const purge = vi.spyOn(ConversationRetentionSqlStore.prototype, 'purge');
+      try {
+        const result = await new ConversationRetention(
+          new ConversationRetentionSqlStore(await adminDataSource(), 2),
+          store(),
+        ).execute();
+        expect(result).toMatchObject({
+          conversations: 1,
+          messages: 3,
+          attachments: 2,
+          attachmentBytes: x1.size + x2.size,
+          headers: 1,
+          failed: 0,
+        });
+        // 2 messages | 1 message + 1 attachment | 1 attachment + header.
+        expect(purge).toHaveBeenCalledTimes(3);
+      } finally {
+        purge.mockRestore();
+      }
+      const rows = await messageRows(gone.id);
+      expect(rows.every((r) => r.encrypted_body === null)).toBe(true);
+      const [{ header, pending }] = (await (
+        await adminDataSource()
+      ).query(
+        `SELECT encrypted_header AS header,
+                (SELECT count(*) FROM conversation_messages WHERE conversation_id = $1 AND sync_pending)::int AS pending
+           FROM conversations WHERE id = $1`,
+        [gone.id],
+      )) as [{ header: string | null; pending: number }];
+      expect(header).toBeNull();
+      expect(pending).toBe(0);
+    });
+  });
+
   describe("emptying the conversation's trash", () => {
     it('only the owner, with reauthentication; the Gestor reaches neither this trash nor these bytes through the space trash', async () => {
       // Ana's conversation with Bruno: Olivia (Gestora, admin) does not participate.

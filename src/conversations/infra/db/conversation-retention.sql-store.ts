@@ -1,4 +1,5 @@
 import type { DataSource } from 'typeorm';
+import { CONVERSATION_RETENTION_BATCH_ROWS } from '../../domain/conversation-limits.js';
 import {
   ConversationRetentionStore,
   type RetentionCandidate,
@@ -17,7 +18,10 @@ const CUTOFF = `now() - make_interval(days => $3)`;
 // Só zera o que passou da janela (relógio do banco); nunca apaga linha (o runtime não tem DELETE, e a lápide fica para a
 // sincronização).
 export class ConversationRetentionSqlStore extends ConversationRetentionStore {
-  constructor(private readonly dataSource: DataSource) {
+  constructor(
+    private readonly dataSource: DataSource,
+    private readonly batchRows = CONVERSATION_RETENTION_BATCH_ROWS,
+  ) {
     super();
   }
 
@@ -73,29 +77,42 @@ export class ConversationRetentionSqlStore extends ConversationRetentionStore {
           messageBytes: 0,
           attachments: [],
           headerPurged: false,
+          more: false,
         };
       }
       // Mensagem de assunto com lápide recebe a lápide do assunto (CHECK: corpo nulo só com lápide).
       const messages = updatedRows<{ body_bytes: number }>(
         await m.query(
-          `UPDATE conversation_messages msg
+          `WITH batch AS (
+             SELECT msg.id FROM conversation_messages msg
+               JOIN conversations c ON c.id = msg.conversation_id AND c.organization_id = msg.organization_id
+              WHERE msg.conversation_id = $1 AND msg.organization_id = $2 AND msg.encrypted_body IS NOT NULL
+                AND (msg.deleted_at < ${CUTOFF} OR c.deleted_at < ${CUTOFF})
+              ORDER BY msg.id
+              LIMIT $4
+                FOR UPDATE OF msg
+           )
+           UPDATE conversation_messages msg
               SET encrypted_body = NULL, deleted_at = COALESCE(msg.deleted_at, c.deleted_at), updated_at = now()
-             FROM conversations c
-            WHERE c.id = msg.conversation_id AND c.organization_id = msg.organization_id
-              AND msg.conversation_id = $1 AND msg.organization_id = $2 AND msg.encrypted_body IS NOT NULL
-              AND (msg.deleted_at < ${CUTOFF} OR c.deleted_at < ${CUTOFF})
+             FROM batch, conversations c
+            WHERE msg.id = batch.id AND c.id = msg.conversation_id AND c.organization_id = msg.organization_id
           RETURNING msg.body_bytes`,
-          params,
+          [...params, this.batchRows],
         ),
       );
-      const attachments = updatedRows<Parameters<typeof purgedFromRow>[0]>(
-        await m.query(
-          `WITH batch AS (
+      const room = this.batchRows - messages.length;
+      const attachments =
+        room === 0
+          ? []
+          : updatedRows<Parameters<typeof purgedFromRow>[0]>(
+              await m.query(
+                `WITH batch AS (
              SELECT a.id FROM conversation_attachments a
                JOIN conversations c ON c.id = a.conversation_id AND c.organization_id = a.organization_id
               WHERE a.conversation_id = $1 AND a.organization_id = $2 AND a.status = 'committed'
                 AND (a.deleted_at < ${CUTOFF} OR c.deleted_at < ${CUTOFF})
               ORDER BY a.id
+              LIMIT $4
                 FOR UPDATE OF a
            )
            UPDATE conversation_attachments a
@@ -104,17 +121,21 @@ export class ConversationRetentionSqlStore extends ConversationRetentionStore {
              FROM batch, conversations c
             WHERE a.id = batch.id AND c.id = a.conversation_id AND c.organization_id = a.organization_id
           RETURNING a.organization_id, a.space_id, a.conversation_id, a.id, a.s3_version_id, a.size_bytes::text`,
-          params,
-        ),
-      );
-      const header = updatedRows<{ id: string }>(
-        await m.query(
-          `UPDATE conversations SET encrypted_header = NULL, header_key_version = NULL, updated_at = now()
+                [...params, room],
+              ),
+            );
+      const more = room === 0 || attachments.length === room;
+      // The header goes in the last batch only.
+      const header = more
+        ? []
+        : updatedRows<{ id: string }>(
+            await m.query(
+              `UPDATE conversations SET encrypted_header = NULL, header_key_version = NULL, updated_at = now()
             WHERE id = $1 AND organization_id = $2 AND deleted_at < ${CUTOFF} AND encrypted_header IS NOT NULL
           RETURNING id`,
-          params,
-        ),
-      );
+              params,
+            ),
+          );
       return {
         messages: messages.length,
         messageBytes: messages.reduce(
@@ -123,6 +144,7 @@ export class ConversationRetentionSqlStore extends ConversationRetentionStore {
         ),
         attachments: attachments.map(purgedFromRow),
         headerPurged: header.length > 0,
+        more,
       };
     });
   }

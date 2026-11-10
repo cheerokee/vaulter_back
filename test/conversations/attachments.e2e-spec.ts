@@ -5,6 +5,8 @@ import type { Response } from 'supertest';
 import { StorageReconcileHooks } from '../../src/shared/application/storage-reconcile-hooks.js';
 import { newId } from '../../src/shared/domain/id.js';
 import { ObjectStore } from '../../src/storage/application/ports/object-store.js';
+import { UnitOfWork } from '../../src/shared/infra/db/unit-of-work.js';
+import { CONVERSATION_SYNC_FEED } from '../../src/shared/infra/db/migration-helpers.js';
 import {
   adminDataSource,
   createTestApp,
@@ -194,6 +196,84 @@ describe('conversation attachments (e2e)', () => {
   afterAll(async () => {
     await app?.close();
   });
+
+  // Every commit that writes a conversation table takes the feed's version lock at COMMIT (ConversationFeedCommitOrder):
+  // a wait there past the storage `lock_timeout` raises 55P03 AT COMMIT, which must still be the retryable 409
+  // `storage-busy`, never a 500. The lock timeout is shortened here so the test does not wait 10 s per route.
+  it('a wait for the feed version lock at COMMIT past the storage lock_timeout is the retryable 409 storage-busy (intent, confirm, delete, empty trash)', async () => {
+    const conv = await conversation([]);
+    const intentOf = async (a: Awaited<ReturnType<typeof sealed>>) =>
+      expectStatus(
+        http()
+          .post(userBase(spaceId, conv.id))
+          .set(bearer(olivia.token))
+          .send(a.body),
+        201,
+      );
+    const uploaded = async () => {
+      const a = await sealed(conv);
+      await put((await intentOf(a)).body.upload as Upload, a.blob);
+      return a;
+    };
+    const confirm = (id: string) =>
+      http()
+        .post(`${userBase(spaceId, conv.id)}/${id}/confirm`)
+        .set(bearer(olivia.token));
+    const remove = (id: string) =>
+      http()
+        .delete(`${userBase(spaceId, conv.id)}/${id}`)
+        .set(bearer(olivia.token));
+    const emptyTrash = () =>
+      http()
+        .post(`/spaces/${spaceId}/conversations/${conv.id}/trash/empty`)
+        .set(bearer(olivia.token))
+        .send({ currentAuthProof: olivia.account.authProof });
+
+    const pending = await uploaded();
+    const committed = await uploaded();
+    await expectStatus(confirm(committed.id), 200);
+    const trashed = await uploaded();
+    await expectStatus(confirm(trashed.id), 200);
+    await expectStatus(remove(trashed.id), 204);
+    const fresh = await sealed(conv);
+
+    // The one UnitOfWork instance every use case shares.
+    const uow = app.get(UnitOfWork);
+    const original = uow.setLockTimeout.bind(uow);
+    const short = vi
+      .spyOn(uow, 'setLockTimeout')
+      .mockImplementation(() => original(300));
+    const holder = (await adminDataSource()).createQueryRunner();
+    await holder.connect();
+    try {
+      await holder.query('SELECT pg_advisory_lock($1::bigint)', [
+        CONVERSATION_SYNC_FEED.lockKey,
+      ]);
+      expectProblem(
+        await http()
+          .post(userBase(spaceId, conv.id))
+          .set(bearer(olivia.token))
+          .send(fresh.body),
+        409,
+        'storage-busy',
+      );
+      expectProblem(await confirm(pending.id), 409, 'storage-busy');
+      expectProblem(await remove(committed.id), 409, 'storage-busy');
+      expectProblem(await emptyTrash(), 409, 'storage-busy');
+      expect(short).toHaveBeenCalled();
+    } finally {
+      await holder.query('SELECT pg_advisory_unlock($1::bigint)', [
+        CONVERSATION_SYNC_FEED.lockKey,
+      ]);
+      await holder.release();
+      short.mockRestore();
+    }
+    // Retryable: the same requests succeed once the lock is free.
+    await intentOf(fresh);
+    await expectStatus(confirm(pending.id), 200);
+    await expectStatus(remove(committed.id), 204);
+    await expectStatus(emptyTrash(), 200);
+  }, 60_000);
 
   it('a participant uploads (intent, PUT, confirm), the usage counts it, and the others and the executor download and open it', async () => {
     const conv = await conversation();

@@ -20,7 +20,9 @@ export type ConversationRetentionResult = {
 // Retenção dos assuntos (spec §4.4.1): mensagem, anexo ou assunto com lápide guarda o conteúdo cifrado por 30 dias
 // (relógio do banco); depois esta rotina zera os corpos e o cabeçalho (UPDATE: a linha e a lápide ficam para a
 // sincronização) e tira os anexos do bucket. Roda pelo CLI `npm run conversations:retention`, com o login DONO (veja
-// `ConversationRetentionStore`), 1x por dia (CLAUDE.md, Pendências). Um assunto por transação; os anexos seguem a regra
+// `ConversationRetentionStore`), 1x por dia (CLAUDE.md, Pendências). Um lote por transação (até
+// `CONVERSATION_RETENTION_BATCH_ROWS` linhas de um assunto; o assunto se repete enquanto o lote vier cheio: todo commit
+// que grava nos assuntos segura a trava das versões até o fim, veja `addCommitOrderedSyncVersion`); os anexos seguem a regra
 // do diário do storage: índice `purged` + marca renovada no COMMIT, e SÓ DEPOIS o `DeleteObjects` em lote (o que não
 // sair fica marcado para a varredura `storage:reconcile`, que o apaga: `purged` não referencia versão). Uma falha num
 // assunto é registrada e a rotina segue (a próxima passada tenta de novo; tudo é idempotente).
@@ -54,21 +56,27 @@ export class ConversationRetention {
     };
     for (const candidate of await this.store.candidates(this.retentionDays)) {
       try {
-        const purged = await this.store.purge(candidate, this.retentionDays);
+        for (;;) {
+          const purged = await this.store.purge(candidate, this.retentionDays);
+          result.messages += purged.messages;
+          result.messageBytes += purged.messageBytes;
+          result.attachments += purged.attachments.length;
+          result.attachmentBytes += purged.attachments.reduce(
+            (sum, a) => sum + a.sizeBytes,
+            0,
+          );
+          if (purged.headerPurged) result.headers += 1;
+          result.removedVersions += await removePurgedAttachments(
+            this.objects,
+            purged.attachments,
+            this.logger,
+          );
+          // A full batch that purged nothing would loop forever: stop (the next run retries).
+          const progressed =
+            purged.messages > 0 || purged.attachments.length > 0;
+          if (!purged.more || !progressed) break;
+        }
         result.conversations += 1;
-        result.messages += purged.messages;
-        result.messageBytes += purged.messageBytes;
-        result.attachments += purged.attachments.length;
-        result.attachmentBytes += purged.attachments.reduce(
-          (sum, a) => sum + a.sizeBytes,
-          0,
-        );
-        if (purged.headerPurged) result.headers += 1;
-        result.removedVersions += await removePurgedAttachments(
-          this.objects,
-          purged.attachments,
-          this.logger,
-        );
       } catch (error) {
         result.failed += 1;
         this.logger.error(

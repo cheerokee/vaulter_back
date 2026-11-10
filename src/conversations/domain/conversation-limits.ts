@@ -10,6 +10,12 @@ export const MAX_ATTACHMENT_BYTES = 104_857_600;
 export const MAX_CONVERSATION_PARTICIPANTS = 50;
 /** A tombstoned message or conversation keeps its encrypted content this long; then a routine nulls it. */
 export const CONVERSATION_RETENTION_DAYS = 30;
+/**
+ * Rows (message bodies + attachments) one retention transaction purges at most. Every commit that writes a conversation
+ * table holds the feed's version lock to its end (`addCommitOrderedSyncVersion`, COST): a bounded batch keeps the other
+ * writers' wait at their COMMIT short.
+ */
+export const CONVERSATION_RETENTION_BATCH_ROWS = 5_000;
 /** Smallest encrypted blob: version byte (1) + nonce (24) + Poly1305 tag (16), empty plaintext (docs/crypto/conversations.md). */
 export const ENCRYPTED_BLOB_OVERHEAD_BYTES = 41;
 /** Largest page of the conversation feeds (`GET /conversations/changes`, `GET /hub/conversations/changes`). */

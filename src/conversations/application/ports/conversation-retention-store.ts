@@ -6,13 +6,15 @@ export type RetentionCandidate = {
   conversationId: string;
 };
 
-/** What one conversation lost in a retention pass (committed together). */
+/** What one conversation lost in ONE retention batch (committed together). */
 export type RetentionPurge = {
   messages: number;
   messageBytes: number;
   /** Marked `purged` with a fresh journal mark: their S3 versions are deleted after the COMMIT. */
   attachments: PurgedAttachment[];
   headerPurged: boolean;
+  /** The batch hit its row limit: purge the same conversation again (a new transaction). */
+  more: boolean;
 };
 
 /**
@@ -33,10 +35,11 @@ export abstract class ConversationRetentionStore {
    */
   abstract candidates(retentionDays: number): Promise<RetentionCandidate[]>;
   /**
-   * In ONE transaction: the conversation `FOR UPDATE` (the order of every writer: conversation -> its rows -> the usage
-   * counter; never the space), message bodies nulled (a message of a tombstoned conversation gets the conversation's
-   * tombstone too), committed attachments `purged` with the journal mark renewed, and the header of a conversation
-   * tombstoned past the window nulled. The usage triggers take the bytes out of the space usage.
+   * ONE batch, in ONE transaction: the conversation `FOR UPDATE` (the order of every writer: conversation -> its rows ->
+   * the usage counter; never the space), message bodies nulled (a message of a tombstoned conversation gets the
+   * conversation's tombstone too) and committed attachments `purged` with the journal mark renewed, together at most
+   * `CONVERSATION_RETENTION_BATCH_ROWS` rows (`more` when the limit was hit), and, in the last batch only, the header of a
+   * conversation tombstoned past the window nulled. The usage triggers take the bytes out of the space usage.
    */
   abstract purge(
     candidate: RetentionCandidate,

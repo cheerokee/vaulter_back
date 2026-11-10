@@ -225,6 +225,7 @@ describe('ConversationRetention', () => {
           messageBytes: 90,
           attachments: [att],
           headerPurged: true,
+          more: false,
         };
       }),
     };
@@ -268,6 +269,7 @@ describe('ConversationRetention', () => {
         messageBytes: 0,
         attachments: [att],
         headerPurged: false,
+        more: false,
       })),
     };
     const objects = {
@@ -280,6 +282,44 @@ describe('ConversationRetention', () => {
       as<ObjectStore>(objects),
     ).execute();
     expect(r).toMatchObject({ attachments: 1, removedVersions: 0, failed: 0 });
+  });
+
+  it('bounded batches: a full batch purges the same conversation again in a new transaction, S3 after each; a full batch with no progress stops', async () => {
+    const trace: string[] = [];
+    const batches = [
+      { messages: 2, attachments: [att], more: true, headerPurged: false },
+      { messages: 1, attachments: [], more: false, headerPurged: true },
+      { messages: 0, attachments: [], more: true, headerPurged: false },
+    ];
+    const store = {
+      bypassesRowSecurity: vi.fn(async () => true),
+      candidates: vi.fn(async () => [a, b]),
+      purge: vi.fn(async () => {
+        const next = batches.shift()!;
+        trace.push(`purge:${next.messages}`);
+        return { ...next, messageBytes: next.messages * 10 };
+      }),
+    };
+    const objects = {
+      deleteVersions: vi.fn(async () => {
+        trace.push('s3');
+        return { failed: [] };
+      }),
+    };
+    const r = await new ConversationRetention(
+      as<ConversationRetentionStore>(store),
+      as<ObjectStore>(objects),
+    ).execute();
+    expect(trace).toEqual(['purge:2', 's3', 'purge:1', 'purge:0']);
+    expect(store.purge).toHaveBeenCalledTimes(3);
+    expect(r).toMatchObject({
+      conversations: 2,
+      messages: 3,
+      messageBytes: 30,
+      attachments: 1,
+      headers: 1,
+      failed: 0,
+    });
   });
 
   it('a login that does not ignore RLS fails before reading anything (never a silent zero)', async () => {
