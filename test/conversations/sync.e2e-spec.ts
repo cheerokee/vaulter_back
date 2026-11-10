@@ -651,6 +651,111 @@ describe('conversation feeds (e2e)', () => {
       expect(signal().waiting()).toBe(before);
     }, 60_000);
   });
+  // Sessão aberta por um Hub (`POST /hub/user-sessions`): "privado é privado" — ela só alcança os assuntos cujo
+  // executor é esse mesmo Hub, em toda rota de usuário dos assuntos e no feed da pessoa.
+  describe('a session opened through a hub', () => {
+    const expectProblem = (
+      res: request.Response,
+      status: number,
+      type: string,
+    ) => {
+      expect([res.status, String(res.body.type).split('/').pop()]).toEqual([
+        status,
+        type,
+      ]);
+    };
+    it("reaches only the conversations that hub executes: Olivia on Paulo's hub sees Y (executor Paulo's hub), never X (executor her own hub)", async () => {
+      const x = await conversation([]); // executor: casa (Olivia's hub)
+      const yCreated = await k.create(olivia, spaceId);
+      await expectStatus(Promise.resolve(yCreated.res), 201);
+      const y = { id: yCreated.id, keys: yCreated.keys as ConversationKeys };
+      // The executor rule: the owner of Paulo's hub participates.
+      await expectStatus(
+        k.share(olivia, spaceId, y.id, [recipientOf(paulo)], y.keys),
+        200,
+      );
+      await expectStatus(
+        k.changeExecutor(
+          olivia,
+          spaceId,
+          y.id,
+          hubRecipientOf(pauloHub),
+          y.keys,
+        ),
+        200,
+      );
+      const sentX = await send(olivia, x, 'so no meu hub');
+      const sentY = await send(olivia, y, 'no hub do paulo');
+
+      const login = await expectStatus(
+        h.loginPerson(
+          pauloToken,
+          olivia.email,
+          olivia.account.authProof,
+          'Sala do Paulo',
+        ),
+        200,
+      );
+      const onHub = {
+        ...olivia,
+        token: login.body.session.accessToken as string,
+      } as KeyedUser;
+
+      // The person feed through the hub-bound session: Y only (no item of X: not even her own copies or participation).
+      const items = (await drainUser(onHub)).items;
+      expect(of(items, y.id).length).toBeGreaterThan(0);
+      expect(of(items, x.id)).toEqual([]);
+      expect(items.some((i) => i.data.id === sentY.id)).toBe(true);
+      expect(items.some((i) => i.data.id === sentX.id)).toBe(false);
+      expect(
+        (await feed(onHub, { conversationId: x.id, since: 0 })).items,
+      ).toEqual([]);
+      // Her phone session still sees both.
+      const phone = (await drainUser(olivia)).items;
+      expect(of(phone, x.id).length).toBeGreaterThan(0);
+      expect(of(phone, y.id).length).toBeGreaterThan(0);
+
+      // The user routes: X is 404 through the hub-bound session (read, send, header), Y works.
+      expectProblem(
+        await k.get(onHub, spaceId, x.id),
+        404,
+        'conversation-not-found',
+      );
+      await expectStatus(k.get(onHub, spaceId, y.id), 200);
+      expectProblem(
+        (await k.send(onHub, spaceId, x.id, x.keys)).res,
+        404,
+        'conversation-not-found',
+      );
+      await expectStatus(
+        Promise.resolve((await k.send(onHub, spaceId, y.id, y.keys)).res),
+        201,
+      );
+      expectProblem(
+        (await k.replaceHeader(onHub, spaceId, x.id, x.keys)).res,
+        404,
+        'conversation-not-found',
+      );
+      expectProblem(
+        await k.leave(onHub, spaceId, x.id),
+        404,
+        'conversation-not-found',
+      );
+      // Creating through it: only with that hub as executor (here Olivia's own hub: refused).
+      expectProblem(
+        (await k.create(onHub, spaceId, { executor: hubRecipientOf(casa) }))
+          .res,
+        422,
+        'executor-invalid',
+      );
+      expectProblem(
+        (await k.create(onHub, spaceId)).res,
+        422,
+        'executor-invalid',
+      );
+    });
+  });
+  // Por último no arquivo: o teste de volume deixa ~66 mil mensagens no espaço.
   // Versões atribuídas no COMMIT, na ordem dos commits (migration ConversationFeedCommitOrder,
   // `addCommitOrderedSyncVersion`): quem confirma depois pega versão maior, sem depender de outras transações do banco.
   describe('commit-ordered versions', () => {
@@ -816,6 +921,92 @@ describe('conversation feeds (e2e)', () => {
       expect(page.items.map((i) => i.data.id)).toContain(sent.id);
     });
 
+    it('the advisory lock orders the commits: T2 waits at COMMIT while T1 holds the lock, T2 gets the higher version, and no read sees T2 without T1', async () => {
+      const c1 = await conversation([]);
+      const c2 = await otherConversation();
+      const cursor = await cursorOf((q) => feed(olivia, q));
+      const insert = (convId: string) =>
+        `INSERT INTO conversation_messages
+           (id, organization_id, conversation_id, author_user_id, key_version, encrypted_body, body_bytes, pending,
+            sent_at)
+         SELECT uuidv7(), c.organization_id, c.id, c.owner_user_id, 1, 'AAAA', 3, true, clock_timestamp()
+           FROM conversations c WHERE c.id = '${convId}'
+         RETURNING id`;
+      const ds = await owner();
+      const t1 = ds.createQueryRunner();
+      const t2 = ds.createQueryRunner();
+      await t1.connect();
+      await t2.connect();
+      let reading = true;
+      const seen: string[][] = [];
+      const readers = (async () => {
+        while (reading) {
+          const page = await feed(olivia, { since: cursor });
+          seen.push(page.items.map((i) => i.data.id as string));
+        }
+      })();
+      try {
+        // T1 writes and, ONLY in this test, takes its versions (and the advisory lock) now, holding them.
+        await t1.startTransaction();
+        const [{ id: m1 }] = (await t1.query(insert(c1.id))) as [
+          { id: string },
+        ];
+        await t1.query('SET CONSTRAINTS ALL IMMEDIATE');
+        // T2 writes another space's conversation (no shared row lock) and commits: it waits on the advisory lock.
+        await t2.startTransaction();
+        const [{ pid }] = (await t2.query(
+          'SELECT pg_backend_pid() AS pid',
+        )) as [{ pid: number }];
+        const [{ id: m2 }] = (await t2.query(insert(c2.id))) as [
+          { id: string },
+        ];
+        const committing2 = t2.commitTransaction();
+        let waiting = false;
+        for (let i = 0; i < 200 && !waiting; i++) {
+          const rows = (await ds.query(
+            `SELECT 1 FROM pg_locks WHERE locktype = 'advisory' AND NOT granted AND pid = $1`,
+            [pid],
+          )) as unknown[];
+          waiting = rows.length > 0;
+          if (!waiting) await new Promise((r) => setTimeout(r, 25));
+        }
+        expect(waiting).toBe(true);
+        const meanwhile = (await feed(olivia, { since: cursor })).items.map(
+          (i) => i.data.id,
+        );
+        expect(meanwhile).not.toContain(m1);
+        expect(meanwhile).not.toContain(m2);
+
+        await t1.commitTransaction();
+        await committing2;
+        reading = false;
+        await readers;
+
+        const versions = (await ds.query(
+          `SELECT id, sync_version::text AS v FROM conversation_messages WHERE id = ANY($1)`,
+          [[m1, m2]],
+        )) as { id: string; v: string }[];
+        const v = new Map(versions.map((r) => [r.id, BigInt(r.v)]));
+        expect(v.get(m2)! > v.get(m1)!).toBe(true);
+        const final = (await drainUser(olivia, cursor)).items.map(
+          (i) => i.data.id,
+        );
+        expect(final).toEqual(expect.arrayContaining([m1, m2]));
+        expect(seen.length).toBeGreaterThan(0);
+        for (const ids of seen) {
+          if (ids.includes(m2)) expect(ids).toContain(m1);
+        }
+      } finally {
+        reading = false;
+        await readers.catch(() => undefined);
+        if (t1.isTransactionActive) await t1.rollbackTransaction();
+        if (t2.isTransactionActive)
+          await t2.rollbackTransaction().catch(() => undefined);
+        await t1.release();
+        await t2.release();
+      }
+    }, 30_000);
+
     it('the special RLS write paths commit and every row they wrote gets its version: leave (WHERE CURRENT OF), the last participant leaving, executor lost in a participant context', async () => {
       const before = await maxVersion();
       const anaCursor = await cursorOf((q) => feed(ana, q));
@@ -873,10 +1064,10 @@ describe('conversation feeds (e2e)', () => {
       ).toBe(true);
     }, 30_000);
 
-    it('more than 70,000 rows in one transaction: every row gets its own version and paging delivers all of them', async () => {
+    it('more than 65,535 rows in one transaction: every row gets its own version and paging delivers all of them', async () => {
       const conv = await conversation([]);
       const cursor = await maxVersion();
-      const N = 70_001;
+      const N = 66_000;
       await (
         await owner()
       ).transaction(async (m) => {
@@ -905,109 +1096,5 @@ describe('conversation feeds (e2e)', () => {
       );
       expect(ids.size).toBe(N);
     }, 300_000);
-  });
-  // Sessão aberta por um Hub (`POST /hub/user-sessions`): "privado é privado" — ela só alcança os assuntos cujo
-  // executor é esse mesmo Hub, em toda rota de usuário dos assuntos e no feed da pessoa.
-  describe('a session opened through a hub', () => {
-    const expectProblem = (
-      res: request.Response,
-      status: number,
-      type: string,
-    ) => {
-      expect([res.status, String(res.body.type).split('/').pop()]).toEqual([
-        status,
-        type,
-      ]);
-    };
-    it("reaches only the conversations that hub executes: Olivia on Paulo's hub sees Y (executor Paulo's hub), never X (executor her own hub)", async () => {
-      const x = await conversation([]); // executor: casa (Olivia's hub)
-      const yCreated = await k.create(olivia, spaceId);
-      await expectStatus(Promise.resolve(yCreated.res), 201);
-      const y = { id: yCreated.id, keys: yCreated.keys as ConversationKeys };
-      // The executor rule: the owner of Paulo's hub participates.
-      await expectStatus(
-        k.share(olivia, spaceId, y.id, [recipientOf(paulo)], y.keys),
-        200,
-      );
-      await expectStatus(
-        k.changeExecutor(
-          olivia,
-          spaceId,
-          y.id,
-          hubRecipientOf(pauloHub),
-          y.keys,
-        ),
-        200,
-      );
-      const sentX = await send(olivia, x, 'so no meu hub');
-      const sentY = await send(olivia, y, 'no hub do paulo');
-
-      const login = await expectStatus(
-        h.loginPerson(
-          pauloToken,
-          olivia.email,
-          olivia.account.authProof,
-          'Sala do Paulo',
-        ),
-        200,
-      );
-      const onHub = {
-        ...olivia,
-        token: login.body.session.accessToken as string,
-      } as KeyedUser;
-
-      // The person feed through the hub-bound session: Y only (no item of X: not even her own copies or participation).
-      const items = (await drainUser(onHub)).items;
-      expect(of(items, y.id).length).toBeGreaterThan(0);
-      expect(of(items, x.id)).toEqual([]);
-      expect(items.some((i) => i.data.id === sentY.id)).toBe(true);
-      expect(items.some((i) => i.data.id === sentX.id)).toBe(false);
-      expect(
-        (await feed(onHub, { conversationId: x.id, since: 0 })).items,
-      ).toEqual([]);
-      // Her phone session still sees both.
-      const phone = (await drainUser(olivia)).items;
-      expect(of(phone, x.id).length).toBeGreaterThan(0);
-      expect(of(phone, y.id).length).toBeGreaterThan(0);
-
-      // The user routes: X is 404 through the hub-bound session (read, send, header), Y works.
-      expectProblem(
-        await k.get(onHub, spaceId, x.id),
-        404,
-        'conversation-not-found',
-      );
-      await expectStatus(k.get(onHub, spaceId, y.id), 200);
-      expectProblem(
-        (await k.send(onHub, spaceId, x.id, x.keys)).res,
-        404,
-        'conversation-not-found',
-      );
-      await expectStatus(
-        Promise.resolve((await k.send(onHub, spaceId, y.id, y.keys)).res),
-        201,
-      );
-      expectProblem(
-        (await k.replaceHeader(onHub, spaceId, x.id, x.keys)).res,
-        404,
-        'conversation-not-found',
-      );
-      expectProblem(
-        await k.leave(onHub, spaceId, x.id),
-        404,
-        'conversation-not-found',
-      );
-      // Creating through it: only with that hub as executor (here Olivia's own hub: refused).
-      expectProblem(
-        (await k.create(onHub, spaceId, { executor: hubRecipientOf(casa) }))
-          .res,
-        422,
-        'executor-invalid',
-      );
-      expectProblem(
-        (await k.create(onHub, spaceId)).res,
-        422,
-        'executor-invalid',
-      );
-    });
   });
 });

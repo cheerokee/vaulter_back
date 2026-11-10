@@ -1,6 +1,7 @@
 /// <reference types="vite/client" />
 import { DataSource, type DataSourceOptions } from 'typeorm';
 import { typeOrmOptions } from '../../src/database/typeorm.options.js';
+import { assertNoPendingSyncRows } from './commit-order-check.js';
 
 // Roda uma vez antes dos e2e: cria o banco de teste (se faltar), garante extensão e login de runtime
 // (mesmo SQL do 02-app-role.sh) e aplica as migrations com o papel dono.
@@ -15,7 +16,7 @@ function quoteIdent(name: string): string {
   return `"${name.replaceAll('"', '""')}"`;
 }
 
-export default async function globalSetup(): Promise<void> {
+export default async function globalSetup(): Promise<() => Promise<void>> {
   const database = process.env.DB_DATABASE;
   if (!database) throw new Error('DB_DATABASE must be set for e2e tests');
   const appUser = process.env.DB_APP_USERNAME;
@@ -76,4 +77,15 @@ export default async function globalSetup(): Promise<void> {
   } finally {
     await migrator.destroy();
   }
+
+  // Teardown: what the LAST spec file left (every other file is checked by the next one's resetDatabase).
+  return async () => {
+    const owner = new DataSource(baseOptions);
+    await owner.initialize();
+    try {
+      await assertNoPendingSyncRows(owner, 'e2e teardown');
+    } finally {
+      await owner.destroy();
+    }
+  };
 }

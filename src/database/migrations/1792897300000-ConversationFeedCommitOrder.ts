@@ -17,6 +17,10 @@ const TABLES = [
   'conversation_attachments',
 ] as const;
 
+// Writers wait from here to the end of the migration: no version is written between reading the max and switching the
+// triggers (SHARE ROW EXCLUSIVE conflicts with every INSERT/UPDATE and with itself, not with plain reads).
+const LOCK_TABLES = `LOCK TABLE ${TABLES.map((t) => `"${t}"`).join(', ')} IN SHARE ROW EXCLUSIVE MODE`;
+
 const MAX_VERSION = `SELECT COALESCE(MAX(v), 0)::text AS v FROM (${TABLES.map((t) => `SELECT MAX(sync_version) AS v FROM "${t}"`).join(' UNION ALL ')}) m`;
 
 // Versões dos feeds de assuntos atribuídas NO COMMIT, na ordem dos commits (substitui ConversationFeedSafeHorizon):
@@ -27,7 +31,11 @@ const MAX_VERSION = `SELECT COALESCE(MAX(v), 0)::text AS v FROM (${TABLES.map((t
 // lógico e empatava acima de 65.535 linhas por transação). Mecanismo e RLS no comentário de
 // `addCommitOrderedSyncVersion` (migration-helpers.ts).
 // - A sequência começa acima de toda versão já servida (o maior `sync_version` das cinco tabelas e o limite das
-//   versões por xid desta transação): os cursores dos clientes continuam valendo.
+//   versões por xid desta transação): os cursores dos clientes continuam valendo. As cinco tabelas ficam travadas
+//   (SHARE ROW EXCLUSIVE) ANTES dessa leitura: um writer que confirmasse entre a leitura e a troca dos triggers teria
+//   uma versão por xid acima do início da sequência, e o cursor de quem a recebesse pularia as versões novas.
+//   A migration ConversationFeedSequenceFloor ainda sobe a sequência acima do maior `sync_version` (bancos que rodaram
+//   esta antes da trava).
 // - `trg_conversation_participants_sync` passa a ter `WHEN (NEW.sync_pending)`: no UPDATE do commit ele travaria a
 //   conversa (`FOR UPDATE`) depois do advisory lock. Os triggers de uso já são `UPDATE OF` colunas que o UPDATE do commit
 //   não toca (não contam duas vezes); os de imutabilidade e o guarda de `participant_user_ids` não veem mudança; os de
@@ -38,6 +46,7 @@ export class ConversationFeedCommitOrder1792897300000 implements MigrationInterf
   name = 'ConversationFeedCommitOrder1792897300000';
 
   public async up(queryRunner: QueryRunner): Promise<void> {
+    await queryRunner.query(LOCK_TABLES);
     const [{ v }] = (await queryRunner.query(MAX_VERSION)) as [{ v: string }];
     const [{ x }] = (await queryRunner.query(
       `SELECT (pg_current_xact_id()::text::bigint << ${XID_SYNC_VERSION_SHIFT})::text AS x`,
@@ -67,6 +76,7 @@ export class ConversationFeedCommitOrder1792897300000 implements MigrationInterf
   }
 
   public async down(queryRunner: QueryRunner): Promise<void> {
+    await queryRunner.query(LOCK_TABLES);
     const [{ ok }] = (await queryRunner.query(`
       SELECT (${MAX_VERSION}) ::bigint < (pg_current_xact_id()::text::bigint << ${XID_SYNC_VERSION_SHIFT}) AS ok
     `)) as [{ ok: boolean }];

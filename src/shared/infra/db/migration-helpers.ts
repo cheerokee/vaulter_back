@@ -102,6 +102,12 @@ export const CONVERSATION_SYNC_FEED: CommitOrderedSyncFeed = {
 };
 
 const SYNC_COMMIT_ESCAPE = 'sync_commit_in_progress()';
+/** Prefix of the policy COMMENT that keeps the expression a policy had before the escape (for the down migration). */
+const ORIGINAL_POLICY_PREFIX = 'sync-commit-original:';
+
+/** The BEFORE trigger of a commit-ordered table: `zz` so it fires LAST among the BEFORE triggers (name order). */
+export const commitOrderedSyncTrigger = (table: string) =>
+  `trg_${table}_zz_sync_version`;
 
 /**
  * The shared functions of the commit-ordered versions (once per database; `addCommitOrderedSyncVersion` per table):
@@ -116,6 +122,19 @@ const SYNC_COMMIT_ESCAPE = 'sync_commit_in_progress()';
  *   advisory transaction lock (re-entrant; held to the end of the transaction) and gives the row the next value of the
  *   sequence. Postgres makes a commit visible before releasing its locks, so a later transaction can only take the
  *   lock, and versions, after the earlier one is visible: versions follow commit order.
+ *
+ * COST: the advisory lock is held from the first version UPDATE to the very end of the commit: the rest of the
+ * deferred triggers, the NOTIFY queue lock, the WAL flush (and a synchronous replica, if any) and the moment the
+ * commit becomes visible. Commits that write to the feed are therefore SERIAL, fsync included; a transaction that
+ * writes many rows (a cascade: deregister, unlink, organization exit; a retention batch) makes the other writers of the
+ * feed wait at their COMMIT, holding their pool connection, for the whole of it. Keep bulk writes in bounded batches
+ * (retention: `CONVERSATION_RETENTION_BATCH_ROWS`). A `lock_timeout` set by the transaction also bounds this wait
+ * (55P03 raised at COMMIT).
+ *
+ * NEVER `SET CONSTRAINTS ... IMMEDIATE` nor two-phase commit (PREPARE TRANSACTION) in a transaction that writes these
+ * tables: both take the advisory lock BEFORE the end of the transaction (immediate: at that statement, still taking row
+ * locks afterwards; prepared: held until COMMIT PREPARED), which breaks "the advisory lock is the last lock" and can
+ * deadlock or stall every feed writer.
  */
 export async function createCommitOrderedSyncFunctions(
   qr: QueryRunner,
@@ -190,20 +209,26 @@ export async function createCommitOrderedSyncFeed(
  * key; `createCommitOrderedSyncFunctions` and `createCommitOrderedSyncFeed` first. Replaces the "version at write time"
  * of the global sequence (commit order × sync_version, Pendências do CLAUDE.md), with no dependency on other
  * transactions, xids or the cluster:
- * - column `sync_pending` (NOT NULL DEFAULT true; existing rows false) and the BEFORE trigger `trg_<t>_sync_version`
- *   on `mark_sync_pending()` (provisional on every write);
+ * - column `sync_pending` (NOT NULL DEFAULT true; existing rows false) and the BEFORE trigger
+ *   `trg_<t>_zz_sync_version` (`commitOrderedSyncTrigger`) on `mark_sync_pending()` (provisional on every write). It
+ *   replaces `trg_<t>_sync_version`; the `zz` keeps it the LAST BEFORE trigger (Postgres fires them in name order), so
+ *   in the commit-time UPDATE nothing after it can change the row it rebuilt from OLD. A new BEFORE trigger on the table
+ *   must sort before it;
  * - `trg_<t>_sync_commit`: CONSTRAINT TRIGGER AFTER INSERT OR UPDATE, DEFERRABLE INITIALLY DEFERRED, FOR EACH ROW,
  *   WHEN (NEW.sync_pending): at commit, `assign_commit_sync_version` (advisory lock of the feed, then the version). The
  *   WHEN and `sync_pending = false` keep it from firing again for its own UPDATE; a row written again later in the same
  *   transaction is provisional again and gets a new version at commit (Postgres fires deferred triggers until none
  *   is left). The advisory lock is taken at commit, after every row lock of the transaction: it is always the LAST
- *   lock, so it adds no wait cycle; commits of the feed serialize only for the duration of their version UPDATEs;
+ *   lock, so it adds no wait cycle; commits of the feed serialize from their version UPDATEs to the end of the commit
+ *   (see COST in `createCommitOrderedSyncFunctions`);
  * - RLS: the commit-time UPDATE runs in whatever context the transaction has at commit (`withContext` restores the
  *   outer one; the writer may no longer see a row it just wrote, e.g. who leaves a conversation, or nobody does, the
  *   last participant leaving). Without SECURITY DEFINER: permissive policies `sync_commit_read` (SELECT) and
  *   `sync_commit_update` (UPDATE) on `sync_commit_in_progress()`, and the same escape OR-ed into every RESTRICTIVE
- *   SELECT/UPDATE/ALL policy of the table (the original expressions are kept in the policy's COMMENT, for
- *   `dropCommitOrderedSyncVersion`). A policy (re)created on the table later must keep the escape;
+ *   SELECT/UPDATE/ALL policy of the table (the original expressions are kept in the policy's COMMENT, prefixed with
+ *   `sync-commit-original:`, for `dropCommitOrderedSyncVersion`). A policy (re)created on the table later must keep
+ *   the escape: without it the commit-time UPDATE silently changes 0 rows and the row stays provisional (never served).
+ *   Pinned by `test/conversations/commit-order-invariants.e2e-spec.ts` and the e2e global teardown;
  * - readers serve only `sync_pending = false` (always true of committed rows; documents intent);
  * - other AFTER triggers on the table fire for the commit-time UPDATE too (it changes only the two sync columns): make
  *   them `UPDATE OF <columns>` or `WHEN (NEW.sync_pending)` when they lock or write, so nothing else is locked after
@@ -222,7 +247,7 @@ export async function addCommitOrderedSyncVersion(
   );
   await qr.query(`DROP TRIGGER "trg_${table}_sync_version" ON "${table}"`);
   await qr.query(
-    `CREATE TRIGGER "trg_${table}_sync_version" BEFORE INSERT OR UPDATE ON "${table}" ` +
+    `CREATE TRIGGER "${commitOrderedSyncTrigger(table)}" BEFORE INSERT OR UPDATE ON "${table}" ` +
       `FOR EACH ROW EXECUTE FUNCTION mark_sync_pending()`,
   );
   await qr.query(
@@ -258,14 +283,16 @@ export async function addCommitOrderedSyncVersion(
     await qr.query(
       `ALTER POLICY "${p.policyname}" ON "${table}"${using}${check}`,
     );
-    const original = JSON.stringify({ qual: p.qual, withCheck: p.with_check });
+    const original =
+      ORIGINAL_POLICY_PREFIX +
+      JSON.stringify({ qual: p.qual, withCheck: p.with_check });
     await qr.query(
       `COMMENT ON POLICY "${p.policyname}" ON "${table}" IS '${original.replaceAll("'", "''")}'`,
     );
   }
 }
 
-/** Undoes `addCommitOrderedSyncVersion`, except the BEFORE trigger: the caller recreates `trg_<t>_sync_version`. */
+/** Undoes `addCommitOrderedSyncVersion`; the caller recreates the BEFORE trigger `trg_<t>_sync_version`. */
 export async function dropCommitOrderedSyncVersion(
   qr: QueryRunner,
   table: string,
@@ -273,11 +300,13 @@ export async function dropCommitOrderedSyncVersion(
   const policies = (await qr.query(
     `SELECT pol.polname AS name, d.description
        FROM pg_policy pol JOIN pg_description d ON d.objoid = pol.oid AND d.classoid = 'pg_policy'::regclass
-      WHERE pol.polrelid = $1::regclass`,
-    [table],
+      WHERE pol.polrelid = $1::regclass AND starts_with(d.description, $2)`,
+    [table, ORIGINAL_POLICY_PREFIX],
   )) as { name: string; description: string }[];
   for (const p of policies) {
-    const original = JSON.parse(p.description) as {
+    const original = JSON.parse(
+      p.description.slice(ORIGINAL_POLICY_PREFIX.length),
+    ) as {
       qual: string | null;
       withCheck: string | null;
     };
@@ -290,6 +319,8 @@ export async function dropCommitOrderedSyncVersion(
   await qr.query(`DROP POLICY "sync_commit_update" ON "${table}"`);
   await qr.query(`DROP POLICY "sync_commit_read" ON "${table}"`);
   await qr.query(`DROP TRIGGER "trg_${table}_sync_commit" ON "${table}"`);
-  await qr.query(`DROP TRIGGER "trg_${table}_sync_version" ON "${table}"`);
+  await qr.query(
+    `DROP TRIGGER "${commitOrderedSyncTrigger(table)}" ON "${table}"`,
+  );
   await qr.query(`ALTER TABLE "${table}" DROP COLUMN "sync_pending"`);
 }

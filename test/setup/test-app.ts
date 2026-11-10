@@ -6,6 +6,7 @@ import { DataSource } from 'typeorm';
 import { AppModule } from '../../src/app.module.js';
 import { configureApp } from '../../src/shared/infra/http/configure-app.js';
 import { typeOrmOptions } from '../../src/database/typeorm.options.js';
+import { assertNoPendingSyncRows } from './commit-order-check.js';
 
 let admin: DataSource | undefined;
 
@@ -74,6 +75,11 @@ export async function resetDatabase(): Promise<void> {
     `SELECT tablename FROM pg_tables WHERE schemaname = 'public' AND tablename <> 'migrations'`,
   );
   if (tables.length === 0) return;
+  // What the previous spec file left behind is checked before it is truncated.
+  await assertNoPendingSyncRows(
+    ds,
+    'resetDatabase (rows left by the previous spec file)',
+  );
   const names = new Set(tables.map((t) => t.tablename));
   const catalog = CATALOG_TABLES.filter(([t]) => names.has(t));
   if (!catalogSnapshot) {
