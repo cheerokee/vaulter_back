@@ -18,6 +18,14 @@ export const CONVERSATION_CHANGES_CHANNEL = 'conversation_changes';
 const CONNECT_WAIT_MS = 2_000;
 /** After a failed or lost LISTEN connection, the next attempt waits at least this long. */
 const RECONNECT_BACKOFF_MS = 5_000;
+/**
+ * A silently dead connection (NAT/LB idle timeout, failover) delivers no `error`: TCP keepalive plus this ping, which
+ * declares the connection lost when it fails or takes longer than `PING_TIMEOUT_MS`.
+ */
+const PING_INTERVAL_MS = 30_000;
+const PING_TIMEOUT_MS = 5_000;
+/** Waking every waiter at once (lost/reconnected) spreads their re-reads over this window. */
+const WAKE_ALL_JITTER_MS = 1_000;
 
 class Waiter {
   private pending: ChangeWait | null = null;
@@ -57,9 +65,11 @@ class Waiter {
  * Wake source of the executor long poll: ONE dedicated LISTEN connection per process (outside the TypeORM pool, with
  * the runtime login), opened on the first long poll, fanned out in memory to the waiting requests of each hub. A
  * waiting request holds no pool connection and no transaction.
- * - Lost connection (error/end): every waiter is woken (they re-read: notifications may have been missed) and new
+ * - Lost connection (error/end, or a failed ping: TCP keepalive plus `SELECT 1` every 30 s with a 5 s timeout, so a
+ *   silently dead connection is noticed): every waiter is woken (they re-read: notifications may have been missed) and new
  *   subscriptions are degraded (`live: false`, short re-reads) until a reconnect succeeds; reconnects are lazy (the next
- *   subscribe) with a backoff. A reconnect wakes everybody again for the same reason.
+ *   subscribe) with a backoff. A reconnect wakes everybody again for the same reason. Both wake-ups are spread over a
+ *   random 0–1 s per waiter (no thundering herd of re-reads).
  * - Shutdown: wakes everyone (their request answers its last read) and closes the connection.
  */
 @Injectable()
@@ -112,9 +122,22 @@ export class PgConversationChangeSignal
     return n;
   }
 
+  /**
+   * `closed` wakes at once; `changed` (connection lost or re-established: notifications may have been missed) wakes each
+   * waiter after a random 0–1 s, so a thousand long polls do not re-read in the same instant.
+   */
   private wakeAll(outcome: 'changed' | 'closed' = 'changed'): void {
     for (const set of this.waiters.values()) {
-      for (const waiter of set) waiter.wake(outcome);
+      for (const waiter of set) {
+        if (outcome === 'closed') {
+          waiter.wake('closed');
+        } else {
+          setTimeout(
+            () => waiter.wake(),
+            Math.floor(Math.random() * WAKE_ALL_JITTER_MS),
+          ).unref();
+        }
+      }
     }
   }
 
@@ -153,8 +176,12 @@ export class PgConversationChangeSignal
       database: o.database,
       connectionTimeoutMillis: CONNECT_WAIT_MS,
       application_name: 'conversation-changes-listener',
+      keepAlive: true,
+      query_timeout: PING_TIMEOUT_MS,
     });
+    let ping: NodeJS.Timeout | undefined;
     const lost = (reason: string) => {
+      clearInterval(ping);
       if (this.client !== client) return;
       this.client = null;
       this.listening = false;
@@ -183,6 +210,14 @@ export class PgConversationChangeSignal
         return;
       }
       this.listening = true;
+      ping = setInterval(() => {
+        client.query('SELECT 1').catch((err: unknown) => {
+          lost(
+            `ping failed: ${err instanceof Error ? err.message : String(err)}`,
+          );
+        });
+      }, PING_INTERVAL_MS);
+      ping.unref();
       // Anything committed while there was no LISTEN connection was never signalled: everybody re-reads.
       this.wakeAll();
     } catch (err) {
