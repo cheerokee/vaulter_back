@@ -3,6 +3,12 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { HubsModule } from '../hubs/hubs.module.js';
 import { OrganizationsModule } from '../organizations/organizations.module.js';
 import { SpacesModule } from '../spaces/spaces.module.js';
+import { StorageModule } from '../storage/storage.module.js';
+import { ConversationAttachmentHealer } from './application/attachment-healer.js';
+import { ConfirmAttachmentUseCase } from './application/confirm-attachment.use-case.js';
+import { GetAttachmentDownloadUrlUseCase } from './application/get-attachment-download-url.use-case.js';
+import { ReconcileConversationAttachments } from './application/reconcile-conversation-attachments.js';
+import { RequestAttachmentUploadUseCase } from './application/request-attachment-upload.use-case.js';
 import { AckMessageUseCase } from './application/ack-message.use-case.js';
 import { ChangeConversationStateUseCase } from './application/change-conversation-state.use-case.js';
 import { ChangeExecutorUseCase } from './application/change-executor.use-case.js';
@@ -28,6 +34,7 @@ import { ConversationParticipantRepository } from './domain/conversation-partici
 import { ConversationSpaceUsageRepository } from './domain/conversation-space-usage.repository.js';
 import { ConversationRepository } from './domain/conversation.repository.js';
 import { ConversationAttachmentTypeormEntity } from './infra/db/conversation-attachment.entity.js';
+import { ConversationAttachmentUsageTypeormEntity } from './infra/db/conversation-attachment-usage.entity.js';
 import { ConversationAttachmentTypeormRepository } from './infra/db/conversation-attachment.typeorm-repository.js';
 import { ConversationKeyGrantTypeormEntity } from './infra/db/conversation-key-grant.entity.js';
 import { ConversationKeyGrantTypeormRepository } from './infra/db/conversation-key-grant.typeorm-repository.js';
@@ -45,8 +52,10 @@ import { SpaceConversationsController } from './infra/http/space-conversations.c
 /**
  * Conversations ("assuntos") as space data (spec 2026-11-09-conversations): encrypted with their own key, private to
  * their participants and executor Hub. Depends on `spaces` (SpaceAccess, SpaceStorage, and the SpaceStorageUsage
- * port, where it registers the message bytes), `hubs` (HubDirectory, HubAccess) and
- * `organizations` (AuditLog) through what they export; reacts to `SpaceMemberLeftHooks` and `HubExecutorLostHooks`.
+ * port, where it registers the message and attachment bytes), `hubs` (HubDirectory, HubAccess), `organizations`
+ * (AuditLog) and `storage` (the ObjectStore port and the shared upload/repair pieces of `application/object-uploads`)
+ * through what they export; reacts to `SpaceMemberLeftHooks` and `HubExecutorLostHooks`, and joins the
+ * `storage:reconcile` sweep through `StorageReconcileHooks`.
  * Exports nothing: no module imports `conversations`.
  */
 @Module({
@@ -54,6 +63,7 @@ import { SpaceConversationsController } from './infra/http/space-conversations.c
     OrganizationsModule,
     SpacesModule,
     HubsModule,
+    StorageModule,
     TypeOrmModule.forFeature([
       ConversationTypeormEntity,
       ConversationParticipantTypeormEntity,
@@ -61,6 +71,7 @@ import { SpaceConversationsController } from './infra/http/space-conversations.c
       ConversationMessageTypeormEntity,
       ConversationAttachmentTypeormEntity,
       ConversationSpaceUsageTypeormEntity,
+      ConversationAttachmentUsageTypeormEntity,
     ]),
   ],
   controllers: [SpaceConversationsController, HubConversationsController],
@@ -107,6 +118,11 @@ import { SpaceConversationsController } from './infra/http/space-conversations.c
     SendMessageUseCase,
     AckMessageUseCase,
     DeleteMessageUseCase,
+    ConversationAttachmentHealer,
+    ReconcileConversationAttachments,
+    RequestAttachmentUploadUseCase,
+    ConfirmAttachmentUseCase,
+    GetAttachmentDownloadUrlUseCase,
   ],
 })
 export class ConversationsModule {}

@@ -1,3 +1,5 @@
+import type { AttachmentUploadResult } from '../../../application/request-attachment-upload.use-case.js';
+import type { AttachmentView } from '../../../application/dto/attachment-view.js';
 import type { ConversationView } from '../../../application/dto/conversation-view.js';
 import type { MessageView } from '../../../application/dto/message-view.js';
 
@@ -47,4 +49,38 @@ export function messageResponse(v: MessageView) {
     sentAt: v.sentAt.toISOString(),
     deletedAt: iso(v.deletedAt),
   };
+}
+
+/** An attachment: metadata only (never name or type). */
+export function attachmentResponse(v: AttachmentView) {
+  return {
+    id: v.id,
+    conversationId: v.conversationId,
+    keyVersion: v.keyVersion,
+    sizeBytes: v.sizeBytes,
+    sha256: v.sha256,
+    status: v.status,
+    uploadedByUserId: v.uploadedByUserId,
+    uploadedByHubId: v.uploadedByHubId,
+    createdAt: iso(v.createdAt),
+    deletedAt: iso(v.deletedAt),
+  };
+}
+
+/** Upload intent: the attachment and the presigned PUT (null when it is already committed). */
+export function attachmentUploadResponse(r: AttachmentUploadResult) {
+  return {
+    attachment: attachmentResponse(r.view),
+    upload: r.upload
+      ? {
+          url: r.upload.url,
+          headers: r.upload.headers,
+          expiresAt: r.upload.expiresAt.toISOString(),
+        }
+      : null,
+  };
+}
+
+export function downloadUrlResponse(v: { url: string; expiresAt: Date }) {
+  return { url: v.url, expiresAt: v.expiresAt.toISOString() };
 }

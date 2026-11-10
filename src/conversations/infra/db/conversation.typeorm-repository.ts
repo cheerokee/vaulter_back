@@ -70,6 +70,7 @@ export class ConversationTypeormRepository extends ConversationRepository {
   async lockById(
     scope: ConversationScope,
     id: string,
+    mode: 'update' | 'share' = 'update',
   ): Promise<Conversation | null> {
     requireUnitOfWork(this.dataSource, 'ConversationRepository.lockById');
     const row = await inScope(this.dataSource, scope, (m) =>
@@ -80,7 +81,7 @@ export class ConversationTypeormRepository extends ConversationRepository {
           id,
           org: scope.organizationId,
         })
-        .setLock('pessimistic_write')
+        .setLock(mode === 'share' ? 'pessimistic_read' : 'pessimistic_write')
         .getOne(),
     );
     return row ? conversationToDomain(row) : null;

@@ -21,6 +21,9 @@ import { userIdTracker } from '../../../shared/infra/http/user-id.tracker.js';
 import { uuidPipe } from '../../../shared/infra/http/uuid-pipe.js';
 import { ChangeConversationStateUseCase } from '../../application/change-conversation-state.use-case.js';
 import { ChangeExecutorUseCase } from '../../application/change-executor.use-case.js';
+import { ConfirmAttachmentUseCase } from '../../application/confirm-attachment.use-case.js';
+import { GetAttachmentDownloadUrlUseCase } from '../../application/get-attachment-download-url.use-case.js';
+import { RequestAttachmentUploadUseCase } from '../../application/request-attachment-upload.use-case.js';
 import { CreateConversationUseCase } from '../../application/create-conversation.use-case.js';
 import { DeleteMessageUseCase } from '../../application/delete-message.use-case.js';
 import { GetConversationUseCase } from '../../application/get-conversation.use-case.js';
@@ -34,6 +37,7 @@ import {
 import {
   ChangeExecutorDto,
   CreateConversationDto,
+  RequestAttachmentDto,
   RotateConversationKeyDto,
   SendMessageDto,
   ShareConversationDto,
@@ -41,7 +45,13 @@ import {
   messageInput,
   rotationInput,
 } from './dto/conversation.dto.js';
-import { conversationResponse, messageResponse } from './dto/responses.js';
+import {
+  attachmentResponse,
+  attachmentUploadResponse,
+  conversationResponse,
+  downloadUrlResponse,
+  messageResponse,
+} from './dto/responses.js';
 
 const perUser = (limit: { limit: number; ttl: number }) =>
   Throttle({ default: { ...limit, getTracker: userIdTracker } });
@@ -62,6 +72,9 @@ export class SpaceConversationsController {
     private readonly rotate: RotateConversationKeyUseCase,
     private readonly sending: SendMessageUseCase,
     private readonly deleting: DeleteMessageUseCase,
+    private readonly requestingUpload: RequestAttachmentUploadUseCase,
+    private readonly confirming: ConfirmAttachmentUseCase,
+    private readonly downloading: GetAttachmentDownloadUrlUseCase,
   ) {}
 
   /** 201 when created; 200 with the same conversation when the same id is sent again (retry after a network error). */
@@ -239,6 +252,61 @@ export class SpaceConversationsController {
     @Param('messageId', uuidPipe('messageId')) messageId: string,
   ): Promise<void> {
     await this.deleting.byUser(auth, spaceId, id, messageId);
+  }
+
+  /**
+   * Upload intent of an encrypted attachment (≤ 100 MiB): reserves its size in the space and returns a presigned PUT.
+   * 201; 200 for the same request again (a new URL, or `upload: null` when already committed).
+   */
+  @perUser(RATE_LIMITS.conversationAttachment)
+  @ApiBearerAuth()
+  @Post(':id/attachments')
+  async doRequestAttachment(
+    @CurrentAuth() auth: AuthContext,
+    @Param('spaceId', uuidPipe('spaceId')) spaceId: string,
+    @Param('id', uuidPipe('id')) id: string,
+    @Body() dto: RequestAttachmentDto,
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    const result = await this.requestingUpload.byUser(auth, spaceId, id, {
+      id: dto.id,
+      keyVersion: dto.keyVersion,
+      sizeBytes: dto.sizeBytes,
+      sha256: dto.sha256,
+    });
+    res.status(result.created ? 201 : 200);
+    return attachmentUploadResponse(result);
+  }
+
+  /** HEAD + server-side copy of my own upload; idempotent. */
+  @perUser(RATE_LIMITS.conversationAttachment)
+  @ApiBearerAuth()
+  @Post(':id/attachments/:attachmentId/confirm')
+  @HttpCode(200)
+  async doConfirmAttachment(
+    @CurrentAuth() auth: AuthContext,
+    @Param('spaceId', uuidPipe('spaceId')) spaceId: string,
+    @Param('id', uuidPipe('id')) id: string,
+    @Param('attachmentId', uuidPipe('attachmentId')) attachmentId: string,
+  ) {
+    return attachmentResponse(
+      await this.confirming.byUser(auth, spaceId, id, attachmentId),
+    );
+  }
+
+  /** Presigned GET (15 min) of a committed attachment, by the S3 version recorded in the index. */
+  @ApiBearerAuth()
+  @Post(':id/attachments/:attachmentId/download')
+  @HttpCode(200)
+  async doDownloadAttachment(
+    @CurrentAuth() auth: AuthContext,
+    @Param('spaceId', uuidPipe('spaceId')) spaceId: string,
+    @Param('id', uuidPipe('id')) id: string,
+    @Param('attachmentId', uuidPipe('attachmentId')) attachmentId: string,
+  ) {
+    return downloadUrlResponse(
+      await this.downloading.byUser(auth, spaceId, id, attachmentId),
+    );
   }
 
   private async doShareWith(

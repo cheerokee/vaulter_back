@@ -31,7 +31,8 @@ import { S3ObjectStore } from './infra/s3/s3-object-store.js';
 /**
  * Encrypted backup of spaces (spec 2026-11-09-storage-backup). Depends on `spaces` (SpaceContentAccess, the usage
  * port it binds), `hubs` (HubDirectory), `identity` (CurrentAuthProofVerifier: emptying the trash reauthenticates) and
- * `organizations` (AuditLog) through what they export. Exports nothing: no module imports `storage`.
+ * `organizations` (AuditLog) through what they export. Exports only the `ObjectStore` port (the bucket), for another
+ * index of the same bucket (`conversations`: attachments) that reuses the mechanism through `application/object-uploads`.
  */
 @Module({
   imports: [
@@ -68,5 +69,6 @@ import { S3ObjectStore } from './infra/s3/s3-object-store.js';
     ListObjectsUseCase,
     GetDownloadUrlUseCase,
   ],
+  exports: [ObjectStore],
 })
 export class StorageModule {}

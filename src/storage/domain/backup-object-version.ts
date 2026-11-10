@@ -48,6 +48,24 @@ export type UploadedBlob = {
 } | null;
 
 /**
+ * The provisional object is exactly what was declared. A missing object, a missing/zero size or a missing sha256 (e.g.
+ * a multipart upload) never matches. Shared with other indexes of the same bucket (exported by `application/object-uploads`).
+ */
+export function isUploadedAsDeclared(
+  blob: UploadedBlob,
+  sizeBytes: number,
+  sha256: string,
+): boolean {
+  return (
+    blob !== null &&
+    blob.sizeBytes > 0 &&
+    blob.sha256Hex !== null &&
+    blob.sizeBytes === sizeBytes &&
+    blob.sha256Hex === sha256
+  );
+}
+
+/**
  * One version of an object. Born `pending` (an upload intent: it reserves its size in the space until
  * `uploadExpiresAt`), becomes `committed` when the confirmation finds the declared bytes in the bucket and copies them
  * to the final key, or `expired` when a newer intent of the same uploader replaces it.
@@ -112,13 +130,7 @@ export class BackupObjectVersion {
    * sha256 (e.g. a multipart upload) is a mismatch, never a success: 422 `upload-mismatch`.
    */
   assertUploaded(blob: UploadedBlob): void {
-    if (
-      !blob ||
-      blob.sizeBytes <= 0 ||
-      blob.sha256Hex === null ||
-      blob.sizeBytes !== this.props.sizeBytes ||
-      blob.sha256Hex !== this.props.sha256
-    ) {
+    if (!isUploadedAsDeclared(blob, this.props.sizeBytes, this.props.sha256)) {
       throw new DomainValidationError(
         'upload-mismatch',
         'The uploaded object does not match the declared size and checksum.',

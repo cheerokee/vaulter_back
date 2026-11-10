@@ -22,7 +22,16 @@ import type { ConversationTypeormEntity } from './conversation.entity.js';
   'ck_conversation_attachments_committed',
   `("status" IN ('committed', 'purged')) = ("s3_version_id" IS NOT NULL)`,
 )
+@Check(
+  'ck_conversation_attachments_uploader',
+  `num_nonnulls("uploaded_by_user_id", "uploaded_by_hub_id") = 1`,
+)
 @Index('ix_conversation_attachments_sync_version', ['syncVersion'])
+@Index('fk_conversation_attachments_spaces_idx', ['spaceId'])
+@Index('fk_conversation_attachments_uploaded_by_users_idx', [
+  'uploadedByUserId',
+])
+@Index('fk_conversation_attachments_uploaded_by_hubs_idx', ['uploadedByHubId'])
 @Index('fk_conversation_attachments_organizations_idx', ['organizationId'])
 @Index('fk_conversation_attachments_conversations_idx', ['conversationId'])
 @Index('fk_conversation_attachments_messages_idx', ['messageId'])
@@ -39,6 +48,26 @@ export class ConversationAttachmentTypeormEntity extends DeviceIdSyncableTypeorm
     foreignKeyConstraintName: 'fk_conversation_attachments_organizations',
   })
   organization?: { id: string };
+
+  // O espaço da conversa (parte da chave no S3): o trigger trg_conversation_attachments_space confere (ou preenche) a
+  // partir da conversa no INSERT, e nunca muda. Fica na linha para a varredura do reparo achar a chave sem ver a conversa.
+  @Column({ type: 'uuid' })
+  spaceId!: string;
+
+  @ManyToOne('SpaceTypeormEntity')
+  @JoinColumn([
+    {
+      name: 'space_id',
+      referencedColumnName: 'id',
+      foreignKeyConstraintName: 'fk_conversation_attachments_spaces',
+    },
+    {
+      name: 'organization_id',
+      referencedColumnName: 'organizationId',
+      foreignKeyConstraintName: 'fk_conversation_attachments_spaces',
+    },
+  ])
+  space?: { id: string };
 
   @Column({ type: 'uuid' })
   conversationId!: string;
@@ -80,6 +109,27 @@ export class ConversationAttachmentTypeormEntity extends DeviceIdSyncableTypeorm
     },
   ])
   message?: ConversationMessageTypeormEntity;
+
+  // Quem pediu o envio (pessoa ou Hub executor): só ele confirma.
+  @Column({ type: 'uuid', nullable: true })
+  uploadedByUserId!: string | null;
+
+  @ManyToOne('UserTypeormEntity')
+  @JoinColumn({
+    name: 'uploaded_by_user_id',
+    foreignKeyConstraintName: 'fk_conversation_attachments_uploaded_by_users',
+  })
+  uploadedByUser?: { id: string };
+
+  @Column({ type: 'uuid', nullable: true })
+  uploadedByHubId!: string | null;
+
+  @ManyToOne('HubTypeormEntity')
+  @JoinColumn({
+    name: 'uploaded_by_hub_id',
+    foreignKeyConstraintName: 'fk_conversation_attachments_uploaded_by_hubs',
+  })
+  uploadedByHub?: { id: string };
 
   @Column({ type: 'integer' })
   keyVersion!: number;

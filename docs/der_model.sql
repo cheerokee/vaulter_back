@@ -908,14 +908,19 @@ CREATE TABLE conversation_messages (
 -- Índice dos anexos cifrados (id do aparelho; objeto no S3 em orgs/<orgId>/spaces/<spaceId>/conversations/
 -- <conversationId>/<attachmentId>), no mesmo fluxo intenção -> confirmação do backup. Só ids, tamanho, sha256 do blob
 -- cifrado, versão da chave e datas: nunca nome ou tipo. CHECKs no Postgres: status, size_bytes 1..104857600 (100 MiB),
--- key_version >= 1, sha256 ~ '^[0-9a-f]{64}$', (status IN ('committed', 'purged')) = (s3_version_id preenchido).
+-- key_version >= 1, sha256 ~ '^[0-9a-f]{64}$', (status IN ('committed', 'purged')) = (s3_version_id preenchido),
+-- exatamente um de uploaded_by_user_id / uploaded_by_hub_id. space_id preenchido/conferido por trigger a partir da
+-- conversa. Leitura da varredura do reparo: contexto app.storage_reconcile (migration ConversationAttachmentStorage).
 CREATE TABLE conversation_attachments (
   id CHAR(36) NOT NULL COMMENT 'gerado no aparelho (uuid v7; entra no AD da cifra), sem default',
   created_at DATETIME NOT NULL,
   updated_at DATETIME NULL,
   deleted_at DATETIME NULL,
   organization_id CHAR(36) NOT NULL,
+  space_id CHAR(36) NOT NULL COMMENT 'o espaço da conversa (parte da chave no S3); trigger confere',
   conversation_id CHAR(36) NOT NULL,
+  uploaded_by_user_id CHAR(36) NULL COMMENT 'quem pediu o envio (pessoa); só ele confirma',
+  uploaded_by_hub_id CHAR(36) NULL COMMENT 'quem pediu o envio (Hub executor)',
   message_id CHAR(36) NULL COMMENT 'mensagem da mesma conversa (FK composta)',
   key_version INT NOT NULL,
   size_bytes BIGINT NOT NULL,
@@ -929,11 +934,39 @@ CREATE TABLE conversation_attachments (
   INDEX fk_conversation_attachments_organizations_idx (organization_id),
   INDEX fk_conversation_attachments_conversations_idx (conversation_id),
   INDEX fk_conversation_attachments_messages_idx (message_id),
+  INDEX fk_conversation_attachments_spaces_idx (space_id),
+  INDEX fk_conversation_attachments_uploaded_by_users_idx (uploaded_by_user_id),
+  INDEX fk_conversation_attachments_uploaded_by_hubs_idx (uploaded_by_hub_id),
   INDEX ix_conversation_attachments_s3_write_started (s3_write_started_at) COMMENT 'só linhas marcadas (WHERE s3_write_started_at IS NOT NULL no Postgres)',
   INDEX ix_conversation_attachments_sync_version (sync_version),
   CONSTRAINT fk_conversation_attachments_organizations FOREIGN KEY (organization_id) REFERENCES organizations (id),
   CONSTRAINT fk_conversation_attachments_conversations FOREIGN KEY (conversation_id, organization_id) REFERENCES conversations (id, organization_id),
-  CONSTRAINT fk_conversation_attachments_messages FOREIGN KEY (message_id, conversation_id, organization_id) REFERENCES conversation_messages (id, conversation_id, organization_id)
+  CONSTRAINT fk_conversation_attachments_messages FOREIGN KEY (message_id, conversation_id, organization_id) REFERENCES conversation_messages (id, conversation_id, organization_id),
+  CONSTRAINT fk_conversation_attachments_spaces FOREIGN KEY (space_id, organization_id) REFERENCES spaces (id, organization_id),
+  CONSTRAINT fk_conversation_attachments_uploaded_by_users FOREIGN KEY (uploaded_by_user_id) REFERENCES users (id),
+  CONSTRAINT fk_conversation_attachments_uploaded_by_hubs FOREIGN KEY (uploaded_by_hub_id) REFERENCES hubs (id)
+);
+
+-- A parte dos anexos no uso do espaço: projeção por anexo, mantida só por trigger em conversation_attachments (os
+-- anexos só são visíveis a participantes). Uma linha por anexo (não contador) porque a reserva vence no tempo.
+-- Uso = SUM(size_bytes) de stored ou reserved_until > now(); lixeira = SUM de trash. RLS só por organização; não
+-- sincroniza. CHECKs: size_bytes > 0, NOT trash OR stored, NOT (stored AND reserved_until preenchido).
+CREATE TABLE conversation_attachment_usage (
+  attachment_id CHAR(36) NOT NULL,
+  created_at DATETIME NOT NULL,
+  updated_at DATETIME NULL,
+  deleted_at DATETIME NULL,
+  organization_id CHAR(36) NOT NULL,
+  space_id CHAR(36) NOT NULL,
+  size_bytes BIGINT NOT NULL,
+  stored BOOLEAN NOT NULL DEFAULT FALSE COMMENT 'confirmado (conta até purged)',
+  trash BOOLEAN NOT NULL DEFAULT FALSE COMMENT 'confirmado com lápide',
+  reserved_until DATETIME NULL COMMENT 'janela da intenção pendente viva',
+  PRIMARY KEY (attachment_id),
+  INDEX ix_conversation_attachment_usage_space (organization_id, space_id),
+  CONSTRAINT fk_conversation_attachment_usage_attachments FOREIGN KEY (attachment_id) REFERENCES conversation_attachments (id),
+  CONSTRAINT fk_conversation_attachment_usage_organizations FOREIGN KEY (organization_id) REFERENCES organizations (id),
+  CONSTRAINT fk_conversation_attachment_usage_spaces FOREIGN KEY (space_id, organization_id) REFERENCES spaces (id, organization_id)
 );
 
 -- A parte dos assuntos no uso do espaço: contador por espaço, mantido só por trigger em conversation_messages

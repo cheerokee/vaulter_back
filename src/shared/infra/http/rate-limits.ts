@@ -94,6 +94,12 @@ export const RATE_LIMITS = {
   conversationMessage: { limit: 60, ttl: MINUTE },
   conversationHubMessage: { limit: 300, ttl: MINUTE },
   conversationAck: { limit: 600, ttl: MINUTE },
+  /**
+   * Anexos dos assuntos (intenção e confirmação, contador próprio por rota; a URL de download fica no limite geral): por
+   * pessoa 120/h (fotos e áudios de uma conversa) e por Hub 600/h. Cada intenção reserva até 100 MiB do espaço.
+   */
+  conversationAttachment: { limit: 120, ttl: HOUR },
+  conversationHubAttachment: { limit: 600, ttl: HOUR },
 } as const;
 
 /** Nome do throttler extra, cobrado só nas rotas marcadas com @ThrottleByEmail(). */

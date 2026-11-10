@@ -16,10 +16,15 @@ export abstract class ConversationRepository {
     id: string,
     options?: { withDeleted?: boolean },
   ): Promise<Conversation | null>;
-  /** `FOR UPDATE` on the live conversation; requires an active unit of work. The first lock of every mutation. */
+  /**
+   * `FOR UPDATE` on the live conversation; requires an active unit of work. The first lock of every mutation.
+   * `share` (`FOR SHARE`): an attachment confirmation, which only reads the key state while it copies in S3 (a key
+   * rotation waits for it; confirmations and messages of other conversations do not).
+   */
   abstract lockById(
     scope: ConversationScope,
     id: string,
+    mode?: 'update' | 'share',
   ): Promise<Conversation | null>;
   /**
    * Writes the mutable fields (owner, executor, state, times, key versions, header, tombstone); never the participants.

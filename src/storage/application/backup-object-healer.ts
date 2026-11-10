@@ -4,6 +4,7 @@ import { objectKey } from '../domain/backup-keys.js';
 import type { BackupObject } from '../domain/backup-object.js';
 import { BackupObjectRepository } from '../domain/backup-object.repository.js';
 import { BackupObjectVersionRepository } from '../domain/backup-object-version.repository.js';
+import { removeUnreferencedVersions } from './object-uploads.js';
 import { ObjectStore } from './ports/object-store.js';
 
 export type ObjectRef = {
@@ -47,14 +48,14 @@ export class BackupObjectHealer {
       await this.versions.committedS3VersionIds(orgId, object.id),
     );
     const key = objectKey(orgId, object.spaceId, object.id);
-    const deleted = object.deletedAt !== null;
-    let removed = 0;
-    for (const v of await this.store.listVersions(key)) {
-      if (referenced.has(v.versionId)) continue;
-      if (v.isDeleteMarker && deleted) continue;
-      await this.store.deleteVersion(key, v.versionId);
-      removed++;
-    }
+    const removed = await removeUnreferencedVersions(
+      this.store,
+      key,
+      referenced,
+      {
+        keepDeleteMarkers: object.deletedAt !== null,
+      },
+    );
     if (options.clearMarksOlderThanMinutes !== undefined) {
       await this.versions.clearWriteMarks(
         orgId,

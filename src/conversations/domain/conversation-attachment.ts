@@ -3,6 +3,7 @@ import {
   DomainValidationError,
 } from '../../shared/domain/errors.js';
 import { Entity } from '../../shared/domain/entity.js';
+import { sameActor, type ConversationActor } from './conversation-actor.js';
 import { attachmentTooLarge } from './conversation-errors.js';
 import { MAX_ATTACHMENT_BYTES } from './conversation-limits.js';
 import { assertDeviceId, assertKeyVersion } from './device-id.js';
@@ -12,7 +13,11 @@ export type AttachmentStatus = 'pending' | 'committed' | 'purged';
 
 export type ConversationAttachmentProps = {
   organizationId: string;
+  /** The space of the conversation (part of the S3 key; checked against the conversation by the database). */
+  spaceId: string;
   conversationId: string;
+  /** Who asked for the upload: only they confirm it (another one: 404 `attachment-not-found`). */
+  uploader: ConversationActor;
   messageId: string | null;
   keyVersion: number;
   sizeBytes: number;
@@ -35,16 +40,15 @@ const SHA256 = /^[0-9a-f]{64}$/;
  * times: never name or type.
  */
 export class ConversationAttachment extends Entity<ConversationAttachmentProps> {
-  static create(input: {
+  /** Format of an upload request (422), checked before any lock. */
+  static assertRequest(input: {
     id: string;
-    organizationId: string;
-    conversationId: string;
-    messageId: string | null;
     keyVersion: number;
     sizeBytes: number;
     sha256: string;
-    uploadExpiresAt: Date;
-  }): ConversationAttachment {
+  }): void {
+    assertDeviceId(input.id, 'attachment-id-invalid');
+    assertKeyVersion(input.keyVersion);
     if (!Number.isSafeInteger(input.sizeBytes) || input.sizeBytes < 1) {
       throw new DomainValidationError(
         'attachment-size-invalid',
@@ -60,12 +64,29 @@ export class ConversationAttachment extends Entity<ConversationAttachmentProps> 
         'The sha256 must be 64 lowercase hex characters.',
       );
     }
+  }
+
+  static create(input: {
+    id: string;
+    organizationId: string;
+    spaceId: string;
+    conversationId: string;
+    uploader: ConversationActor;
+    messageId: string | null;
+    keyVersion: number;
+    sizeBytes: number;
+    sha256: string;
+    uploadExpiresAt: Date;
+  }): ConversationAttachment {
+    ConversationAttachment.assertRequest(input);
     return new ConversationAttachment(
       {
         organizationId: input.organizationId,
+        spaceId: input.spaceId,
         conversationId: input.conversationId,
+        uploader: input.uploader,
         messageId: input.messageId,
-        keyVersion: assertKeyVersion(input.keyVersion),
+        keyVersion: input.keyVersion,
         sizeBytes: input.sizeBytes,
         sha256: input.sha256,
         status: 'pending',
@@ -74,7 +95,7 @@ export class ConversationAttachment extends Entity<ConversationAttachmentProps> 
         uploadExpiresAt: input.uploadExpiresAt,
         deletedAt: null,
       },
-      assertDeviceId(input.id, 'attachment-id-invalid'),
+      input.id,
     );
   }
 
@@ -87,6 +108,39 @@ export class ConversationAttachment extends Entity<ConversationAttachmentProps> 
 
   snapshot(): ConversationAttachmentProps {
     return { ...this.props };
+  }
+
+  /** The same upload request again (a retry): same conversation, uploader, key version, size and sha256. */
+  isSameRequest(other: ConversationAttachment): boolean {
+    return (
+      this.props.conversationId === other.conversationId &&
+      sameActor(this.props.uploader, other.uploader) &&
+      this.props.keyVersion === other.keyVersion &&
+      this.props.sizeBytes === other.sizeBytes &&
+      this.props.sha256 === other.sha256
+    );
+  }
+
+  /** A live pending upload still inside its window: it reserves its size and can be confirmed. */
+  isConfirmable(now: Date): boolean {
+    return (
+      this.props.status === 'pending' &&
+      this.props.deletedAt === null &&
+      this.props.uploadExpiresAt > now
+    );
+  }
+
+  /** A repeated request extends the window of a pending upload (never shortens it). */
+  renew(uploadExpiresAt: Date): void {
+    if (this.props.status !== 'pending') {
+      throw new ConflictError(
+        'attachment-not-pending',
+        'The attachment is not waiting for confirmation.',
+      );
+    }
+    if (uploadExpiresAt > this.props.uploadExpiresAt) {
+      this.props = { ...this.props, uploadExpiresAt };
+    }
   }
 
   commit(s3VersionId: string): void {
@@ -118,8 +172,14 @@ export class ConversationAttachment extends Entity<ConversationAttachmentProps> 
   get organizationId(): string {
     return this.props.organizationId;
   }
+  get spaceId(): string {
+    return this.props.spaceId;
+  }
   get conversationId(): string {
     return this.props.conversationId;
+  }
+  get uploader(): ConversationActor {
+    return this.props.uploader;
   }
   get messageId(): string | null {
     return this.props.messageId;

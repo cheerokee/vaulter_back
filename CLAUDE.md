@@ -712,13 +712,17 @@ o lado do aparelho em `docs/hubs/hub-lifecycle.md` (§9, §10; mudou rota, corpo
 mesmo commit).
 - **Fronteiras:** `storage` depende de `spaces` (`SpaceContentAccess`, e a porta `SpaceStorageUsage`, que ele liga), de
   `hubs` (`HubDirectory`: organizações de vínculo aprovado do Hub), de `identity` (`CurrentAuthProofVerifier`, para
-  esvaziar a lixeira) e de `organizations` (`AuditLog`), só pelo que exportam; ninguém importa `storage`.
+  esvaziar a lixeira) e de `organizations` (`AuditLog`), só pelo que exportam; só o `conversations` importa `storage` (a
+  porta `ObjectStore` e a `application/`, para os anexos).
   Leituras entre módulos, todas documentadas onde nascem: o `organizations` soma `spaces.storage_quota_bytes` em SQL
   (franquia; veja "Franquia de nuvem" em `organizations`), o `hubs` lê `spaces.storage_quota_bytes` em SQL ao instalar
   (veja "Capacidade do Hub" em `hubs`) e a sincronização do Hub já era exceção. `SpaceStorageUsage` (porta do `spaces`,
   soma das fontes registradas, sem fonte = 0) tem `register(nome, fonte)` (o `storage` registra `storage` e o
   `conversations` registra `conversations` em `onModuleInit`) e `replace(source)`, a costura de teste que troca TODAS
-  as fontes por uma e devolve a função de restauração. A intenção de envio lê o uso pela porta (conta as mensagens). Tamanho do espaço e franquia: veja "Tamanho do espaço" em `spaces`.
+  as fontes por uma e devolve a função de restauração. A intenção de envio lê o uso pela porta (conta as mensagens e os anexos dos assuntos). O `storage` exporta só a porta
+  `ObjectStore` (provider) e, pela `application/`, a peça compartilhada `object-uploads.ts` (o `conversations`
+  reaproveita o mecanismo para os anexos); a varredura `storage:reconcile` roda também os ganchos
+  `StorageReconcileHooks` (`src/shared/application/`). Tamanho do espaço e franquia: veja "Tamanho do espaço" em `spaces`.
 - **Regras de tamanho** (`domain/backup-limits.ts`; mudar qualquer valor é decisão de produto): espaço 10 GiB por padrão
   (1 GiB..5 TiB), franquia da organização 50 GiB (só o financeiro da plataforma altera: `PUT /platform/organizations/:orgId/
   storage-quota`, veja `platform`), objeto até 5 GiB (422 `object-too-large`), lote de 100 itens por pedido
@@ -843,14 +847,15 @@ mesmo commit).
   índice, agendar `storage:reconcile`, aviso de franquia perto do fim, endpoint S3 público).
 
 ## Módulo `conversations`
-`src/conversations/` (assuntos: participantes, executor, chave própria por versão, mensagens e caixa de entrada; anexos e
-sincronização vêm nas próximas tarefas do plano `docs/superpowers/plans/2026-11-09-conversations.md`). Spec:
+`src/conversations/` (assuntos: participantes, executor, chave própria por versão, mensagens, caixa de entrada e anexos;
+a sincronização vem nas próximas tarefas do plano `docs/superpowers/plans/2026-11-09-conversations.md`). Spec:
 `docs/superpowers/specs/2026-11-09-conversations-design.md`; formato em `docs/crypto/conversations.md`; RLS (participante
 vivo ou executor) e "quem sai grava por último" no cabeçalho da migration `CreateConversations`. Depende de `spaces`
 (`SpaceAccess`, inclusive `isSpaceMember`/`spaceMemberIds`; `SpaceStorage.lockQuota`; a porta `SpaceStorageUsage`, onde
 registra a fonte `conversations`), `hubs` (`HubDirectory`: `ownerOf`,
-`installedSpaceOrganization`, `lockExecutorCandidate`; `HubAccess`) e `organizations` (`AuditLog`); ninguém importa
-`conversations`.
+`installedSpaceOrganization`, `lockExecutorCandidate`; `HubAccess`), `organizations` (`AuditLog`) e `storage` (a porta
+`ObjectStore` e a peça compartilhada `application/object-uploads.ts`, o diário `journal.ts` e os erros
+`storage-errors.ts`); ninguém importa `conversations`.
 - **Rotas:** token de usuário em `/spaces/:spaceId/conversations` (`POST` cria; `/:id` lê; `/:id/participants` e
   `/:id/participants/space` compartilham; `DELETE /:id/participants/:userId` tira; `/:id/leave`; `PUT /:id/state`;
   `PUT /:id/executor`; `POST /:id/keys`): a organização vem do espaço; não membro do espaço, assunto de outro espaço,
@@ -897,6 +902,38 @@ registra a fonte `conversations`), `hubs` (`HubDirectory`: `ownerOf`,
   no contador; a intenção de envio do backup (espaço `FOR UPDATE`) espera os envios e lê o mesmo uso. `FOR SHARE` e não
   `FOR UPDATE` para uma mensagem não esperar um lote de confirmação do backup (que segura o espaço `FOR SHARE` durante
   as cópias no S3). Apagar e ack travam só o assunto (nunca o espaço depois do contador).
+- **Anexos** (`RequestAttachmentUploadUseCase`, `ConfirmAttachmentUseCase`, `GetAttachmentDownloadUrlUseCase`; spec
+  §4.4): o mecanismo do storage com índice próprio (`conversation_attachments`), acesso por **participação** (pessoa) ou
+  **executor** (Hub), nunca por `memory.read` do espaço (o resto: o mesmo 404 `conversation-not-found`). Rotas
+  `POST .../:id/attachments` `{ id, keyVersion, sizeBytes, sha256 }` (intenção: reserva 24 h, PUT assinado 15 min na chave
+  provisória `orgs/<orgId>/spaces/<spaceId>/conversations/<conversationId>/uploads/<attachmentId>`, tag `stage=upload`),
+  `POST .../:id/attachments/:attachmentId/confirm` (HEAD + cópia no servidor para
+  `.../conversations/<conversationId>/<attachmentId>`) e `POST .../:id/attachments/:attachmentId/download` (GET assinado
+  da `s3VersionId` do índice), nas duas formas (`/spaces/:spaceId/conversations` e `/hub/conversations`). Anexo ≤ 100 MiB
+  (422 `attachment-too-large`), versão atual / sem troca pendente (409, na intenção e de novo na confirmação), 422
+  `upload-mismatch` (com `attachmentId`), 409 `attachment-id-conflict`, 404 `attachment-not-found` (outro remetente,
+  outro assunto, fora da janela, pendente no download), 409 `storage-busy`. Idempotente: o mesmo pedido de intenção =
+  200 com URL nova (ou `upload: null` se confirmado); confirmar de novo = a mesma resposta. **Travas:** intenção = espaço
+  `FOR SHARE` -> assunto `FOR UPDATE` -> grava -> lê o uso e confere (como a mensagem); confirmação = diário numa
+  transação curta própria ANTES (`markWrite`, só o anexo pendente de quem confirma, relógio do banco) -> assunto `FOR
+  SHARE` -> anexo `FOR UPDATE` (a "trava do objeto") -> HEAD -> marca reconferida sob a trava (`assertStillMarked`;
+  sumiu: 409 `storage-busy`) -> reparo da chave final -> cópia -> `limitRemainingTime(INDEX_TAIL_TIMEOUT_MS)` -> índice;
+  `lock_timeout` de 10 s (`STORAGE_LOCK_TIMEOUT_MS`) em tudo, 55P03 = 409 `storage-busy`. Falha depois de gravar no S3 =
+  reparo numa transação nova (`ConversationAttachmentHealer.repair`, contexto do reparo: quem agiu pode ter saído). Um
+  pedido confirma um anexo (≤ 100 MiB), então o teto de 5 GiB por confirmação do storage vale trivialmente. A marca só
+  sai pela varredura: `npm run storage:reconcile` roda também o gancho `conversations.attachments`
+  (`StorageReconcileHooks`, `src/shared/application/`; a saída do CLI ganha a chave `conversations.attachments`). RLS:
+  a varredura usa a mesma chave `app.storage_reconcile` (policy permissiva `conversation_attachment_reconcile_read` das
+  linhas marcadas; nas restritivas, UPDATE/FOR UPDATE só da marcada; detalhe na migration
+  `ConversationAttachmentStorage`). **Uso:** projeção por anexo `conversation_attachment_usage` (trigger
+  `trg_conversation_attachments_space_usage`; confirmado até `purged`, lixeira = confirmado com lápide, reserva enquanto
+  `reserved_until > now()`), somada na fonte `conversations` da porta `SpaceStorageUsage`; o trigger trava a linha do
+  espaço em `conversation_space_usage` quando o anexo pode aumentar o uso (serializa com mensagens e outras intenções).
+  `space_id` e quem enviou ficam na linha (trigger confere o espaço com a conversa). `messageId` ainda não é preenchido
+  (a mensagem cita o anexo dentro do corpo cifrado). **Decisão (extração do storage):** em vez de generalizar o
+  `BackupObjectHealer`/casos de uso do backup, o `storage` exporta pela `application/` só o genérico
+  (`object-uploads.ts`: `removeUnreferencedVersions`, `isUploadedAsDeclared` e as constantes do mecanismo; o backup usa
+  as mesmas funções) e o `conversations` tem casos de uso próprios sobre essas peças.
 - **Testes:** e2e em `test/conversations/` com a cripto real (`test/support/conversation-crypto.ts`) e os helpers de
   `test/support/conversations-kit.ts` (criar/compartilhar/trocar chave/mandar/confirmar/apagar pela HTTP, pessoas em
   lote, estado cru: `messageRows`, `conversationSpaceUsage`, `lastMessageAt`).
@@ -1100,6 +1137,7 @@ Os valores do `.env.example` para os segredos são **só de desenvolvimento**; p
   | compartilhar, sair, tirar, estado e executor do assunto (`/spaces/:spaceId/conversations/:id/...`, `PUT /hub/conversations/:id/state`) | 600/h por usuário / por Hub, contador próprio por rota |
   | mandar e apagar mensagem do assunto (`POST .../:id/messages`, `DELETE .../:id/messages/:messageId`) | 60/min por usuário / 300/min por Hub, contador próprio por rota |
   | `POST /hub/conversations/:id/messages/:messageId/ack` | 600/min por Hub |
+  | anexo do assunto: intenção e confirmação (`POST .../:id/attachments`, `POST .../:id/attachments/:attachmentId/confirm`; a URL de download fica no limite geral) | 120/h por usuário / 600/h por Hub, contador próprio por rota |
   Rota com `@Throttle` próprio tem contador próprio (por rota); `@ThrottleGroup(THROTTLE_GROUPS.x, tracker?)`
   (`throttling.decorators.ts`) faz rotas dividirem um contador (chave = grupo + tracker, sem a rota); cada grupo é
   UMA constante com nome e limite em `THROTTLE_GROUPS` (`rate-limits.ts`), e o decorator recusa o mesmo grupo com

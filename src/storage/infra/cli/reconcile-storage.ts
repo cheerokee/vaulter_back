@@ -1,11 +1,16 @@
-// Varredura do reparo do backup (índice × bucket). Uso, depois do `npm run build` (o Nest precisa do código
+// Varredura do reparo do bucket (índice × S3): o índice do backup e, depois, os índices dos outros módulos que gravam no
+// mesmo bucket (ganchos `StorageReconcileHooks`; hoje os anexos dos assuntos). Uso, depois do `npm run build` (o Nest precisa do código
 // compilado), com o login de RUNTIME do .env, como a API:
 //   npm run storage:reconcile [-- <minutos>]     (padrão: marcas com mais de 60 min)
 // Agendar 1x por dia fora da aplicação até o pg-boss entrar (CLAUDE.md, Pendências).
 import { NestFactory } from '@nestjs/core';
 import { Logger } from 'nestjs-pino';
 import { AppModule } from '../../../app.module.js';
-import { ReconcileStorageUseCase } from '../../application/reconcile-storage.use-case.js';
+import { StorageReconcileHooks } from '../../../shared/application/storage-reconcile-hooks.js';
+import {
+  RECONCILE_DEFAULT_AGE_MINUTES,
+  ReconcileStorageUseCase,
+} from '../../application/reconcile-storage.use-case.js';
 
 async function main(): Promise<void> {
   const arg = process.argv[2];
@@ -25,7 +30,10 @@ async function main(): Promise<void> {
     const result = await app
       .get(ReconcileStorageUseCase)
       .execute({ olderThanMinutes });
-    console.log(JSON.stringify(result));
+    const others = await app
+      .get(StorageReconcileHooks)
+      .run(olderThanMinutes ?? RECONCILE_DEFAULT_AGE_MINUTES);
+    console.log(JSON.stringify({ ...result, ...others }));
   } finally {
     await app.close();
   }

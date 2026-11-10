@@ -21,6 +21,9 @@ import { hubIdTracker } from '../../../shared/infra/http/hub-id.tracker.js';
 import { RATE_LIMITS } from '../../../shared/infra/http/rate-limits.js';
 import { uuidPipe } from '../../../shared/infra/http/uuid-pipe.js';
 import { AckMessageUseCase } from '../../application/ack-message.use-case.js';
+import { ConfirmAttachmentUseCase } from '../../application/confirm-attachment.use-case.js';
+import { GetAttachmentDownloadUrlUseCase } from '../../application/get-attachment-download-url.use-case.js';
+import { RequestAttachmentUploadUseCase } from '../../application/request-attachment-upload.use-case.js';
 import { ChangeConversationStateUseCase } from '../../application/change-conversation-state.use-case.js';
 import { DeleteMessageUseCase } from '../../application/delete-message.use-case.js';
 import { GetConversationUseCase } from '../../application/get-conversation.use-case.js';
@@ -29,13 +32,20 @@ import { RotateConversationKeyUseCase } from '../../application/rotate-conversat
 import { SendMessageUseCase } from '../../application/send-message.use-case.js';
 import {
   HubCreateConversationDto,
+  RequestAttachmentDto,
   RotateConversationKeyDto,
   SendMessageDto,
   StateDto,
   messageInput,
   rotationInput,
 } from './dto/conversation.dto.js';
-import { conversationResponse, messageResponse } from './dto/responses.js';
+import {
+  attachmentResponse,
+  attachmentUploadResponse,
+  conversationResponse,
+  downloadUrlResponse,
+  messageResponse,
+} from './dto/responses.js';
 
 const perHub = (limit: { limit: number; ttl: number }) =>
   Throttle({ default: { ...limit, getTracker: hubIdTracker } });
@@ -54,6 +64,9 @@ export class HubConversationsController {
     private readonly sending: SendMessageUseCase,
     private readonly acking: AckMessageUseCase,
     private readonly deleting: DeleteMessageUseCase,
+    private readonly requestingUpload: RequestAttachmentUploadUseCase,
+    private readonly confirming: ConfirmAttachmentUseCase,
+    private readonly downloading: GetAttachmentDownloadUrlUseCase,
   ) {}
 
   /** 201 when created; 200 with the same conversation when the same id is sent again. */
@@ -176,5 +189,60 @@ export class HubConversationsController {
     @Param('messageId', uuidPipe('messageId')) messageId: string,
   ): Promise<void> {
     await this.deleting.byHub({ hubId: hub.hubId }, id, messageId);
+  }
+
+  /**
+   * Upload intent of an encrypted attachment (≤ 100 MiB): reserves its size in the space and returns a presigned PUT.
+   * 201; 200 for the same request again (a new URL, or `upload: null` when already committed).
+   */
+  @perHub(RATE_LIMITS.conversationHubAttachment)
+  @ApiBearerAuth()
+  @HubAuth()
+  @Post(':id/attachments')
+  async doRequestAttachment(
+    @CurrentHub() hub: HubAuthContext,
+    @Param('id', uuidPipe('id')) id: string,
+    @Body() dto: RequestAttachmentDto,
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    const result = await this.requestingUpload.byHub({ hubId: hub.hubId }, id, {
+      id: dto.id,
+      keyVersion: dto.keyVersion,
+      sizeBytes: dto.sizeBytes,
+      sha256: dto.sha256,
+    });
+    res.status(result.created ? 201 : 200);
+    return attachmentUploadResponse(result);
+  }
+
+  /** HEAD + server-side copy of the hub's own upload; idempotent. */
+  @perHub(RATE_LIMITS.conversationHubAttachment)
+  @ApiBearerAuth()
+  @HubAuth()
+  @Post(':id/attachments/:attachmentId/confirm')
+  @HttpCode(200)
+  async doConfirmAttachment(
+    @CurrentHub() hub: HubAuthContext,
+    @Param('id', uuidPipe('id')) id: string,
+    @Param('attachmentId', uuidPipe('attachmentId')) attachmentId: string,
+  ) {
+    return attachmentResponse(
+      await this.confirming.byHub({ hubId: hub.hubId }, id, attachmentId),
+    );
+  }
+
+  /** Presigned GET (15 min) of a committed attachment, by the S3 version recorded in the index. */
+  @ApiBearerAuth()
+  @HubAuth()
+  @Post(':id/attachments/:attachmentId/download')
+  @HttpCode(200)
+  async doDownloadAttachment(
+    @CurrentHub() hub: HubAuthContext,
+    @Param('id', uuidPipe('id')) id: string,
+    @Param('attachmentId', uuidPipe('attachmentId')) attachmentId: string,
+  ) {
+    return downloadUrlResponse(
+      await this.downloading.byHub({ hubId: hub.hubId }, id, attachmentId),
+    );
   }
 }

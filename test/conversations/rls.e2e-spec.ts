@@ -229,14 +229,16 @@ describe('conversations: tables and row-level security (e2e, app role)', () => {
     const attachment = ConversationAttachment.create({
       id: newId(),
       organizationId: orgA,
+      spaceId: space.id,
       conversationId: conversation.id,
+      uploader: { kind: 'user', userId: ana },
       messageId: fromAna.id,
       keyVersion: 1,
       sizeBytes: 5000,
       sha256: 'b'.repeat(64),
       uploadExpiresAt: later(3600),
     });
-    await attachments.create(asAna, attachment);
+    expect(await attachments.insertIfAbsent(asAna, attachment)).toBe(true);
     return {
       ana,
       bia,
@@ -632,9 +634,9 @@ describe('conversations: tables and row-level security (e2e, app role)', () => {
       [newId(), s.orgA, s.conversationId, s.ana, blob(100)],
     );
     await reject(
-      `INSERT INTO conversation_attachments (id, organization_id, conversation_id, key_version, size_bytes, sha256, upload_expires_at)
-       VALUES ($1, $2, $3, 1, 104857601, $4, now())`,
-      [newId(), s.orgA, s.conversationId, 'c'.repeat(64)],
+      `INSERT INTO conversation_attachments (id, organization_id, conversation_id, uploaded_by_user_id, key_version, size_bytes, sha256, upload_expires_at)
+       VALUES ($1, $2, $3, $4, 1, 104857601, $5, now())`,
+      [newId(), s.orgA, s.conversationId, s.ana, 'c'.repeat(64)],
     );
     // A mensagem do anexo tem de ser da mesma conversa (FK composta).
     const other = Conversation.create({
@@ -650,9 +652,9 @@ describe('conversations: tables and row-level security (e2e, app role)', () => {
     });
     await conversations.create(userScope(s.orgA, s.ana), other);
     await reject(
-      `INSERT INTO conversation_attachments (id, organization_id, conversation_id, message_id, key_version, size_bytes, sha256, upload_expires_at)
-       VALUES ($1, $2, $3, $4, 1, 10, $5, now())`,
-      [newId(), s.orgA, other.id, s.fromAna.id, 'c'.repeat(64)],
+      `INSERT INTO conversation_attachments (id, organization_id, conversation_id, uploaded_by_user_id, message_id, key_version, size_bytes, sha256, upload_expires_at)
+       VALUES ($1, $2, $3, $4, $5, 1, 10, $6, now())`,
+      [newId(), s.orgA, other.id, s.ana, s.fromAna.id, 'c'.repeat(64)],
       '23503',
     );
   });

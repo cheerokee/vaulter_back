@@ -113,7 +113,11 @@ export function attachmentToDomain(
   return ConversationAttachment.restore(
     {
       organizationId: e.organizationId,
+      spaceId: e.spaceId,
       conversationId: e.conversationId,
+      uploader: e.uploadedByHubId
+        ? { kind: 'hub', hubId: e.uploadedByHubId }
+        : { kind: 'user', userId: e.uploadedByUserId! },
       messageId: e.messageId,
       keyVersion: e.keyVersion,
       sizeBytes: byteCount(e.sizeBytes),
@@ -135,15 +139,19 @@ export function attachmentToInsert(
   return {
     id: a.id,
     organizationId: a.organizationId,
+    spaceId: a.spaceId,
     conversationId: a.conversationId,
+    uploadedByUserId: a.uploader.kind === 'user' ? a.uploader.userId : null,
+    uploadedByHubId: a.uploader.kind === 'hub' ? a.uploader.hubId : null,
     keyVersion: a.keyVersion,
     sizeBytes: String(a.sizeBytes),
     sha256: a.sha256,
-    uploadExpiresAt: a.uploadExpiresAt,
     ...attachmentMutable(a),
   };
 }
 
+// Nunca a marca do diário (`s3_write_started_at`): ela só muda pelo relógio do banco, em `markWrite` (renova) e
+// `clearWriteMark` (só a varredura); gravar o valor lido poderia apagar uma renovação mais nova.
 export function attachmentMutable(
   a: ConversationAttachment,
 ): Partial<ConversationAttachmentTypeormEntity> {
@@ -151,7 +159,7 @@ export function attachmentMutable(
     messageId: a.messageId,
     status: a.status,
     s3VersionId: a.s3VersionId,
-    s3WriteStartedAt: a.s3WriteStartedAt,
+    uploadExpiresAt: a.uploadExpiresAt,
     deletedAt: a.deletedAt,
   };
 }

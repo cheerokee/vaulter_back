@@ -113,3 +113,22 @@ export function assertSpaceFits(quotaBytes: number, usedBytes: number): void {
     );
   }
 }
+
+/** Unknown, of another conversation or uploader, not committed (download) or past its window (confirm): the same 404. */
+export const attachmentNotFound = () =>
+  new NotFoundError('attachment-not-found', 'The attachment was not found.');
+
+/** The attachment id is already used by another upload request (or by one the caller cannot see). */
+export const attachmentIdConflict = () =>
+  new ConflictError(
+    'attachment-id-conflict',
+    'Another attachment already uses this id.',
+  );
+
+/** The bytes in the provisional object are not the declared ones (or nothing was uploaded): same code as the backup. */
+export const attachmentUploadMismatch = (attachmentId: string) =>
+  new DomainValidationError(
+    'upload-mismatch',
+    'The uploaded object does not match the declared size and checksum.',
+    { attachmentId },
+  );

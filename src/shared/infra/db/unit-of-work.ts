@@ -55,6 +55,8 @@ export interface UnitOfWorkContext {
   hubSigningPublicKey?: string;
   // Varredura do reparo do backup (`ReconcileStorageUseCase`, só o backend): abre a leitura das versões do índice com
   // gravação no S3 começada (policy storage_reconcile_read), em todas as organizações. Valor: 'on' ('' desliga).
+  // Também o reparo dos anexos dos assuntos (`ConversationAttachmentHealer`): lê e trava as linhas marcadas de
+  // `conversation_attachments` sem participante (migration ConversationAttachmentStorage).
   storageReconcile?: string;
 }
 

@@ -9,8 +9,9 @@ import { ConversationSpaceUsageRepository } from '../domain/conversation-space-u
 const CONVERSATIONS_USAGE_SOURCE = 'conversations';
 
 // Registra a parte dos assuntos no uso dos espaços (porta `SpaceStorageUsage` do `spaces`, a soma das fontes; o
-// `storage` registra a do backup): os corpos cifrados das mensagens ainda guardados, e a parte deles com lápide como
-// lixeira (spec conversations §4.4.1). Assim o tamanho do espaço, o redimensionar e a intenção de envio do backup
+// `storage` registra a do backup): os corpos cifrados das mensagens ainda guardados e os anexos (confirmados até a
+// retenção, mais as reservas vivas das intenções), e a parte deles com lápide como lixeira (spec conversations §4.4,
+// §4.4.1). Assim o tamanho do espaço, o redimensionar e a intenção de envio do backup
 // contam as mensagens, e o envio de mensagem conta o backup, pela mesma regra (`space-storage-full`).
 @Injectable()
 export class ConversationStorageUsage implements OnModuleInit, OnModuleDestroy {
@@ -21,10 +22,14 @@ export class ConversationStorageUsage implements OnModuleInit, OnModuleDestroy {
 
   onModuleInit(): void {
     this.port.register(CONVERSATIONS_USAGE_SOURCE, {
-      usedBytes: async (organizationId, spaceId) =>
-        (await this.usage.totals(organizationId, spaceId)).bodyBytes,
-      trashBytes: async (organizationId, spaceId) =>
-        (await this.usage.totals(organizationId, spaceId)).trashBytes,
+      usedBytes: async (organizationId, spaceId) => {
+        const t = await this.usage.totals(organizationId, spaceId);
+        return t.bodyBytes + t.attachmentBytes;
+      },
+      trashBytes: async (organizationId, spaceId) => {
+        const t = await this.usage.totals(organizationId, spaceId);
+        return t.trashBytes + t.attachmentTrashBytes;
+      },
     });
   }
 

@@ -68,14 +68,15 @@ export class ConversationAccess {
     };
   }
 
-  /** Locks in a scope already resolved (the conversation must still be in `spaceId`). */
+  /** Locks in a scope already resolved (the conversation must still be in `spaceId`); `share` = `FOR SHARE`. */
   async lock(
     scope: ConversationScope,
     conversationId: string,
     spaceId: string,
+    mode: 'update' | 'share' = 'update',
   ): Promise<Conversation> {
     return inSpace(
-      await this.conversations.lockById(scope, conversationId),
+      await this.conversations.lockById(scope, conversationId, mode),
       spaceId,
     );
   }

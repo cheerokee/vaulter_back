@@ -223,3 +223,24 @@ export function messageInput(dto: SendMessageDto) {
     replacesMessageId: dto.replacesMessageId ?? null,
   };
 }
+
+/** Upload intent of an encrypted attachment (the bytes go straight to S3 with the presigned PUT). */
+export class RequestAttachmentDto {
+  /** UUID v7 generated on the device (part of the encryption AD): repeating the same request is idempotent. */
+  @IsUUID()
+  id!: string;
+
+  /** The current version of the conversation key (409 `conversation-key-version-stale` otherwise). */
+  @IsInt()
+  @Min(1)
+  keyVersion!: number;
+
+  /** Exact size of the encrypted blob; over 100 MiB: 422 `attachment-too-large`. */
+  @IsInt()
+  @Min(1)
+  sizeBytes!: number;
+
+  /** sha256 of the encrypted blob, 64 lowercase hex characters. */
+  @Matches(/^[0-9a-f]{64}$/)
+  sha256!: string;
+}

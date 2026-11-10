@@ -19,7 +19,9 @@ const make = (
   ConversationAttachment.create({
     id: newId(),
     organizationId: 'org',
+    spaceId: 'space',
     conversationId: 'conv',
+    uploader: { kind: 'user', userId: 'ana' },
     messageId: null,
     keyVersion: 1,
     sizeBytes: 1000,
@@ -58,6 +60,34 @@ describe('ConversationAttachment', () => {
     ['a non-v7 id', { id: 'x' }],
   ])('rejects %s', (_, over) => {
     expect(() => make(over as never)).toThrow(DomainValidationError);
+  });
+
+  it('the same request: same conversation, uploader, version, size and sha256', () => {
+    const a = make();
+    const same = make({ id: a.id });
+    expect(a.isSameRequest(same)).toBe(true);
+    expect(a.isSameRequest(make({ id: a.id, sizeBytes: 999 }))).toBe(false);
+    expect(
+      a.isSameRequest(
+        make({ id: a.id, uploader: { kind: 'hub', hubId: 'h' } }),
+      ),
+    ).toBe(false);
+  });
+
+  it('confirmable while pending, live and inside the window; renew only extends it', () => {
+    const a = make();
+    expect(a.isConfirmable(new Date(expires.getTime() - 1))).toBe(true);
+    expect(a.isConfirmable(expires)).toBe(false);
+    a.renew(new Date(expires.getTime() - 1000));
+    expect(a.uploadExpiresAt).toEqual(expires);
+    const later = new Date(expires.getTime() + 1000);
+    a.renew(later);
+    expect(a.uploadExpiresAt).toEqual(later);
+    a.tombstone(new Date());
+    expect(a.isConfirmable(new Date(0))).toBe(false);
+    const b = make();
+    b.commit('v1');
+    expect(() => b.renew(later)).toThrow(ConflictError);
   });
 
   it('pending -> committed (with the S3 version) -> purged', () => {

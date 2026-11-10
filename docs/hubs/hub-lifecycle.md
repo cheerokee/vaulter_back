@@ -460,6 +460,25 @@ chegam nas próximas tarefas e serão descritos aqui). Rotas com o token de Hub:
 - `DELETE /hub/conversations/:id/messages/:messageId`: apaga (lápide) só as mensagens do próprio Hub (as de pessoas:
   403 `not-conversation-owner`); 204, idempotente.
 
+**Anexos** (áudio, imagem, documento; mesmo fluxo do backup, §9, com índice próprio): o blob é cifrado com a chave do
+assunto (`docs/crypto/conversations.md`, rótulo `conversation-attachment`, `recordId` = id do anexo, UUID v7 gerado
+no Hub), até **100 MiB** cifrados.
+
+- `POST /hub/conversations/:id/attachments` `{ id, keyVersion, sizeBytes, sha256 }` (sha256 do blob cifrado, hex
+  minúsculo): reserva o tamanho no espaço e devolve `{ attachment, upload: { url, headers, expiresAt } }`. Faça o
+  `PUT` na `url` com os bytes exatos e os `headers` **sem mudar nada** (a assinatura cobre tamanho, checksum e a tag
+  `stage=upload`); a URL vale 15 min e a reserva 24 h. 201; o mesmo pedido de novo devolve 200 com uma URL nova (ou
+  `upload: null` se já foi confirmado); o mesmo `id` com outro conteúdo: 409 `attachment-id-conflict`. Erros: 422
+  `attachment-too-large` (> 100 MiB), 409 `conversation-key-rotation-required` / `conversation-key-version-stale`,
+  422 `space-storage-full` (`missingBytes`; anexos, mensagens e backup dividem o tamanho do espaço), 409 `storage-busy`
+  (repetir).
+- `POST /hub/conversations/:id/attachments/:attachmentId/confirm`: depois do PUT; o backend confere tamanho e sha256
+  (422 `upload-mismatch` se não bater ou se o PUT não foi feito) e copia no S3. Só quem pediu confirma (outro: 404
+  `attachment-not-found`, também depois de 24 h). Idempotente: confirmar de novo devolve a mesma resposta. 409
+  `storage-busy`: repetir.
+- `POST /hub/conversations/:id/attachments/:attachmentId/download`: `{ url, expiresAt }` (GET assinado, 15 min) de um
+  anexo confirmado; pendente, apagado ou de outro assunto: 404 `attachment-not-found`. Abra com `openAttachment`.
+
 O Hub **deixa de ser executor** (404 `conversation-not-found` dali em diante, cópias dele com lápide) quando é
 desregistrado, a organização é desvinculada, o espaço sai dele ou o dono dele deixa de participar do assunto. As
 mensagens pendentes ficam esperando o executor novo.
@@ -496,6 +515,7 @@ Assim nada do dono anterior chega a um dono novo.
 | `POST /hub/conversations/:id/keys` | 30/h | Hub |
 | `POST /hub/conversations/:id/messages` e `DELETE .../messages/:messageId` | 300/min (cada rota) | Hub |
 | `POST /hub/conversations/:id/messages/:messageId/ack` | 600/min | Hub |
+| `POST /hub/conversations/:id/attachments` e `.../attachments/:attachmentId/confirm` | 600/h (cada rota) | Hub |
 | demais rotas | 300/min somando todas | IP |
 
 Estourou: 429 `too-many-requests` com `Retry-After` (segundos).
