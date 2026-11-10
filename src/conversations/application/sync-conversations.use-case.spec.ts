@@ -3,6 +3,7 @@ import type { OrganizationDirectory } from '../../organizations/application/orga
 import { DomainValidationError } from '../../shared/domain/errors.js';
 import {
   CONVERSATION_LONG_POLL_DEGRADED_REREAD_MS,
+  CONVERSATION_LONG_POLL_HELD_BACK_REREAD_MS,
   CONVERSATION_LONG_POLLS_PER_HUB,
 } from '../domain/conversation-limits.js';
 import { LongPollSlots } from './long-poll-slots.js';
@@ -30,12 +31,18 @@ const message = (sv: number): ConversationSyncItem => ({
 
 const events: string[] = [];
 let pages: ConversationSyncItem[][];
+/** The safe horizon of each read, in order (null = everything read is safe). */
+let heldBack: (bigint | null)[];
 const reader = {
   read: vi.fn(async (q: ConversationChangesQuery) => {
     events.push('read');
     const organizationIds = await q.organizationIds();
     const items = pages.shift() ?? [];
-    return { organizationIds, batches: [{ items, truncated: false }] };
+    return {
+      organizationIds,
+      batches: [{ items, truncated: false }],
+      heldBackFrom: heldBack.shift() ?? null,
+    };
   }),
 };
 
@@ -83,6 +90,7 @@ beforeEach(() => {
   events.length = 0;
   subs.length = 0;
   pages = [];
+  heldBack = [];
   wakes = [];
   live = true;
   slots = new LongPollSlots();
@@ -110,6 +118,22 @@ describe('SyncConversationsUseCase (person feed)', () => {
     });
     expect(organizations.organizationIdsOf).toHaveBeenCalledWith(USER);
     expect(hubs.approvedOrganizationIds).not.toHaveBeenCalled();
+  });
+
+  it('safe horizon: nothing at or above a version still possibly in flight is served, and the cursor stays below it', async () => {
+    pages = [[message(7), message(9), message(12)]];
+    heldBack = [9n];
+    const page = await useCase().byUser({ userId: USER }, { since: 5n });
+    expect(page.items).toEqual([message(7)]);
+    expect(page.nextSince).toBe(7n);
+  });
+
+  it('safe horizon at the first row: an empty page that keeps the cursor', async () => {
+    pages = [[message(9)]];
+    heldBack = [9n];
+    await expect(
+      useCase().byUser({ userId: USER }, { since: 5n }),
+    ).resolves.toMatchObject({ items: [], nextSince: 5n });
   });
 
   it('an empty page keeps the cursor', async () => {
@@ -198,6 +222,17 @@ describe('SyncConversationsUseCase (executor feed, long poll)', () => {
     const page = await useCase().byHub({ hubId: HUB }, { waitSeconds: 3 });
     expect(page.items).toEqual([message(20)]);
     expect(events).toContain('next:3000');
+  });
+
+  it('an empty page held back by a write in flight re-reads after a second (its commit may wake nobody)', async () => {
+    pages = [[message(30)], [message(29), message(30)]];
+    heldBack = [30n, null];
+    wakes = [false];
+    const page = await useCase().byHub({ hubId: HUB }, { waitSeconds: 25 });
+    expect(events).toContain(
+      `next:${CONVERSATION_LONG_POLL_HELD_BACK_REREAD_MS}`,
+    );
+    expect(page.items).toEqual([message(29), message(30)]);
   });
 
   it('without a live wake source it re-reads on a short interval', async () => {

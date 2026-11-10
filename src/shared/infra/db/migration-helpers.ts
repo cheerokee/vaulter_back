@@ -57,3 +57,42 @@ export async function disableOrganizationRls(
   await qr.query(`ALTER TABLE "${table}" NO FORCE ROW LEVEL SECURITY`);
   await qr.query(`ALTER TABLE "${table}" DISABLE ROW LEVEL SECURITY`);
 }
+
+// Versões de feed na ordem dos xids (horizonte seguro; feeds dos assuntos). Com a sequência global, a versão sai na
+// ESCRITA, não no COMMIT: uma transação com versão menor pode confirmar depois de outra com versão maior, e um cursor
+// `nextSince` que passou da maior pula a menor para sempre (Pendências do CLAUDE.md). Nestas tabelas a versão passa a
+// ser `xid8 da transação que grava << 16 | n`, com `n` o contador de linhas gravadas por ela (`app.sync_row`, local à
+// transação; satura em 65535: linhas além disso empatam, e a fusão dos feeds nunca parte um empate). Consequência:
+// - toda versão de uma transação com xid < `pg_snapshot_xmin(snapshot)` é final (a transação terminou) e toda escrita
+//   futura (transação em andamento ou que ainda vai começar) tem xid >= xmin, logo versão >= `xmin << 16`. Quem lê só
+//   entrega versões abaixo desse limite, e o cursor nunca passa por cima de uma versão que ainda pode confirmar;
+// - o xid da transação que gravou fica na própria versão (`sync_version >> 16`); a ordem entre transações é a dos xids
+//   (atribuídos no primeiro write/lock), e dentro de uma transação a ordem das gravações;
+// - as versões continuam crescendo para cada linha que um cliente já recebeu: uma transação mais antiga que grava a
+//   mesma linha depois de uma mais nova só é servida depois de terminar (o limite fica abaixo das duas);
+// - cabe no JSON (2^53) até xid8 = 2^37 (~137 bilhões de transações no cluster). As versões antigas (sequência global,
+//   bem menores) continuam valendo como cursor.
+export async function useXidSyncVersion(
+  qr: QueryRunner,
+  table: string,
+): Promise<void> {
+  await qr.query(`DROP TRIGGER "trg_${table}_sync_version" ON "${table}"`);
+  await qr.query(
+    `CREATE TRIGGER "trg_${table}_sync_version" BEFORE INSERT OR UPDATE ON "${table}" ` +
+      `FOR EACH ROW EXECUTE FUNCTION set_xid_sync_version()`,
+  );
+}
+
+export async function useSequenceSyncVersion(
+  qr: QueryRunner,
+  table: string,
+): Promise<void> {
+  await qr.query(`DROP TRIGGER "trg_${table}_sync_version" ON "${table}"`);
+  await qr.query(
+    `CREATE TRIGGER "trg_${table}_sync_version" BEFORE INSERT OR UPDATE ON "${table}" ` +
+      `FOR EACH ROW EXECUTE FUNCTION set_sync_version()`,
+  );
+}
+
+/** Bits of the per-transaction row counter in a xid-ordered `sync_version` (`useXidSyncVersion`). */
+export const XID_SYNC_VERSION_SHIFT = 16;

@@ -31,12 +31,15 @@ export type SyncPageOf<T extends string> = {
  *   or, when the group alone is larger than `limit`, returns the whole group (the only case a page exceeds `limit`).
  * - Order: `syncVersion`, then `typeOrder`, then the JSON of `data` (deterministic).
  * - `nextSince` = the last item's `syncVersion`, or `since` when the page is empty.
+ * - `heldBackFrom` (optional, exclusive): items at or above it are held back too, like a truncated batch's horizon (the
+ *   conversation feeds' safe horizon: a version an in-flight transaction may still commit lies below it).
  */
 export function mergeSyncBatches<T extends string>(
   batches: SyncBatchOf<T>[],
   since: bigint,
   limit: number,
   typeOrder: readonly T[],
+  heldBackFrom: bigint | null = null,
 ): SyncPageOf<T> {
   const rank = new Map<T, number>(typeOrder.map((t, i) => [t, i]));
   const compare = (a: SyncItemOf<T>, b: SyncItemOf<T>): number => {
@@ -50,7 +53,7 @@ export function mergeSyncBatches<T extends string>(
     return ka < kb ? -1 : ka > kb ? 1 : 0;
   };
 
-  let horizon: bigint | null = null;
+  let horizon: bigint | null = heldBackFrom === null ? null : heldBackFrom - 1n;
   for (const b of batches) {
     const last = b.items.at(-1);
     if (!b.truncated || !last) continue;

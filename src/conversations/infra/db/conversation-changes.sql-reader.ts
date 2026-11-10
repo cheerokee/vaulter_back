@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { validate } from 'uuid';
 import { DataSource, type EntityManager } from 'typeorm';
 import { DomainValidationError } from '../../../shared/domain/errors.js';
+import { XID_SYNC_VERSION_SHIFT } from '../../../shared/infra/db/migration-helpers.js';
 import {
   runInTransaction,
   runWithContext,
@@ -10,6 +11,7 @@ import {
 import {
   ConversationChangesReader,
   type ConversationChangesQuery,
+  type ConversationChangesRead,
   type ConversationFeedReader,
   type ConversationItemType,
   type ConversationSyncBatch,
@@ -31,14 +33,26 @@ import {
 //    `executor_hub_id`; key copies are only the reader's own (`user_id` / `hub_id` = the reader), never anyone else's.
 // The hub's organizations are only the approved, live links (`HubDirectory.approvedOrganizationIds`): the executor
 // policy has no link condition, so this list is what keeps an unlinked organization out.
-type Row = Record<string, unknown> & { sv: string; deleted: boolean };
-// $1 reader (user or hub id), $2 since, $3 limit, $4 organization, $5 conversation filter (or null).
+//
+// SAFE HORIZON (commit order × sync_version; migration ConversationFeedSafeHorizon, `useXidSyncVersion`): the versions
+// of these tables are `writer xid8 << 16 | row`. With `xmin` = the oldest transaction still running in this snapshot,
+// every version below `xmin << 16` is final (its transaction ended) and every write still to come is at or above it.
+// A visible row at or above that bound (committed by a transaction newer than one still running) is `unsafe`:
+// `heldBackFrom` = the bound, and the page stops below it, so `nextSince` never passes a version an in-flight
+// transaction may still commit.
+type Row = Record<string, unknown> & {
+  sv: string;
+  deleted: boolean;
+  unsafe: boolean;
+};
+// $1 reader (user or hub id), $2 since, $3 limit, $4 organization, $5 conversation filter (or null), $6 safe bound.
 type Params = [
   readerId: string,
   since: string,
   limit: number,
   organizationId: string,
   conversationId: string | null,
+  bound: string,
 ];
 
 const item = (
@@ -71,6 +85,10 @@ const PAGE = (table: string) =>
   `${table}.organization_id = $4 AND ${table}.sync_version > $2::bigint
      AND ($5::uuid IS NULL OR ${table}.${table === 'cv' ? 'id' : 'conversation_id'} = $5::uuid)`;
 
+// The version and the safe-horizon flag of every row (see SAFE HORIZON).
+const VERSION = (table: string) =>
+  `${table}.sync_version::text AS sv, ${table}.sync_version >= $6::bigint AS unsafe`;
+
 @Injectable()
 export class ConversationChangesSqlReader extends ConversationChangesReader {
   constructor(private readonly dataSource: DataSource) {
@@ -79,7 +97,7 @@ export class ConversationChangesSqlReader extends ConversationChangesReader {
 
   async read(
     query: ConversationChangesQuery,
-  ): Promise<{ organizationIds: string[]; batches: ConversationSyncBatch[] }> {
+  ): Promise<ConversationChangesRead> {
     const readerId =
       query.reader.kind === 'user' ? query.reader.userId : query.reader.hubId;
     // A malformed id is a bug or a forged request, never "an empty feed": an empty `organizationIds` would tell the
@@ -100,26 +118,32 @@ export class ConversationChangesSqlReader extends ConversationChangesReader {
       await tx.query(
         'SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY',
       );
+      // The first statement fixes the snapshot of the whole transaction; its xmin gives the safe bound.
+      const [{ bound }] = (await tx.query(
+        `SELECT (pg_snapshot_xmin(pg_current_snapshot())::text::bigint << ${XID_SYNC_VERSION_SHIFT})::text AS bound`,
+      )) as [{ bound: string }];
       const organizationIds = [...(await query.organizationIds())].sort();
       const batches: ConversationSyncBatch[] = [];
+      let heldBackFrom: bigint | null = null;
       for (const organizationId of organizationIds) {
         const ctx: UnitOfWorkContext =
           query.reader.kind === 'user'
             ? { organizationId, userId: readerId, hubId: '' }
             : { organizationId, hubId: readerId, userId: '' };
-        batches.push(
-          ...(await runWithContext(this.dataSource, ctx, (m) =>
-            readOrganization(m, query.reader, [
-              readerId,
-              query.since.toString(),
-              query.limit,
-              organizationId,
-              query.conversationId,
-            ]),
-          )),
+        const read = await runWithContext(this.dataSource, ctx, (m) =>
+          readOrganization(m, query.reader, [
+            readerId,
+            query.since.toString(),
+            query.limit,
+            organizationId,
+            query.conversationId,
+            bound,
+          ]),
         );
+        batches.push(...read.batches);
+        if (read.unsafe) heldBackFrom = BigInt(bound);
       }
-      return { organizationIds, batches };
+      return { organizationIds, batches, heldBackFrom };
     });
   }
 }
@@ -128,12 +152,14 @@ async function readOrganization(
   m: EntityManager,
   reader: ConversationFeedReader,
   params: Params,
-): Promise<ConversationSyncBatch[]> {
+): Promise<{ batches: ConversationSyncBatch[]; unsafe: boolean }> {
+  let unsafe = false;
   const batch = async (
     sql: string,
     map: (r: Row) => ConversationSyncItem,
   ): Promise<ConversationSyncBatch> => {
     const rows: Row[] = await m.query(sql, params);
+    if (rows.some((r) => r.unsafe)) unsafe = true;
     return { items: rows.map(map), truncated: rows.length >= params[2] };
   };
   const out: ConversationSyncBatch[] = [];
@@ -143,7 +169,7 @@ async function readOrganization(
       `SELECT cv.id, cv.organization_id, cv.space_id, cv.created_by_user_id, cv.owner_user_id, cv.executor_hub_id,
               cv.state, cv.last_message_at, cv.current_key_version, cv.key_rotation_required, cv.encrypted_header,
               cv.header_key_version, cv.moved_from_conversation_id, cv.created_at, cv.updated_at,
-              cv.deleted_at IS NOT NULL AS deleted, cv.sync_version::text AS sv
+              cv.deleted_at IS NOT NULL AS deleted, ${VERSION('cv')}
          FROM conversations cv
         WHERE ${PAGE('cv')} AND ${IN_SCOPE(reader, 'cv')}
         ORDER BY cv.sync_version LIMIT $3`,
@@ -178,7 +204,7 @@ async function readOrganization(
   out.push(
     await batch(
       `SELECT p.id, p.conversation_id, p.user_id, p.joined_at,
-              p.deleted_at IS NOT NULL AS deleted, p.sync_version::text AS sv
+              p.deleted_at IS NOT NULL AS deleted, ${VERSION('p')}
          FROM conversation_participants p
         WHERE ${PAGE('p')} AND (${ownParticipation}${CONVERSATION_OF(reader, 'p')})
         ORDER BY p.sync_version LIMIT $3`,
@@ -197,7 +223,7 @@ async function readOrganization(
   out.push(
     await batch(
       `SELECT g.id, g.conversation_id, g.key_version, g.user_id, g.hub_id, g.wrapped_key,
-              g.deleted_at IS NOT NULL AS deleted, g.sync_version::text AS sv
+              g.deleted_at IS NOT NULL AS deleted, ${VERSION('g')}
          FROM conversation_key_grants g
         WHERE ${PAGE('g')} AND ${ownCopy} = $1::uuid
         ORDER BY g.sync_version LIMIT $3`,
@@ -221,7 +247,7 @@ async function readOrganization(
     await batch(
       `SELECT msg.id, msg.conversation_id, msg.author_user_id, msg.author_hub_id, msg.key_version,
               msg.encrypted_body, msg.body_bytes, msg.replaces_message_id, msg.pending, msg.acked_at, msg.sent_at,
-              msg.deleted_at IS NOT NULL AS deleted, msg.sync_version::text AS sv
+              msg.deleted_at IS NOT NULL AS deleted, ${VERSION('msg')}
          FROM conversation_messages msg
         WHERE ${PAGE('msg')} AND ${CONVERSATION_OF(reader, 'msg')}
         ORDER BY msg.sync_version LIMIT $3`,
@@ -250,7 +276,7 @@ async function readOrganization(
     await batch(
       `SELECT a.id, a.conversation_id, a.message_id, a.key_version, a.size_bytes::text AS size_bytes, a.sha256,
               a.status, a.uploaded_by_user_id, a.uploaded_by_hub_id, a.created_at,
-              (a.deleted_at IS NOT NULL OR a.status = 'purged') AS deleted, a.sync_version::text AS sv
+              (a.deleted_at IS NOT NULL OR a.status = 'purged') AS deleted, ${VERSION('a')}
          FROM conversation_attachments a
         WHERE ${PAGE('a')} AND ${CONVERSATION_OF(reader, 'a')}
         ORDER BY a.sync_version LIMIT $3`,
@@ -272,5 +298,5 @@ async function readOrganization(
         ),
     ),
   );
-  return out;
+  return { batches: out, unsafe };
 }

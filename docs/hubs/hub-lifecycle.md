@@ -455,8 +455,10 @@ organização está aprovado). Rotas com o token de Hub:
     ou o Hub foi escolhido como executor de um assunto já existente): o histórico tem `sync_version` antigo e **não**
     reaparece no cursor principal, então o Hub faz o **preenchimento** buscando o assunto inteiro com
     `conversationId=<id>&since=0` (páginas até vir vazia) e segue com o cursor principal;
-  - sincronização completa (`since=0`) **substitui** o estado local; a ressalva "ordem de commit × `sync_version`"
-    vale aqui também (mesma mitigação: sincronização completa periódica, ex.: uma vez por dia).
+  - sincronização completa (`since=0`) **substitui** o estado local. Este feed **não** pula linhas pela ordem de commit
+    (horizonte seguro: uma mudança que confirmou antes de outra mais antiga só sai quando a antiga termina; uma página
+    pode vir vazia por alguns instantes mesmo com algo novo já confirmado), então não precisa de sincronização completa
+    periódica. `syncVersion` aqui não é comparável com o do `GET /hub/sync` (são outra ordem).
   - mensagem com `replacesMessageId` = edição: esconder a substituída (a lápide dela chega na mesma página ou depois,
     nunca antes);
   - **itens filhos de um assunto que o Hub ainda não conhece** (mensagem, anexo, participação ou cópia) **podem chegar
@@ -574,8 +576,8 @@ Estourou: 429 `too-many-requests` com `Retry-After` (segundos).
 - **Apagamento remoto:** não há comando para o backend mandar o Hub se apagar. O desregistro só corta o acesso.
 - **Transferência de Hub:** não existe. Hoje o caminho é desregistrar e fazer reset de fábrica.
 - **Ordem de commit × `sync_version`:** uma sincronização pode pular de vez uma linha cujo commit chegou atrasado.
-  Até a correção (horizonte seguro), a sincronização completa periódica corrige o estado. Vale também para o feed dos
-  assuntos (`GET /hub/conversations/changes`).
+  Até a correção (horizonte seguro), a sincronização completa periódica corrige o estado. O feed dos assuntos
+  (`GET /hub/conversations/changes`) já tem o horizonte seguro e não precisa disso.
 - **Backup (storage):** snapshot pago, troca de chave feita pelo Hub editor da Sala (hoje o Hub guarda os envios numa
   fila local até um membro trocar a chave pelo app), visitante em Hub alheio, configuração inicial por Bluetooth e
   idioma, download em lote, endpoint S3 público para aparelhos em desenvolvimento (a URL assinada hoje aponta para o

@@ -1,8 +1,10 @@
 import { createHash, randomBytes } from 'node:crypto';
 import type { INestApplication } from '@nestjs/common';
 import request from 'supertest';
+import { SendMessageUseCase } from '../../src/conversations/application/send-message.use-case.js';
 import { PgConversationChangeSignal } from '../../src/conversations/infra/db/pg-conversation-change-signal.js';
 import { newId } from '../../src/shared/domain/id.js';
+import { UnitOfWork } from '../../src/shared/infra/db/unit-of-work.js';
 import {
   adminDataSource,
   createTestApp,
@@ -54,6 +56,7 @@ describe('conversation feeds (e2e)', () => {
   let bruno: KeyedUser; // membro do espaço que NUNCA participa
   let paulo: KeyedUser; // dono do Hub "paulo"
   let orgId: string;
+  let oliviaKit: string;
   let spaceId: string;
   let casa: ClaimedHub;
   let pauloHub: ClaimedHub;
@@ -148,6 +151,7 @@ describe('conversation feeds (e2e)', () => {
     paulo = await s.signUpKeyed('paulo@example.com', 'Paulo');
     const o = await s.orgWithKit(olivia, 'Casa');
     orgId = o.orgId;
+    oliviaKit = o.kit.publicKey;
     for (const u of [ana, bruno, paulo]) await s.joinOrg(olivia, orgId, u);
 
     casa = await h.onboard(olivia.token, 'Casa');
@@ -646,5 +650,160 @@ describe('conversation feeds (e2e)', () => {
       expect(done.every((d) => d.page.items.length === 0)).toBe(true);
       expect(signal().waiting()).toBe(before);
     }, 60_000);
+  });
+  // Ordem de commit × sync_version (horizonte seguro, migration ConversationFeedSafeHorizon): a mensagem A pega a
+  // versão menor numa transação que fica aberta; a B (outro espaço, outro assunto, o mesmo executor) pega a maior e
+  // confirma antes. O feed não pode entregar B com um `nextSince` que pule A quando A confirmar.
+  describe('commit order × sync_version (safe horizon)', () => {
+    // Two spaces: in the same space the second send would wait for the first on the usage counter row.
+    let space2: string;
+    beforeAll(async () => {
+      const sp2 = await s.create(olivia, orgId, oliviaKit, 'Outro', {
+        storageQuotaBytes: GiB,
+      });
+      await expectStatus(Promise.resolve(sp2.res), 201);
+      space2 = sp2.spaceId;
+      await hubs.addSpace(olivia, casa.hubId, space2);
+    });
+    const otherConversation = async () => {
+      const b = await k.create(olivia, space2, {
+        executor: hubRecipientOf(casa),
+      });
+      await expectStatus(Promise.resolve(b.res), 201);
+      return { id: b.id, keys: b.keys as ConversationKeys };
+    };
+
+    it('two messages committed in inverted order both reach the executor (long poll) and the person, with no full sync', async () => {
+      const convA = await conversation([]);
+      const b = await otherConversation();
+
+      const hubCursor = await cursorOf((q) => hubFeed(casaToken, q));
+      const userCursor = await cursorOf((q) => feed(olivia, q));
+
+      // A: written inside a transaction the test holds open (the app's own unit of work and use case).
+      const uow = app.get(UnitOfWork);
+      const sending = app.get(SendMessageUseCase);
+      const aId = newId();
+      let release!: () => void;
+      const gate = new Promise<void>((r) => (release = r));
+      let written!: () => void;
+      const wroteA = new Promise<void>((r) => (written = r));
+      const held = uow.run(async () => {
+        await sending.byUser(
+          { userId: olivia.userId, sessionId: newId() },
+          spaceId,
+          convA.id,
+          {
+            id: aId,
+            keyVersion: 1,
+            encryptedBody: await k.messageBody(
+              convA.keys[0]!,
+              spaceId,
+              convA.id,
+              aId,
+              1,
+              'primeiro, confirma depois',
+            ),
+            replacesMessageId: null,
+          },
+        );
+        written();
+        await gate;
+      });
+      try {
+        await wroteA;
+        // B: a higher version, committed first.
+        const sentB = await k.send(olivia, space2, b.id, b.keys, {
+          text: 'segundo, confirma antes',
+        });
+        await expectStatus(Promise.resolve(sentB.res), 201);
+
+        // While A is in flight, B is held back: nothing at or above B's version, the cursor does not pass it.
+        const early = await hubFeed(casaToken, { since: hubCursor });
+        expect(early.items.some((i) => i.data.id === sentB.id)).toBe(false);
+        const earlyUser = await feed(olivia, { since: userCursor });
+        expect(earlyUser.items.some((i) => i.data.id === sentB.id)).toBe(false);
+
+        // The executor long-polls from where it was; A commits during the wait.
+        const poll = hubFeed(casaToken, { since: hubCursor, wait: 10 });
+        await new Promise((r) => setTimeout(r, 300));
+        release();
+        await held;
+        const page = await poll;
+        const ids = (await drainHub(casaToken, hubCursor)).items
+          .concat(page.items)
+          .filter((i) => i.type === 'conversation_message')
+          .map((i) => i.data.id);
+        expect(ids).toEqual(expect.arrayContaining([aId, sentB.id]));
+        // Strictly from the long poll's own cursor too: nothing was skipped.
+        const fromPoll = page.items.map((i) => i.data.id);
+        expect(fromPoll).toEqual(expect.arrayContaining([aId, sentB.id]));
+
+        const personIds = (await drainUser(olivia, userCursor)).items
+          .filter((i) => i.type === 'conversation_message')
+          .map((i) => i.data.id);
+        expect(personIds).toEqual(expect.arrayContaining([aId, sentB.id]));
+      } finally {
+        release();
+        await held.catch(() => undefined);
+      }
+    }, 30_000);
+
+    it('a page held back by an in-flight transaction never advances the cursor past it (person feed, step by step)', async () => {
+      const convA = await conversation([]);
+      const convB = await otherConversation();
+      const cursor = await cursorOf((q) => feed(olivia, q));
+      const uow = app.get(UnitOfWork);
+      const sending = app.get(SendMessageUseCase);
+      const aId = newId();
+      let release!: () => void;
+      const gate = new Promise<void>((r) => (release = r));
+      let written!: () => void;
+      const wroteA = new Promise<void>((r) => (written = r));
+      const held = uow.run(async () => {
+        await sending.byUser(
+          { userId: olivia.userId, sessionId: newId() },
+          spaceId,
+          convA.id,
+          {
+            id: aId,
+            keyVersion: 1,
+            encryptedBody: await k.messageBody(
+              convA.keys[0]!,
+              spaceId,
+              convA.id,
+              aId,
+              1,
+              'em voo',
+            ),
+            replacesMessageId: null,
+          },
+        );
+        written();
+        await gate;
+      });
+      try {
+        await wroteA;
+        const sentB = await k.send(olivia, space2, convB.id, convB.keys, {
+          text: 'ja confirmada',
+        });
+        await expectStatus(Promise.resolve(sentB.res), 201);
+        const page = await feed(olivia, { since: cursor });
+        expect(page.items.some((i) => i.data.id === sentB.id)).toBe(false);
+        // Whatever came, the cursor stays below B's version (B's own rows are all held back).
+        expect(page.items.every((i) => i.syncVersion <= page.nextSince)).toBe(
+          true,
+        );
+        release();
+        await held;
+        const after = (await drainUser(olivia, page.nextSince)).items.map(
+          (i) => i.data.id,
+        );
+        expect(after).toEqual(expect.arrayContaining([aId, sentB.id]));
+      } finally {
+        release();
+        await held.catch(() => undefined);
+      }
+    }, 30_000);
   });
 });

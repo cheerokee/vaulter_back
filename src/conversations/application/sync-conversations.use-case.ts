@@ -7,6 +7,7 @@ import { DomainValidationError } from '../../shared/domain/errors.js';
 import { mergeSyncBatches } from '../../shared/domain/sync-page.js';
 import {
   CONVERSATION_LONG_POLL_DEGRADED_REREAD_MS,
+  CONVERSATION_LONG_POLL_HELD_BACK_REREAD_MS,
   CONVERSATION_LONG_POLL_MAX_SECONDS,
   CONVERSATION_SYNC_MAX_LIMIT,
 } from '../domain/conversation-limits.js';
@@ -54,8 +55,15 @@ export type ConversationChangesPage = {
  * - SCOPE ENTRY: a live conversation the client does not hold (shared with the person, the hub made executor again)
  *   keeps its history at old versions: the client backfills it with `conversationId=<id>&since=0` pages, then carries on
  *   with its main cursor (items are idempotent by id and `syncVersion`);
- * - FULL SYNC (`since=0`) replaces the local state; the "commit order × sync_version" caveat of the hub sync applies
- *   (a version assigned before a later commit can be skipped by `nextSince`): same mitigation, a periodic full sync.
+ * - FULL SYNC (`since=0`) replaces the local state.
+ *
+ * SAFE HORIZON (no "commit order × sync_version" skip, unlike the hub sync): a version is assigned at write time, so a
+ * transaction holding a lower version can commit after one holding a higher version. The versions of these tables are
+ * `writer xid8 << 16 | row` (migration ConversationFeedSafeHorizon; `useXidSyncVersion`), and the reader serves only
+ * versions below `xmin(snapshot) << 16`, i.e. of transactions that ended; a visible row above that (`heldBackFrom`)
+ * stops the page, and `nextSince` stays below it. A held-back row comes on a later read, once the older transaction ends (a page can be empty while
+ * something newer is already committed; the long poll then re-reads every second). The lag is bounded by the longest
+ * writing transaction running in the database cluster.
  *
  * LONG POLL (executor only): never inside a transaction or holding a pool connection while waiting. Loop: subscribe
  * to the wake source (one LISTEN connection per process), read a page in a short snapshot transaction, and if it is
@@ -79,7 +87,7 @@ export class SyncConversationsUseCase {
     input: ConversationChangesInput,
   ): Promise<ConversationChangesPage> {
     const page = pageInput(input);
-    return this.read({ kind: 'user', userId: actor.userId }, page);
+    return (await this.read({ kind: 'user', userId: actor.userId }, page)).page;
   }
 
   async byHub(
@@ -101,7 +109,7 @@ export class SyncConversationsUseCase {
     }
     const reader: ConversationFeedReader = { kind: 'hub', hubId: hub.hubId };
     const release = waitSeconds > 0 ? this.slots.tryAcquire(hub.hubId) : null;
-    if (!release) return this.read(reader, page);
+    if (!release) return (await this.read(reader, page)).page;
 
     try {
       const deadline = Date.now() + waitSeconds * 1000;
@@ -111,14 +119,17 @@ export class SyncConversationsUseCase {
           const result = await this.read(reader, page);
           const remaining = deadline - Date.now();
           if (result.items.length > 0 || remaining <= 0 || abort?.aborted) {
-            return result;
+            return result.page;
           }
-          const slice = sub.live
-            ? remaining
-            : Math.min(remaining, CONVERSATION_LONG_POLL_DEGRADED_REREAD_MS);
+          // Held back by a write in flight elsewhere: its commit may not wake this hub, so re-read soon.
+          const slice = result.heldBack
+            ? Math.min(remaining, CONVERSATION_LONG_POLL_HELD_BACK_REREAD_MS)
+            : sub.live
+              ? remaining
+              : Math.min(remaining, CONVERSATION_LONG_POLL_DEGRADED_REREAD_MS);
           const outcome = await sub.next(slice, abort);
           // The client went away (nobody reads another page) or the API is shutting down.
-          if (abort?.aborted || outcome === 'closed') return result;
+          if (abort?.aborted || outcome === 'closed') return result.page;
         } finally {
           sub.close();
         }
@@ -131,8 +142,12 @@ export class SyncConversationsUseCase {
   private async read(
     reader: ConversationFeedReader,
     input: Required<ConversationChangesInput>,
-  ): Promise<ConversationChangesPage> {
-    const { organizationIds, batches } = await this.reader.read({
+  ): Promise<{
+    page: ConversationChangesPage;
+    items: ConversationSyncItem[];
+    heldBack: boolean;
+  }> {
+    const { organizationIds, batches, heldBackFrom } = await this.reader.read({
       reader,
       organizationIds: () =>
         reader.kind === 'user'
@@ -142,14 +157,17 @@ export class SyncConversationsUseCase {
       limit: input.limit,
       conversationId: input.conversationId,
     });
+    const merged = mergeSyncBatches(
+      batches,
+      input.since,
+      input.limit,
+      CONVERSATION_ITEM_TYPES,
+      heldBackFrom,
+    );
     return {
-      organizationIds,
-      ...mergeSyncBatches(
-        batches,
-        input.since,
-        input.limit,
-        CONVERSATION_ITEM_TYPES,
-      ),
+      page: { organizationIds, ...merged },
+      items: merged.items,
+      heldBack: heldBackFrom !== null,
     };
   }
 }
