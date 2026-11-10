@@ -768,6 +768,172 @@ CREATE TABLE storage_object_versions (
   CONSTRAINT fk_storage_object_versions_users FOREIGN KEY (uploaded_by_user_id) REFERENCES users (id)
 );
 
+-- ---------------------------------------------------------------------------------------------------
+-- Conversas (assuntos) do copiloto (módulo conversations; spec 2026-11-09-conversations)
+-- ---------------------------------------------------------------------------------------------------
+
+-- Assunto de um espaço, cifrado com chave própria (versões). O backend só vê metadado: ids, dono, executor, estado,
+-- horários e versões; título e plano vivem em encrypted_header. RLS: organização E (app.user_id em
+-- participant_user_ids OU executor_hub_id = app.hub_id), por policies restritivas (matriz na migration
+-- CreateConversations). participant_user_ids é derivado das participações vivas por trigger (a policy não consulta
+-- outra tabela: sem recursão) e nunca é gravado pela aplicação. CHECKs no Postgres: state na lista,
+-- current_key_version >= 1, encrypted_header e header_key_version juntos (1..current_key_version), cabeçalho até
+-- 16 KiB (21846 caracteres base64url), moved_from_conversation_id <> id.
+CREATE TABLE conversations (
+  id CHAR(36) NOT NULL COMMENT 'gerado no aparelho (uuid v7; entra no AD da cifra), sem default',
+  created_at DATETIME NOT NULL,
+  updated_at DATETIME NULL,
+  deleted_at DATETIME NULL COMMENT 'lápide: o cabeçalho cifrado fica 30 dias e depois a retenção o zera',
+  organization_id CHAR(36) NOT NULL,
+  space_id CHAR(36) NOT NULL,
+  created_by_user_id CHAR(36) NOT NULL,
+  owner_user_id CHAR(36) NOT NULL COMMENT 'dono atual (arquiva, tira participantes, troca o executor, move)',
+  executor_hub_id CHAR(36) NULL COMMENT 'Hub onde o copiloto trabalha; o dono dele participa; nulo = sem executor',
+  state ENUM('aviso', 'trabalhando', 'na_fila', 'pede_sim', 'esperando_pc', 'concluido', 'arquivado') NOT NULL,
+  last_message_at DATETIME NULL,
+  current_key_version INT NOT NULL DEFAULT 1,
+  key_rotation_required TINYINT NOT NULL DEFAULT 0 COMMENT 'alguém saiu: mensagem nova só depois da troca da chave',
+  encrypted_header TEXT NULL COMMENT 'título, plano...: cifrado com a chave do assunto; nulo só depois da retenção',
+  header_key_version INT NULL,
+  moved_from_conversation_id CHAR(36) NULL COMMENT 'link por id para o assunto de origem (pode ser de outra organização), sem FK',
+  participant_user_ids JSON NOT NULL COMMENT 'uuid[] no Postgres: participantes vivos, derivado por trigger (base do RLS)',
+  sync_version BIGINT NOT NULL,
+  PRIMARY KEY (id),
+  UNIQUE INDEX uq_conversations_id_organization (id, organization_id) COMMENT 'alvo das FKs compostas (filho_id, organization_id)',
+  INDEX fk_conversations_organizations_idx (organization_id),
+  INDEX fk_conversations_spaces_idx (space_id),
+  INDEX fk_conversations_created_by_idx (created_by_user_id),
+  INDEX fk_conversations_owner_idx (owner_user_id),
+  INDEX fk_conversations_executor_hub_idx (executor_hub_id),
+  INDEX ix_conversations_sync_version (sync_version),
+  CONSTRAINT fk_conversations_organizations FOREIGN KEY (organization_id) REFERENCES organizations (id),
+  CONSTRAINT fk_conversations_spaces FOREIGN KEY (space_id, organization_id) REFERENCES spaces (id, organization_id),
+  CONSTRAINT fk_conversations_created_by FOREIGN KEY (created_by_user_id) REFERENCES users (id),
+  CONSTRAINT fk_conversations_owner FOREIGN KEY (owner_user_id) REFERENCES users (id),
+  CONSTRAINT fk_conversations_executor_hub FOREIGN KEY (executor_hub_id) REFERENCES hubs (id)
+);
+
+-- Participação de uma pessoa (até 50 vivas). Sair = lápide; quem volta reaproveita a linha. Visível a quem vê o
+-- assunto e, depois de sair, só a própria linha (a sincronização dela recebe a lápide).
+CREATE TABLE conversation_participants (
+  id CHAR(36) NOT NULL,
+  created_at DATETIME NOT NULL,
+  updated_at DATETIME NULL,
+  deleted_at DATETIME NULL,
+  organization_id CHAR(36) NOT NULL,
+  conversation_id CHAR(36) NOT NULL,
+  user_id CHAR(36) NOT NULL,
+  joined_at DATETIME NOT NULL COMMENT 'o mais antigo vira dono quando o dono sai',
+  sync_version BIGINT NOT NULL,
+  PRIMARY KEY (id),
+  UNIQUE INDEX uq_conversation_participants_live (conversation_id, user_id, deleted_at) COMMENT 'uma viva por pessoa (WHERE deleted_at IS NULL no Postgres)',
+  INDEX fk_conversation_participants_organizations_idx (organization_id),
+  INDEX fk_conversation_participants_conversations_idx (conversation_id),
+  INDEX fk_conversation_participants_users_idx (user_id),
+  INDEX ix_conversation_participants_sync_version (sync_version),
+  CONSTRAINT fk_conversation_participants_organizations FOREIGN KEY (organization_id) REFERENCES organizations (id),
+  CONSTRAINT fk_conversation_participants_conversations FOREIGN KEY (conversation_id, organization_id) REFERENCES conversations (id, organization_id),
+  CONSTRAINT fk_conversation_participants_users FOREIGN KEY (user_id) REFERENCES users (id)
+);
+
+-- Cópia trancada de uma versão da chave do assunto (0x01 ‖ crypto_box_seal, 108 caracteres) para UMA pessoa OU o
+-- Hub executor (CHECK num_nonnulls = 1); nunca para o kit da organização (privado é privado). Todo participante e o
+-- executor têm cópia de todas as versões.
+CREATE TABLE conversation_key_grants (
+  id CHAR(36) NOT NULL,
+  created_at DATETIME NOT NULL,
+  updated_at DATETIME NULL,
+  deleted_at DATETIME NULL,
+  organization_id CHAR(36) NOT NULL,
+  conversation_id CHAR(36) NOT NULL,
+  key_version INT NOT NULL,
+  user_id CHAR(36) NULL,
+  hub_id CHAR(36) NULL,
+  wrapped_key VARCHAR(108) NOT NULL COMMENT 'CHECK ~ ^[A-Za-z0-9_-]{108}$',
+  sync_version BIGINT NOT NULL,
+  PRIMARY KEY (id),
+  UNIQUE INDEX uq_conversation_key_grants_user (conversation_id, key_version, user_id, deleted_at) COMMENT 'WHERE user_id IS NOT NULL AND deleted_at IS NULL no Postgres',
+  UNIQUE INDEX uq_conversation_key_grants_hub (conversation_id, key_version, hub_id, deleted_at) COMMENT 'WHERE hub_id IS NOT NULL AND deleted_at IS NULL no Postgres',
+  INDEX fk_conversation_key_grants_organizations_idx (organization_id),
+  INDEX fk_conversation_key_grants_conversations_idx (conversation_id),
+  INDEX fk_conversation_key_grants_users_idx (user_id),
+  INDEX fk_conversation_key_grants_hubs_idx (hub_id),
+  INDEX ix_conversation_key_grants_sync_version (sync_version),
+  CONSTRAINT fk_conversation_key_grants_organizations FOREIGN KEY (organization_id) REFERENCES organizations (id),
+  CONSTRAINT fk_conversation_key_grants_conversations FOREIGN KEY (conversation_id, organization_id) REFERENCES conversations (id, organization_id),
+  CONSTRAINT fk_conversation_key_grants_users FOREIGN KEY (user_id) REFERENCES users (id),
+  CONSTRAINT fk_conversation_key_grants_hubs FOREIGN KEY (hub_id) REFERENCES hubs (id)
+);
+
+-- Mensagem imutável (id do aparelho; reenviar o mesmo id não duplica). Autor: uma pessoa OU o Hub executor. Caixa de
+-- entrada: a de pessoa nasce pending até o executor confirmar (acked_at); a do executor nasce confirmada. Apagar =
+-- lápide; o corpo cifrado fica 30 dias e depois a retenção o zera (body_bytes fica). CHECKs no Postgres: um autor,
+-- key_version >= 1, body_bytes 1..65536 e igual ao tamanho do corpo, corpo nulo só com lápide, pending = (acked_at
+-- nulo), mensagem do Hub nunca pending, replaces_message_id <> id.
+CREATE TABLE conversation_messages (
+  id CHAR(36) NOT NULL COMMENT 'gerado no aparelho (uuid v7; entra no AD da cifra), sem default',
+  created_at DATETIME NOT NULL,
+  updated_at DATETIME NULL,
+  deleted_at DATETIME NULL,
+  organization_id CHAR(36) NOT NULL,
+  conversation_id CHAR(36) NOT NULL,
+  author_user_id CHAR(36) NULL,
+  author_hub_id CHAR(36) NULL,
+  key_version INT NOT NULL,
+  encrypted_body TEXT NULL COMMENT 'até 64 KiB cifrados (maior vira anexo); nulo só depois da retenção',
+  body_bytes INT NOT NULL COMMENT 'tamanho do blob cifrado: conta no uso do espaço',
+  replaces_message_id CHAR(36) NULL COMMENT 'edição = mensagem nova que referencia a anterior (mesma conversa)',
+  pending TINYINT NOT NULL,
+  acked_at DATETIME NULL,
+  sent_at DATETIME NOT NULL,
+  sync_version BIGINT NOT NULL,
+  PRIMARY KEY (id),
+  UNIQUE INDEX uq_conversation_messages_id_conversation (id, conversation_id, organization_id) COMMENT 'alvo das FKs compostas da edição e dos anexos',
+  INDEX fk_conversation_messages_organizations_idx (organization_id),
+  INDEX fk_conversation_messages_conversations_idx (conversation_id),
+  INDEX fk_conversation_messages_author_users_idx (author_user_id),
+  INDEX fk_conversation_messages_author_hubs_idx (author_hub_id),
+  INDEX fk_conversation_messages_replaces_idx (replaces_message_id),
+  INDEX ix_conversation_messages_pending (conversation_id) COMMENT 'caixa de entrada (WHERE pending AND deleted_at IS NULL no Postgres)',
+  INDEX ix_conversation_messages_sync_version (sync_version),
+  CONSTRAINT fk_conversation_messages_organizations FOREIGN KEY (organization_id) REFERENCES organizations (id),
+  CONSTRAINT fk_conversation_messages_conversations FOREIGN KEY (conversation_id, organization_id) REFERENCES conversations (id, organization_id),
+  CONSTRAINT fk_conversation_messages_author_users FOREIGN KEY (author_user_id) REFERENCES users (id),
+  CONSTRAINT fk_conversation_messages_author_hubs FOREIGN KEY (author_hub_id) REFERENCES hubs (id),
+  CONSTRAINT fk_conversation_messages_replaces FOREIGN KEY (replaces_message_id, conversation_id, organization_id) REFERENCES conversation_messages (id, conversation_id, organization_id)
+);
+
+-- Índice dos anexos cifrados (id do aparelho; objeto no S3 em orgs/<orgId>/spaces/<spaceId>/conversations/
+-- <conversationId>/<attachmentId>), no mesmo fluxo intenção -> confirmação do backup. Só ids, tamanho, sha256 do blob
+-- cifrado, versão da chave e datas: nunca nome ou tipo. CHECKs no Postgres: status, size_bytes 1..104857600 (100 MiB),
+-- key_version >= 1, sha256 ~ '^[0-9a-f]{64}$', (status IN ('committed', 'purged')) = (s3_version_id preenchido).
+CREATE TABLE conversation_attachments (
+  id CHAR(36) NOT NULL COMMENT 'gerado no aparelho (uuid v7; entra no AD da cifra), sem default',
+  created_at DATETIME NOT NULL,
+  updated_at DATETIME NULL,
+  deleted_at DATETIME NULL,
+  organization_id CHAR(36) NOT NULL,
+  conversation_id CHAR(36) NOT NULL,
+  message_id CHAR(36) NULL COMMENT 'mensagem da mesma conversa (FK composta)',
+  key_version INT NOT NULL,
+  size_bytes BIGINT NOT NULL,
+  sha256 CHAR(64) NOT NULL,
+  status ENUM('pending', 'committed', 'purged') NOT NULL DEFAULT 'pending',
+  s3_version_id VARCHAR(1024) NULL,
+  s3_write_started_at DATETIME NULL COMMENT 'diário das gravações no S3 (como em storage_object_versions)',
+  upload_expires_at DATETIME NOT NULL,
+  sync_version BIGINT NOT NULL,
+  PRIMARY KEY (id),
+  INDEX fk_conversation_attachments_organizations_idx (organization_id),
+  INDEX fk_conversation_attachments_conversations_idx (conversation_id),
+  INDEX fk_conversation_attachments_messages_idx (message_id),
+  INDEX ix_conversation_attachments_s3_write_started (s3_write_started_at) COMMENT 'só linhas marcadas (WHERE s3_write_started_at IS NOT NULL no Postgres)',
+  INDEX ix_conversation_attachments_sync_version (sync_version),
+  CONSTRAINT fk_conversation_attachments_organizations FOREIGN KEY (organization_id) REFERENCES organizations (id),
+  CONSTRAINT fk_conversation_attachments_conversations FOREIGN KEY (conversation_id, organization_id) REFERENCES conversations (id, organization_id),
+  CONSTRAINT fk_conversation_attachments_messages FOREIGN KEY (message_id, conversation_id, organization_id) REFERENCES conversation_messages (id, conversation_id, organization_id)
+);
+
 -- Permissões que o app pode pedir. À instalação só se concede a interseção (app declarou x papel concedido).
 CREATE TABLE app_permission (
   app_id CHAR(36) NOT NULL,

@@ -1,0 +1,116 @@
+import { Injectable } from '@nestjs/common';
+import { DataSource } from 'typeorm';
+import type { ConversationScope } from '../../domain/conversation-actor.js';
+import { conversationNotFound } from '../../domain/conversation-errors.js';
+import { ConversationRepository } from '../../domain/conversation.repository.js';
+import type { Conversation } from '../../domain/conversation.js';
+import { ConversationParticipantTypeormEntity } from './conversation-participant.entity.js';
+import { inScope, requireUnitOfWork } from './conversation-scope.js';
+import {
+  conversationMutable,
+  conversationToDomain,
+  conversationToInsert,
+} from './conversation.mapper.js';
+import { ConversationTypeormEntity } from './conversation.entity.js';
+
+@Injectable()
+export class ConversationTypeormRepository extends ConversationRepository {
+  constructor(private readonly dataSource: DataSource) {
+    super();
+  }
+
+  // A conversa nasce com participant_user_ids = [dono] (trigger) e a participação do dono entra na mesma transação,
+  // então a lista derivada e as participações nunca divergem.
+  async create(scope: ConversationScope, c: Conversation): Promise<void> {
+    await inScope(this.dataSource, scope, async (m) => {
+      await m
+        .getRepository(ConversationTypeormEntity)
+        .insert(conversationToInsert(c));
+      await m.getRepository(ConversationParticipantTypeormEntity).insert({
+        organizationId: c.organizationId,
+        conversationId: c.id,
+        userId: c.ownerUserId,
+        joinedAt: c.createdAt ?? new Date(),
+      });
+    });
+  }
+
+  async findById(
+    scope: ConversationScope,
+    id: string,
+    options: { withDeleted?: boolean } = {},
+  ): Promise<Conversation | null> {
+    const row = await inScope(this.dataSource, scope, (m) =>
+      m.getRepository(ConversationTypeormEntity).findOne({
+        where: { id, organizationId: scope.organizationId },
+        withDeleted: options.withDeleted ?? false,
+      }),
+    );
+    return row ? conversationToDomain(row) : null;
+  }
+
+  async lockById(
+    scope: ConversationScope,
+    id: string,
+  ): Promise<Conversation | null> {
+    requireUnitOfWork(this.dataSource, 'ConversationRepository.lockById');
+    const row = await inScope(this.dataSource, scope, (m) =>
+      m
+        .getRepository(ConversationTypeormEntity)
+        .createQueryBuilder('c')
+        .where('c.id = :id AND c.organization_id = :org', {
+          id,
+          org: scope.organizationId,
+        })
+        .setLock('pessimistic_write')
+        .getOne(),
+    );
+    return row ? conversationToDomain(row) : null;
+  }
+
+  // 0 linhas = a conversa não é (mais) visível no escopo: erro, nunca um no-op silencioso (ex.: quem sai gravando depois
+  // da lápide da própria participação).
+  async save(scope: ConversationScope, c: Conversation): Promise<void> {
+    const result = await inScope(this.dataSource, scope, (m) =>
+      m
+        .getRepository(ConversationTypeormEntity)
+        .update(
+          { id: c.id, organizationId: scope.organizationId },
+          conversationMutable(c),
+        ),
+    );
+    if (!result.affected) throw conversationNotFound();
+  }
+
+  async idsWithParticipant(
+    scope: ConversationScope,
+    spaceId: string,
+    userId: string,
+  ): Promise<string[]> {
+    const rows: { id: string }[] = await inScope(this.dataSource, scope, (m) =>
+      m.query(
+        `SELECT id FROM conversations
+          WHERE organization_id = $1 AND space_id = $2 AND $3 = ANY (participant_user_ids)
+            AND deleted_at IS NULL
+          ORDER BY id`,
+        [scope.organizationId, spaceId, userId],
+      ),
+    );
+    return rows.map((r) => r.id);
+  }
+
+  async idsWithExecutor(
+    scope: ConversationScope,
+    hubId: string,
+  ): Promise<string[]> {
+    const rows: { id: string }[] = await inScope(this.dataSource, scope, (m) =>
+      m.query(
+        `SELECT id FROM conversations
+          WHERE organization_id = $1 AND executor_hub_id = $2 AND deleted_at IS NULL
+          ORDER BY id`,
+        [scope.organizationId, hubId],
+      ),
+    );
+    return rows.map((r) => r.id);
+  }
+}
