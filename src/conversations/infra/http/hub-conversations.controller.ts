@@ -31,6 +31,7 @@ import { DeleteMessageUseCase } from '../../application/delete-message.use-case.
 import { GetConversationUseCase } from '../../application/get-conversation.use-case.js';
 import { HubCreateConversationUseCase } from '../../application/hub-create-conversation.use-case.js';
 import { RotateConversationKeyUseCase } from '../../application/rotate-conversation-key.use-case.js';
+import { ReplaceConversationHeaderUseCase } from '../../application/replace-conversation-header.use-case.js';
 import { SendMessageUseCase } from '../../application/send-message.use-case.js';
 import { SyncConversationsUseCase } from '../../application/sync-conversations.use-case.js';
 import {
@@ -39,6 +40,7 @@ import {
 } from './dto/changes.dto.js';
 import {
   HubCreateConversationDto,
+  ReplaceHeaderDto,
   RequestAttachmentDto,
   RotateConversationKeyDto,
   SendMessageDto,
@@ -76,6 +78,7 @@ export class HubConversationsController {
     private readonly downloading: GetAttachmentDownloadUrlUseCase,
     private readonly sync: SyncConversationsUseCase,
     private readonly deletingAttachment: DeleteAttachmentUseCase,
+    private readonly header: ReplaceConversationHeaderUseCase,
   ) {}
 
   /**
@@ -153,6 +156,24 @@ export class HubConversationsController {
   ) {
     return conversationResponse(
       await this.getOne.byHub({ hubId: hub.hubId }, id),
+    );
+  }
+
+  /** The executor replaces the encrypted header (current key version); it counts in the space usage. */
+  @perHub(RATE_LIMITS.conversationChange)
+  @ApiBearerAuth()
+  @HubAuth()
+  @Put(':id/header')
+  async doHeader(
+    @CurrentHub() hub: HubAuthContext,
+    @Param('id', uuidPipe('id')) id: string,
+    @Body() dto: ReplaceHeaderDto,
+  ) {
+    return conversationResponse(
+      await this.header.byHub({ hubId: hub.hubId }, id, {
+        keyVersion: dto.keyVersion,
+        encryptedHeader: dto.encryptedHeader,
+      }),
     );
   }
 

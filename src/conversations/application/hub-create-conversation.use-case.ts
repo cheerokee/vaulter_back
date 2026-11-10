@@ -8,8 +8,11 @@ import {
 } from '../../shared/domain/errors.js';
 import { UnitOfWork } from '../../shared/infra/db/unit-of-work.js';
 import { SpaceAccess } from '../../spaces/application/space-access.js';
+import { SpaceStorage } from '../../spaces/application/space-storage.js';
+import { SpaceStorageUsage } from '../../spaces/application/space-storage-usage.js';
 import type { ConversationScope } from '../domain/conversation-actor.js';
 import {
+  assertSpaceFits,
   conversationIdConflict,
   executorInvalid,
   participantNotSpaceMember,
@@ -61,6 +64,8 @@ export class HubCreateConversationUseCase {
     private readonly grants: ConversationKeyGrantRepository,
     private readonly views: ConversationViews,
     private readonly uow: UnitOfWork,
+    private readonly spaceStorage: SpaceStorage,
+    private readonly usage: SpaceStorageUsage,
   ) {}
 
   execute(
@@ -149,6 +154,12 @@ export class HubCreateConversationUseCase {
         }
       }
 
+      // The same row FOR SHARE again (no new lock): the quota for the header bytes.
+      const quotaBytes = await this.spaceStorage.lockQuota(
+        organizationId,
+        spaceId,
+      );
+      if (quotaBytes === null) throw participantNotSpaceMember();
       await this.conversations.create(scope, conversation);
       // Os outros entram 1 ms depois do dono: na sucessão do dono (mais antigo primeiro), o dono vem antes.
       const joinedAt = new Date(
@@ -171,6 +182,11 @@ export class HubCreateConversationUseCase {
         recipient: { kind: 'hub', hubId },
         wrappedKey: input.hubWrappedKey,
       });
+      // The header counts in the space usage (trigger); checked AFTER writing, like a message.
+      assertSpaceFits(
+        quotaBytes,
+        await this.usage.usedBytes(organizationId, spaceId),
+      );
       return {
         view: await this.views.reload(scope, conversation.id),
         created: true,

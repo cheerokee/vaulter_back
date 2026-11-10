@@ -2,10 +2,14 @@ import { Injectable } from '@nestjs/common';
 import type { Actor } from '../../identity/application/dto/actor.js';
 import { UnitOfWork } from '../../shared/infra/db/unit-of-work.js';
 import { SpaceAccess } from '../../spaces/application/space-access.js';
+import { SpaceStorage } from '../../spaces/application/space-storage.js';
+import { SpaceStorageUsage } from '../../spaces/application/space-storage-usage.js';
 import type { ConversationScope } from '../domain/conversation-actor.js';
 import {
+  assertSpaceFits,
   conversationIdConflict,
   conversationMoveInvalid,
+  conversationNotFound,
 } from '../domain/conversation-errors.js';
 import { ConversationKeyGrantRepository } from '../domain/conversation-key-grant.repository.js';
 import {
@@ -48,7 +52,8 @@ export type CreateConversationInput = {
 // e depois põe a lápide no antigo (`MoveConversationUseCase`). Aqui o backend confere que quem cria é o dono do antigo e
 // membro dos dois espaços (o antigo é só lido, sem trava: a lápide reconfere o dono sob a trava).
 // Locks: Hub -> vínculo -> hub_space (FOR SHARE, só com executor) -> espaço (FOR SHARE: uma saída do espaço
-// concorrente espera e então leva o assunto junto) -> o assunto novo.
+// concorrente espera e então leva o assunto junto) -> o assunto novo -> contador de uso (o cabeçalho conta no uso do
+// espaço: conferido DEPOIS de gravar, 422 `space-storage-full`).
 @Injectable()
 export class CreateConversationUseCase {
   constructor(
@@ -59,6 +64,8 @@ export class CreateConversationUseCase {
     private readonly grants: ConversationKeyGrantRepository,
     private readonly views: ConversationViews,
     private readonly uow: UnitOfWork,
+    private readonly spaceStorage: SpaceStorage,
+    private readonly usage: SpaceStorageUsage,
   ) {}
 
   execute(
@@ -133,6 +140,12 @@ export class CreateConversationUseCase {
         undefined,
         'share',
       );
+      // The same row FOR SHARE again (no new lock): the quota for the header bytes.
+      const quotaBytes = await this.spaceStorage.lockQuota(
+        space.organizationId,
+        spaceId,
+      );
+      if (quotaBytes === null) throw conversationNotFound();
       await this.conversations.create(scope, conversation);
       await this.grants.put(scope, conversation.id, {
         keyVersion: 1,
@@ -146,6 +159,11 @@ export class CreateConversationUseCase {
           wrappedKey: input.executor.wrappedKey,
         });
       }
+      // The header counts in the space usage (trigger); checked AFTER writing, like a message.
+      assertSpaceFits(
+        quotaBytes,
+        await this.usage.usedBytes(space.organizationId, spaceId),
+      );
       return {
         view: await this.views.reload(scope, conversation.id),
         created: true,

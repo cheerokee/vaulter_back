@@ -453,7 +453,13 @@ describe('conversation attachments (e2e)', () => {
         201,
       );
     }
-    expect(await usedBytes(sp.spaceId)).toBe(1000 * MiB);
+    // Plus the conversation's encrypted header (ConversationHeaderUsage).
+    const headerBytes = Buffer.from(
+      (await expectStatus(k.get(olivia, sp.spaceId, conv.id), 200)).body
+        .encryptedHeader as string,
+      'base64url',
+    ).length;
+    expect(await usedBytes(sp.spaceId)).toBe(1000 * MiB + headerBytes);
     const full = expectProblem(
       await http()
         .post(userBase(sp.spaceId, conv.id))
@@ -462,7 +468,7 @@ describe('conversation attachments (e2e)', () => {
       422,
       'space-storage-full',
     );
-    expect(full.missingBytes).toBe(1100 * MiB - GiB);
+    expect(full.missingBytes).toBe(1100 * MiB + headerBytes - GiB);
     // The backup of the space reads the same usage (one port): a person's backup intent does not fit either.
     expectProblem(
       await http()

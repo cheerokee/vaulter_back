@@ -484,6 +484,10 @@ organização está aprovado). Rotas com o token de Hub:
   Hub fora das `grants`: 422 `executor-invalid`; participante fora do espaço: 422 `participant-not-space-member`.
   Mandar de novo o mesmo `id` devolve o mesmo assunto (200).
 - `GET /hub/conversations/:id`: metadado, participantes e as cópias da chave do próprio Hub (todas as versões).
+- `PUT /hub/conversations/:id/header` `{ keyVersion, encryptedHeader }`: o executor troca o cabeçalho cifrado (título,
+  plano; `docs/crypto/conversations.md`, rótulo do cabeçalho, `recordId` = id do assunto) com a versão **atual** da
+  chave (409 `conversation-key-version-stale`; com troca pendente, 409 `conversation-key-rotation-required`). Os bytes
+  contam no uso do espaço (422 `space-storage-full`). Devolve o assunto.
 - `PUT /hub/conversations/:id/state` `{ state }`: os estados de trabalho (`trabalhando`, `na_fila`, `pede_sim`,
   `esperando_pc`, `concluido`, `aviso`); `arquivado` é do dono (403 `not-conversation-owner`).
 - `POST /hub/conversations/:id/keys` `{ version, grants: [{ userId, wrappedKey }], hubGrants: [{ hubId, wrappedKey }] }`:

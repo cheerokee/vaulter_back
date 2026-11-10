@@ -47,12 +47,13 @@ export function conversationsKit(getApp: () => INestApplication) {
     spaceId: string,
     conversationId: string,
     keyVersion = 1,
+    title = 'Assunto',
   ) =>
     Buffer.from(
       await sealHeader(
         key,
         { spaceId, conversationId, recordId: conversationId, keyVersion },
-        new TextEncoder().encode(JSON.stringify({ title: 'Assunto' })),
+        new TextEncoder().encode(JSON.stringify({ title })),
       ),
     ).toString('base64url');
 
@@ -253,6 +254,53 @@ export function conversationsKit(getApp: () => INestApplication) {
           ),
         });
       return { res, id, keys: [key] as ConversationKeys };
+    },
+    /**
+     * The owner replaces the encrypted header, sealed with `keys[keyVersion - 1]` (default: the last version); `title`
+     * sets its size.
+     */
+    replaceHeader: async (
+      user: KeyedUser,
+      spaceId: string,
+      id: string,
+      keys: ConversationKeys,
+      opts: { keyVersion?: number; title?: string } = {},
+    ) => {
+      const keyVersion = opts.keyVersion ?? keys.length;
+      const encryptedHeader = await header(
+        keys[keyVersion - 1] ?? keys[0]!,
+        spaceId,
+        id,
+        keyVersion,
+        opts.title,
+      );
+      const res = await http()
+        .put(`${base(spaceId, id)}/header`)
+        .set(bearer(user.token))
+        .send({ keyVersion, encryptedHeader });
+      return { res, encryptedHeader };
+    },
+    /** The executor hub replaces the encrypted header. */
+    hubReplaceHeader: async (
+      hubToken: string,
+      spaceId: string,
+      id: string,
+      keys: ConversationKeys,
+      opts: { keyVersion?: number; title?: string } = {},
+    ) => {
+      const keyVersion = opts.keyVersion ?? keys.length;
+      const encryptedHeader = await header(
+        keys[keyVersion - 1]!,
+        spaceId,
+        id,
+        keyVersion,
+        opts.title,
+      );
+      const res = await http()
+        .put(`/hub/conversations/${id}/header`)
+        .set(bearer(hubToken))
+        .send({ keyVersion, encryptedHeader });
+      return { res, encryptedHeader };
     },
     get: (user: KeyedUser, spaceId: string, id: string) =>
       http().get(base(spaceId, id)).set(bearer(user.token)),

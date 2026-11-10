@@ -28,6 +28,7 @@ import { GetConversationUseCase } from './application/get-conversation.use-case.
 import { HubCreateConversationUseCase } from './application/hub-create-conversation.use-case.js';
 import { LeaveConversationUseCase } from './application/leave-conversation.use-case.js';
 import { RotateConversationKeyUseCase } from './application/rotate-conversation-key.use-case.js';
+import { ReplaceConversationHeaderUseCase } from './application/replace-conversation-header.use-case.js';
 import { SendMessageUseCase } from './application/send-message.use-case.js';
 import { ShareConversationUseCase } from './application/share-conversation.use-case.js';
 import { ConversationsSpaceMemberLeftHook } from './application/space-member-left.hook.js';
@@ -144,6 +145,7 @@ import { SpaceConversationsController } from './infra/http/space-conversations.c
     ChangeExecutorUseCase,
     RotateConversationKeyUseCase,
     SendMessageUseCase,
+    ReplaceConversationHeaderUseCase,
     AckMessageUseCase,
     DeleteMessageUseCase,
     ConversationAttachmentHealer,

@@ -33,6 +33,7 @@ import { MoveConversationUseCase } from '../../application/move-conversation.use
 import { GetConversationUseCase } from '../../application/get-conversation.use-case.js';
 import { LeaveConversationUseCase } from '../../application/leave-conversation.use-case.js';
 import { RotateConversationKeyUseCase } from '../../application/rotate-conversation-key.use-case.js';
+import { ReplaceConversationHeaderUseCase } from '../../application/replace-conversation-header.use-case.js';
 import { SendMessageUseCase } from '../../application/send-message.use-case.js';
 import {
   ShareConversationUseCase,
@@ -43,6 +44,7 @@ import {
   CreateConversationDto,
   EmptyConversationTrashDto,
   MoveConversationDto,
+  ReplaceHeaderDto,
   RequestAttachmentDto,
   RotateConversationKeyDto,
   SendMessageDto,
@@ -84,6 +86,7 @@ export class SpaceConversationsController {
     private readonly deletingAttachment: DeleteAttachmentUseCase,
     private readonly moving: MoveConversationUseCase,
     private readonly emptyingTrash: EmptyConversationTrashUseCase,
+    private readonly header: ReplaceConversationHeaderUseCase,
   ) {}
 
   /** 201 when created; 200 with the same conversation when the same id is sent again (retry after a network error). */
@@ -177,6 +180,24 @@ export class SpaceConversationsController {
     @Param('id', uuidPipe('id')) id: string,
   ): Promise<void> {
     await this.leaving.leave(auth, spaceId, id);
+  }
+
+  /** Owner only: a new encrypted header with the current key version; it counts in the space usage. */
+  @perUser(RATE_LIMITS.conversationChange)
+  @ApiBearerAuth()
+  @Put(':id/header')
+  async doHeader(
+    @CurrentAuth() auth: AuthContext,
+    @Param('spaceId', uuidPipe('spaceId')) spaceId: string,
+    @Param('id', uuidPipe('id')) id: string,
+    @Body() dto: ReplaceHeaderDto,
+  ) {
+    return conversationResponse(
+      await this.header.byUser(auth, spaceId, id, {
+        keyVersion: dto.keyVersion,
+        encryptedHeader: dto.encryptedHeader,
+      }),
+    );
   }
 
   /** The owner archives (`arquivado`) and reopens; work states belong to the executor (403 otherwise). */

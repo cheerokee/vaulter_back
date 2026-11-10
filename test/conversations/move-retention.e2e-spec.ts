@@ -460,6 +460,13 @@ describe('conversations: move, retention and trash (e2e)', () => {
           .body_bytes;
       const m1Bytes = await bytes(conv.id, m1);
       const n1Bytes = await bytes(gone.id, n1);
+      // The header of the gone conversation counts as used until retention nulls it (ConversationHeaderUsage).
+      const [{ hb: goneHeaderBytes }] = (await (
+        await adminDataSource()
+      ).query(
+        `SELECT (length(encrypted_header) * 3) / 4 AS hb FROM conversations WHERE id = $1`,
+        [gone.id],
+      )) as [{ hb: number }];
       const usageBefore = await conversationSpaceUsage(spaceA);
       const storageBefore = await usedBytes(spaceA);
 
@@ -511,12 +518,17 @@ describe('conversations: move, retention and trash (e2e)', () => {
       // The usage counter follows (m1 was trash; n1 counted as used until now).
       const usageAfter = await conversationSpaceUsage(spaceA);
       expect(usageAfter.bodyBytes).toBe(
-        usageBefore.bodyBytes - m1Bytes - n1Bytes,
+        usageBefore.bodyBytes - m1Bytes - n1Bytes - goneHeaderBytes,
       );
       expect(usageAfter.trashBytes).toBe(usageBefore.trashBytes - m1Bytes);
       const storageAfter = await usedBytes(spaceA);
       expect(storageAfter.usedBytes).toBe(
-        storageBefore.usedBytes - m1Bytes - n1Bytes - a1.size - b1.size,
+        storageBefore.usedBytes -
+          m1Bytes -
+          n1Bytes -
+          goneHeaderBytes -
+          a1.size -
+          b1.size,
       );
       expect(storageAfter.trashBytes).toBe(
         storageBefore.trashBytes - m1Bytes - a1.size,

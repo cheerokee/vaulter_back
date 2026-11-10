@@ -83,6 +83,19 @@ class HeaderFields {
   encryptedHeader!: string;
 }
 
+/** A new encrypted header (owner or executor), sealed with the CURRENT key version. */
+export class ReplaceHeaderDto {
+  @IsInt()
+  @Min(1)
+  keyVersion!: number;
+
+  /** `0x01 ‖ nonce ‖ XChaCha20-Poly1305` with the conversation key `keyVersion` (docs/crypto/conversations.md), ≤ 16 KiB. */
+  @IsString()
+  @Matches(BASE64URL)
+  @MaxLength(MAX_HEADER_CHARS + 4)
+  encryptedHeader!: string;
+}
+
 /** The conversation a new one replaces (move to another space; only its owner). */
 export class MovedFromDto {
   @IsUUID()

@@ -672,6 +672,141 @@ describe('conversation messages (e2e)', () => {
     });
   });
 
+  describe('header', () => {
+    const bytesOf = (b64: string) => Buffer.from(b64, 'base64url').length;
+
+    it('the owner replaces the header (current key version); the bytes move the space usage; others: 403/404', async () => {
+      const conv = await conversation([ana]);
+      const before = await expectStatus(k.get(olivia, spaceId, conv.id), 200);
+      const oldBytes = bytesOf(before.body.encryptedHeader as string);
+      const usage = (await conversationSpaceUsage(spaceId)).bodyBytes;
+
+      const replaced = await k.replaceHeader(
+        olivia,
+        spaceId,
+        conv.id,
+        conv.keys,
+        {
+          title: 'Um titulo bem mais comprido para o assunto',
+        },
+      );
+      const res = await expectStatus(Promise.resolve(replaced.res), 200);
+      expect(res.body).toMatchObject({
+        id: conv.id,
+        encryptedHeader: replaced.encryptedHeader,
+      });
+      expect((await conversationSpaceUsage(spaceId)).bodyBytes).toBe(
+        usage - oldBytes + bytesOf(replaced.encryptedHeader),
+      );
+
+      // Another participant: 403; a member of the space who does not participate: 404.
+      expectProblem(
+        (await k.replaceHeader(ana, spaceId, conv.id, conv.keys)).res,
+        403,
+        'not-conversation-owner',
+      );
+      expectProblem(
+        (await k.replaceHeader(bruno, spaceId, conv.id, conv.keys)).res,
+        404,
+        'conversation-not-found',
+      );
+      // A version that is not the current one: 409.
+      expectProblem(
+        (
+          await k.replaceHeader(olivia, spaceId, conv.id, conv.keys, {
+            keyVersion: 2,
+          })
+        ).res,
+        409,
+        'conversation-key-version-stale',
+      );
+    });
+
+    it('a pending key rotation refuses the header (409); the executor replaces it, another hub gets 404', async () => {
+      const conv = await conversation([ana]);
+      const casaToken = await token(casa);
+      const byHub = await k.hubReplaceHeader(
+        casaToken,
+        spaceId,
+        conv.id,
+        conv.keys,
+        { title: 'Plano do copiloto' },
+      );
+      expect(
+        (await expectStatus(Promise.resolve(byHub.res), 200)).body
+          .encryptedHeader,
+      ).toBe(byHub.encryptedHeader);
+      expectProblem(
+        (
+          await k.hubReplaceHeader(
+            await token(pauloHub),
+            spaceId,
+            conv.id,
+            conv.keys,
+          )
+        ).res,
+        404,
+        'conversation-not-found',
+      );
+
+      await expectStatus(k.leave(ana, spaceId, conv.id), 204);
+      expectProblem(
+        (await k.replaceHeader(olivia, spaceId, conv.id, conv.keys)).res,
+        409,
+        'conversation-key-rotation-required',
+      );
+      expectProblem(
+        (await k.hubReplaceHeader(casaToken, spaceId, conv.id, conv.keys)).res,
+        409,
+        'conversation-key-rotation-required',
+      );
+    });
+
+    it('creating counts the header in the usage; a full space refuses a bigger header and a new conversation (422)', async () => {
+      const sp = await s.create(olivia, orgId, kitPublicKey, 'Cabecalhos', {
+        storageQuotaBytes: GiB,
+      });
+      await expectStatus(Promise.resolve(sp.res), 201);
+      const created = await k.create(olivia, sp.spaceId);
+      await expectStatus(Promise.resolve(created.res), 201);
+      const headerBytes = bytesOf(
+        (await expectStatus(k.get(olivia, sp.spaceId, created.id), 200)).body
+          .encryptedHeader as string,
+      );
+      expect(await conversationSpaceUsage(sp.spaceId)).toMatchObject({
+        bodyBytes: headerBytes,
+      });
+      expect((await spaceStorage(olivia, sp.spaceId)).usedBytes).toBe(
+        headerBytes,
+      );
+
+      // Pretend the rest of the space is full: exactly at the quota.
+      const admin = await adminDataSource();
+      await admin.query(
+        `UPDATE conversation_space_usage SET body_bytes = $2 WHERE space_id = $1`,
+        [sp.spaceId, GiB],
+      );
+      const bigger = await k.replaceHeader(
+        olivia,
+        sp.spaceId,
+        created.id,
+        created.keys,
+        { title: 'x'.repeat(200) },
+      );
+      expect(
+        expectProblem(bigger.res, 422, 'space-storage-full').missingBytes,
+      ).toBe(bytesOf(bigger.encryptedHeader) - headerBytes);
+      expect(await conversationSpaceUsage(sp.spaceId)).toMatchObject({
+        bodyBytes: GiB,
+      });
+      expectProblem(
+        (await k.create(olivia, sp.spaceId)).res,
+        422,
+        'space-storage-full',
+      );
+    });
+  });
+
   describe('space usage', () => {
     it('a full space refuses the message (422 space-storage-full) and the backup intent counts message bytes too', async () => {
       const sp = await s.create(olivia, orgId, kitPublicKey, 'Cheio', {
@@ -683,7 +818,15 @@ describe('conversation messages (e2e)', () => {
       const first = await k.send(olivia, sp.spaceId, conv.id, conv.keys);
       const bytes = (await expectStatus(Promise.resolve(first.res), 201)).body
         .bodyBytes as number;
-      expect((await spaceStorage(olivia, sp.spaceId)).usedBytes).toBe(bytes);
+      // The conversation's header counts too (ConversationHeaderUsage).
+      const headerBytes = Buffer.from(
+        (await expectStatus(k.get(olivia, sp.spaceId, conv.id), 200)).body
+          .encryptedHeader as string,
+        'base64url',
+      ).length;
+      expect((await spaceStorage(olivia, sp.spaceId)).usedBytes).toBe(
+        bytes + headerBytes,
+      );
 
       // The rest of the space is (pretend) full: only 10 bytes left.
       const admin = await adminDataSource();

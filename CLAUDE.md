@@ -875,9 +875,9 @@ registra a fonte `conversations`), `hubs` (`HubDirectory`: `ownerOf`,
   `src/shared/application/`, nenhum módulo importa `conversations`.
 - **Rotas:** token de usuário em `/spaces/:spaceId/conversations` (`POST` cria; `/:id` lê; `/:id/participants` e
   `/:id/participants/space` compartilham; `DELETE /:id/participants/:userId` tira; `/:id/leave`; `PUT /:id/state`;
-  `PUT /:id/executor`; `POST /:id/keys`): a organização vem do espaço; não membro do espaço, assunto de outro espaço,
+  `PUT /:id/executor`; `POST /:id/keys`; `PUT /:id/header`): a organização vem do espaço; não membro do espaço, assunto de outro espaço,
   inexistente ou sem participar = o mesmo 404 `conversation-not-found`. Token de Hub em `/hub/conversations` (`POST`
-  cria o "aviso" em nome de uma pessoa; `/:id`; `PUT /:id/state`; `POST /:id/keys`): o Hub acha o assunto nas
+  cria o "aviso" em nome de uma pessoa; `/:id`; `PUT /:id/state`; `POST /:id/keys`; `PUT /:id/header`): o Hub acha o assunto nas
   organizações com vínculo aprovado em que é executor. Criar com o mesmo `id` de novo = 200 com o mesmo assunto.
 - **Poderes:** dono tira participante, troca executor, arquiva/reabre (`arquivado`); executor muda os estados de
   trabalho; qualquer participante compartilha e sai (403 `not-conversation-owner` para o resto). Executor = Hub cujo
@@ -916,6 +916,13 @@ registra a fonte `conversations`), `hubs` (`HubDirectory`: `ownerOf`,
   o Hub antigo confirmou sem mandar mensagem dele depois no assunto (contexto de participante, com o assunto travado).
   Contrato do Hub (hub-lifecycle.md): executar só depois do 200 do ack; ack 404 = descartar; executor novo trata
   `pending` como trabalho.
+- **Cabeçalho** (`ReplaceConversationHeaderUseCase`, `PUT .../:id/header` `{ keyVersion, encryptedHeader }` nas duas
+  formas): o dono (pessoa; outro participante 403 `not-conversation-owner`) ou o executor (Hub; outro Hub 404); versão
+  atual (409 `conversation-key-version-stale`), sem troca pendente (409 `conversation-key-rotation-required`). Os bytes
+  do cabeçalho contam no uso como os das mensagens (trigger `trg_conversations_header_space_usage`, migration
+  `ConversationHeaderUsage`, no `body_bytes` do contador; assunto com lápide conta como usado até a retenção): espaço
+  `FOR SHARE` -> assunto `FOR UPDATE` -> grava -> confere (422 `space-storage-full`); criar (pessoa e Hub) também
+  confere o uso depois de gravar.
 - **Uso do espaço:** o corpo cifrado conta no uso (spec §4.4.1) por um contador por espaço,
   `conversation_space_usage`, mantido só pelo trigger `trg_conversation_messages_space_usage` (corpo guardado conta;
   com lápide, conta também como lixeira; corpo zerado pela retenção sai). É contador e não `SUM` porque as mensagens só

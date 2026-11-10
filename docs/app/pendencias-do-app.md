@@ -59,6 +59,10 @@ Visão geral: o assunto é dado do espaço, cifrado **no celular** com uma chave
   volta de **12 versões × 50 pessoas** (413). Antes de mandar, estimar o tamanho (pessoas × versões × ~140 bytes); se
   passar de ~90 kB, usar o modo `people` (`/participants`) em **lotes** (cada lote é idempotente: quem já participa é
   pulado). **Sair/tirar:** `POST .../:id/leave`, `DELETE .../:id/participants/:userId`.
+- [ ] **Editar o título/plano (cabeçalho):** só o dono, `PUT /spaces/:spaceId/conversations/:id/header`
+  `{ keyVersion, encryptedHeader }`, cifrado com a versão **atual** da chave (409 `conversation-key-version-stale` /
+  `conversation-key-rotation-required`: atualizar ou trocar a chave antes). O cabeçalho conta no uso do espaço (422
+  `space-storage-full`, também ao criar um assunto).
 - [ ] **Executor:** escolher entre os Hubs do dono com o espaço instalado (`PUT .../:id/executor`; trocar manda as
   cópias de todas as versões ao Hub novo e deixa a troca de chave pendente); mensagem de pessoa nasce `pending` até o
   Hub confirmar (mostrar "entregue ao Hub" quando `ackedAt` vier).
