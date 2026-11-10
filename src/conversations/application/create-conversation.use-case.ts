@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import type { Actor } from '../../identity/application/dto/actor.js';
+import { ConflictError } from '../../shared/domain/errors.js';
 import { UnitOfWork } from '../../shared/infra/db/unit-of-work.js';
 import { SpaceAccess } from '../../spaces/application/space-access.js';
 import { SpaceStorage } from '../../spaces/application/space-storage.js';
@@ -97,17 +98,20 @@ export class CreateConversationUseCase {
       if (actor.hubId && input.executor?.hubId !== actor.hubId) {
         throw executorInvalid();
       }
-      if (existing) {
+      // The same request again (a retry after a network error) = the same conversation; anything else with this id: 409.
+      const replay = async (found: Conversation) => {
         if (
-          existing.spaceId !== spaceId ||
-          existing.createdByUserId !== userId ||
-          existing.movedFromConversationId !== movedFromConversationId ||
-          existing.deletedAt
+          found.spaceId !== spaceId ||
+          found.createdByUserId !== userId ||
+          found.movedFromConversationId !== movedFromConversationId ||
+          found.deletedAt ||
+          (actor.hubId && !found.isExecutor(actor.hubId))
         ) {
           throw conversationIdConflict();
         }
-        return { view: await this.views.of(scope, existing), created: false };
-      }
+        return { view: await this.views.of(scope, found), created: false };
+      };
+      if (existing) return replay(existing);
       if (input.movedFrom) {
         if (input.movedFrom.spaceId === spaceId) {
           throw conversationMoveInvalid();
@@ -152,7 +156,19 @@ export class CreateConversationUseCase {
         spaceId,
       );
       if (quotaBytes === null) throw conversationNotFound();
-      await this.conversations.create(scope, conversation);
+      try {
+        await this.conversations.create(scope, conversation);
+      } catch (e) {
+        // A concurrent request with the same id committed between the read above and this insert (the PK conflict
+        // happened inside the insert's own savepoint, so the unit of work goes on): read it again, same comparison.
+        const raced = isIdConflict(e)
+          ? await this.conversations.findById(scope, input.id, {
+              withDeleted: true,
+            })
+          : null;
+        if (!raced) throw e;
+        return replay(raced);
+      }
       await this.grants.put(scope, conversation.id, {
         keyVersion: 1,
         recipient: { kind: 'user', userId },
@@ -176,4 +192,9 @@ export class CreateConversationUseCase {
       };
     });
   }
+}
+
+/** The repository's PK conflict on create (`conversation-id-conflict`). */
+export function isIdConflict(e: unknown): boolean {
+  return e instanceof ConflictError && e.code === 'conversation-id-conflict';
 }

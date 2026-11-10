@@ -886,7 +886,9 @@ registra a fonte `conversations`), `hubs` (`HubDirectory`: `ownerOf`,
   dele). Privado é privado: um Hub, mesmo de outra pessoa, nunca lê os outros assuntos de quem entra por ele.
   Token de Hub em `/hub/conversations` (`POST`
   cria o "aviso" em nome de uma pessoa; `/:id`; `PUT /:id/state`; `POST /:id/keys`; `PUT /:id/header`): o Hub acha o assunto nas
-  organizações com vínculo aprovado em que é executor. Criar com o mesmo `id` de novo = 200 com o mesmo assunto.
+  organizações com vínculo aprovado em que é executor. Criar com o mesmo `id` de novo = 200 com o mesmo assunto, também
+  na corrida (os dois pedidos leem "não existe"; o que perde o INSERT pega o 23505 dentro do savepoint do repositório,
+  relê e aplica a mesma comparação: 200 ou 409 `conversation-id-conflict`).
 - **Poderes:** dono tira participante, troca executor, arquiva/reabre (`arquivado`); executor muda os estados de
   trabalho; qualquer participante compartilha e sai (403 `not-conversation-owner` para o resto). Executor = Hub cujo
   dono participa, com o espaço instalado (`hub_space` vivo, vínculo aprovado); 422 `executor-invalid`. Trocar executor

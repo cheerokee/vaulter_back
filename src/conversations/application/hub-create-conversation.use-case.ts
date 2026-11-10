@@ -28,6 +28,7 @@ import { Conversation } from '../domain/conversation.js';
 import { assertParticipantCapacity } from '../domain/participation-rules.js';
 import { assertWrappedConversationKey } from '../domain/wrapped-conversation-key.js';
 import { ConversationExecutors } from './conversation-executors.js';
+import { isIdConflict } from './create-conversation.use-case.js';
 import { ConversationViews } from './conversation-views.js';
 import type { ConversationView } from './dto/conversation-view.js';
 
@@ -104,12 +105,14 @@ export class HubCreateConversationUseCase {
       const existing = await this.conversations.findById(scope, input.id, {
         withDeleted: true,
       });
-      if (existing) {
-        if (existing.spaceId !== spaceId || existing.deletedAt) {
+      // The same request again = the same conversation; another space or a tombstone: 409.
+      const replay = async (found: Conversation) => {
+        if (found.spaceId !== spaceId || found.deletedAt) {
           throw conversationIdConflict();
         }
-        return { view: await this.views.of(scope, existing), created: false };
-      }
+        return { view: await this.views.of(scope, found), created: false };
+      };
+      if (existing) return replay(existing);
       const conversation = Conversation.create({
         id: input.id,
         organizationId,
@@ -160,7 +163,18 @@ export class HubCreateConversationUseCase {
         spaceId,
       );
       if (quotaBytes === null) throw participantNotSpaceMember();
-      await this.conversations.create(scope, conversation);
+      try {
+        await this.conversations.create(scope, conversation);
+      } catch (e) {
+        // A concurrent request with the same id won the insert (PK conflict inside its own savepoint): read it again.
+        const raced = isIdConflict(e)
+          ? await this.conversations.findById(scope, input.id, {
+              withDeleted: true,
+            })
+          : null;
+        if (!raced) throw e;
+        return replay(raced);
+      }
       // Os outros entram 1 ms depois do dono: na sucessão do dono (mais antigo primeiro), o dono vem antes.
       const joinedAt = new Date(
         (conversation.createdAt ?? new Date()).getTime() + 1,
