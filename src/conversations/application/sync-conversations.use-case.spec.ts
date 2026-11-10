@@ -136,6 +136,21 @@ describe('SyncConversationsUseCase (person feed)', () => {
     ).resolves.toMatchObject({ items: [], nextSince: 5n });
   });
 
+  it('a session bound to a hub reads only what that hub executes (the reader gets the hub from the session)', async () => {
+    await useCase().byUser({ userId: USER, hubId: HUB }, {});
+    expect(reader.read.mock.calls[0]![0].reader).toEqual({
+      kind: 'user',
+      userId: USER,
+      sessionHubId: HUB,
+    });
+    await useCase().byUser({ userId: USER }, {});
+    expect(reader.read.mock.calls[1]![0].reader).toEqual({
+      kind: 'user',
+      userId: USER,
+      sessionHubId: null,
+    });
+  });
+
   it('an empty page keeps the cursor', async () => {
     await expect(
       useCase().byUser({ userId: USER }, { since: 42n }),

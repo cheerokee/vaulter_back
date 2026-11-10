@@ -11,7 +11,10 @@ export class AuthenticateAccessTokenUseCase {
     private readonly sessions: SessionRepository,
   ) {}
 
-  async execute(token: string, now: Date): Promise<Actor> {
+  async execute(
+    token: string,
+    now: Date,
+  ): Promise<Actor & { hubId: string | null }> {
     const claims = await this.accessTokens.verify(token, now);
     const session = await this.sessions.findById(claims.sessionId);
     if (
@@ -24,6 +27,11 @@ export class AuthenticateAccessTokenUseCase {
         'The access token is invalid or expired.',
       );
     }
-    return { userId: claims.userId, sessionId: session.id };
+    // The Hub binding comes from the session row (checked on every request), never from the token or the request.
+    return {
+      userId: claims.userId,
+      sessionId: session.id,
+      hubId: session.hubId,
+    };
   }
 }

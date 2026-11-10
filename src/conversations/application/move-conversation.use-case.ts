@@ -8,7 +8,7 @@ import {
 } from '../domain/conversation-errors.js';
 import { ConversationMessageRepository } from '../domain/conversation-message.repository.js';
 import { ConversationRepository } from '../domain/conversation.repository.js';
-import { ConversationAccess } from './conversation-access.js';
+import { ConversationAccess, reachable } from './conversation-access.js';
 
 export type MoveConversationInput = {
   /** The space of the conversation created with `movedFrom` = this one. */
@@ -46,7 +46,7 @@ export class MoveConversationUseCase {
       const { conversation: target } = await this.access.findForUser(
         input.toSpaceId,
         input.toConversationId,
-        userId,
+        actor,
       );
       if (
         target.movedFromConversationId !== conversationId ||
@@ -54,20 +54,20 @@ export class MoveConversationUseCase {
       ) {
         throw conversationMoveInvalid();
       }
-      const scope = await this.access.userScope(spaceId, userId);
+      const scope = await this.access.userScope(spaceId, actor);
       const source = await this.conversations.lockById(scope, conversationId);
       if (!source) {
         // Já movido (repetição depois de uma falha de rede): o dono ainda participa e vê a lápide.
         const gone = await this.conversations.findById(scope, conversationId, {
           withDeleted: true,
         });
-        if (gone?.deletedAt && gone.spaceId === spaceId) {
+        if (gone?.deletedAt && reachable(scope, gone, spaceId)) {
           gone.assertOwner(userId);
           return;
         }
         throw conversationNotFound();
       }
-      if (source.spaceId !== spaceId) throw conversationNotFound();
+      reachable(scope, source, spaceId);
       source.assertOwner(userId);
       source.tombstone(await this.messages.databaseNow());
       await this.conversations.save(scope, source);

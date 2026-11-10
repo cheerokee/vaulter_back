@@ -63,7 +63,7 @@ export class EmptyConversationTrashUseCase {
     const { conversation: seen } = await this.access.findForUser(
       spaceId,
       conversationId,
-      userId,
+      actor,
     );
     seen.assertOwner(userId);
     await this.verifier.verify(userId, currentAuthProof);
@@ -79,7 +79,7 @@ export class EmptyConversationTrashUseCase {
         const { scope, conversation } = await this.access.lockForUser(
           spaceId,
           conversationId,
-          userId,
+          actor,
         );
         conversation.assertOwner(userId);
         const messages = await this.messages.purgeTrash(scope, conversation.id);

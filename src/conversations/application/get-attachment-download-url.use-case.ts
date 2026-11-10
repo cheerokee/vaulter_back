@@ -31,7 +31,7 @@ export class GetAttachmentDownloadUrlUseCase {
     attachmentId: string,
   ): Promise<AttachmentDownloadUrl> {
     return this.sign(
-      await this.access.findForUser(spaceId, conversationId, actor.userId),
+      await this.access.findForUser(spaceId, conversationId, actor),
       attachmentId,
     );
   }

@@ -84,7 +84,7 @@ export class RequestAttachmentUploadUseCase {
     return this.run(
       async () => {
         await this.uow.setContext({ userId: actor.userId });
-        const scope = await this.access.userScope(spaceId, actor.userId);
+        const scope = await this.access.userScope(spaceId, actor);
         return { scope, spaceId };
       },
       conversationId,

@@ -557,7 +557,9 @@ consulta só de leitura (veja Sincronização).
   de saída da organização; o desregistro revoga todas as sessões do Hub. Corrida login × revogação: o login segura o
   Hub FOR SHARE e um advisory lock das sessões do Hub (`HubRepository.lockPersonSessions`) compartilhado até o COMMIT; a
   varredura pega o advisory exclusivo por último (vários Hubs em ordem de id). Fixado por
-  `test/hubs/user-sessions.e2e-spec.ts`.
+  `test/hubs/user-sessions.e2e-spec.ts`. O `AuthContext`/`Actor` traz o `hubId` da sessão (da linha da sessão, a cada
+  requisição; nulo numa sessão comum): módulos que restringem o que uma sessão de Hub alcança leem dali (hoje os
+  assuntos: só os executados por esse Hub).
 - **RLS das tabelas de Hub:** contexto novo `app.hub_id` (token de Hub) e `app.hub_signing_public_key` (abre só o Hub
   daquela chave: a apresentação confere se a chave já está em uso); o dono lê/grava seus Hubs; o Hub lê **todos** os
   próprios vínculos (qualquer status) e só os `hub_space` de vínculo aprovado; em `role_assignments` de escopo Hub o
@@ -876,7 +878,13 @@ registra a fonte `conversations`), `hubs` (`HubDirectory`: `ownerOf`,
 - **Rotas:** token de usuário em `/spaces/:spaceId/conversations` (`POST` cria; `/:id` lê; `/:id/participants` e
   `/:id/participants/space` compartilham; `DELETE /:id/participants/:userId` tira; `/:id/leave`; `PUT /:id/state`;
   `PUT /:id/executor`; `POST /:id/keys`; `PUT /:id/header`): a organização vem do espaço; não membro do espaço, assunto de outro espaço,
-  inexistente ou sem participar = o mesmo 404 `conversation-not-found`. Token de Hub em `/hub/conversations` (`POST`
+  inexistente ou sem participar = o mesmo 404 `conversation-not-found`. **Sessão aberta por um Hub** (`hubId` no
+  `AuthContext`, da linha da sessão): só alcança os assuntos cujo executor é esse Hub, em toda rota de usuário dos
+  assuntos (`ConversationScope.sessionHubId`, conferido em `reachable` a cada leitura/trava; o resto: o mesmo 404; criar
+  só com esse Hub como executor, senão 422 `executor-invalid`) e no feed da pessoa (só esses assuntos, sem as lápides
+  próprias de outros; o cliente do Hub apaga um assunto quando o feed de executor do Hub entrega a lápide da cópia
+  dele). Privado é privado: um Hub, mesmo de outra pessoa, nunca lê os outros assuntos de quem entra por ele.
+  Token de Hub em `/hub/conversations` (`POST`
   cria o "aviso" em nome de uma pessoa; `/:id`; `PUT /:id/state`; `POST /:id/keys`; `PUT /:id/header`): o Hub acha o assunto nas
   organizações com vínculo aprovado em que é executor. Criar com o mesmo `id` de novo = 200 com o mesmo assunto.
 - **Poderes:** dono tira participante, troca executor, arquiva/reabre (`arquivado`); executor muda os estados de

@@ -24,7 +24,7 @@ export class LeaveConversationUseCase {
       const { scope, conversation } = await this.access.lockForUser(
         spaceId,
         conversationId,
-        actor.userId,
+        actor,
       );
       await this.departure.depart(scope, conversation, actor.userId, {
         now: new Date(),
@@ -47,7 +47,7 @@ export class LeaveConversationUseCase {
       const { scope, conversation } = await this.access.lockForUser(
         spaceId,
         conversationId,
-        actor.userId,
+        actor,
       );
       conversation.assertOwner(actor.userId);
       await this.departure.depart(scope, conversation, targetUserId, {

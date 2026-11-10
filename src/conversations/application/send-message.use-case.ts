@@ -69,7 +69,7 @@ export class SendMessageUseCase {
     validate(input);
     return this.uow.run(async () => {
       await this.uow.setContext({ userId: actor.userId });
-      const scope = await this.access.userScope(spaceId, actor.userId);
+      const scope = await this.access.userScope(spaceId, actor);
       const quotaBytes = await this.lockSpace(scope, spaceId);
       const conversation = await this.access.lock(
         scope,

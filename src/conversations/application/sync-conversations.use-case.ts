@@ -40,7 +40,10 @@ export type ConversationChangesPage = {
  *   where the person is an active member: `conversation`, every `conversation_participant`, the person's OWN
  *   `conversation_key_grant` rows (every version; never another person's or a hub's copy), `conversation_message`
  *   (with the encrypted body) and `conversation_attachment` (metadata). After leaving, the person still receives the
- *   tombstones of their own participation and copies (RLS: own rows), and nothing else of that conversation.
+ *   tombstones of their own participation and copies (RLS: own rows), and nothing else of that conversation. A session
+ *   opened through a Hub (`POST /hub/user-sessions`) gets only the conversations THAT Hub executes, and none of the
+ *   own-row tombstones of others (its client drops a conversation when the Hub's own executor feed says the Hub lost
+ *   it, or the conversation item stops being live).
  * - EXECUTOR (`GET /hub/conversations/changes`): the same for the conversations where the hub is executor, only in
  *   organizations with an approved, live link (the RLS executor policy has no link condition: the reader filters),
  *   with the hub's OWN copies; after losing the role (executor change, unlink, deregister, space removed, owner left)
@@ -83,11 +86,16 @@ export class SyncConversationsUseCase {
   ) {}
 
   async byUser(
-    actor: Pick<Actor, 'userId'>,
+    actor: Pick<Actor, 'userId' | 'hubId'>,
     input: ConversationChangesInput,
   ): Promise<ConversationChangesPage> {
     const page = pageInput(input);
-    return (await this.read({ kind: 'user', userId: actor.userId }, page)).page;
+    const reader: ConversationFeedReader = {
+      kind: 'user',
+      userId: actor.userId,
+      sessionHubId: actor.hubId ?? null,
+    };
+    return (await this.read(reader, page)).page;
   }
 
   async byHub(

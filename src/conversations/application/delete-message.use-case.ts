@@ -30,7 +30,7 @@ export class DeleteMessageUseCase {
     return this.uow.run(async () => {
       await this.uow.setContext({ userId: actor.userId });
       await this.remove(
-        await this.access.lockForUser(spaceId, conversationId, actor.userId),
+        await this.access.lockForUser(spaceId, conversationId, actor),
         messageId,
       );
     });

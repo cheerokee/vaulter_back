@@ -58,11 +58,7 @@ export class ChangeExecutorUseCase {
     for (const g of input.grants) assertWrappedConversationKey(g.wrappedKey);
     return this.uow.run(async () => {
       await this.uow.setContext({ userId });
-      const pre = await this.access.findForUser(
-        spaceId,
-        conversationId,
-        userId,
-      );
+      const pre = await this.access.findForUser(spaceId, conversationId, actor);
       pre.conversation.assertOwner(userId);
       const { scope } = pre;
       const hubOwnerUserId =

@@ -51,7 +51,7 @@ export class RotateConversationKeyUseCase {
     return this.uow.run(async () => {
       await this.uow.setContext({ userId: actor.userId });
       return this.rotate(
-        await this.access.lockForUser(spaceId, conversationId, actor.userId),
+        await this.access.lockForUser(spaceId, conversationId, actor),
         input,
       );
     });

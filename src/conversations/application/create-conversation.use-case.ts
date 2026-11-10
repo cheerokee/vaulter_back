@@ -10,6 +10,7 @@ import {
   conversationIdConflict,
   conversationMoveInvalid,
   conversationNotFound,
+  executorInvalid,
 } from '../domain/conversation-errors.js';
 import { ConversationKeyGrantRepository } from '../domain/conversation-key-grant.repository.js';
 import {
@@ -86,11 +87,16 @@ export class CreateConversationUseCase {
       const scope: ConversationScope = {
         organizationId: space.organizationId,
         actor: { kind: 'user', userId },
+        sessionHubId: actor.hubId ?? null,
       };
       const movedFromConversationId = input.movedFrom?.conversationId ?? null;
       const existing = await this.conversations.findById(scope, input.id, {
         withDeleted: true,
       });
+      // A session opened through a Hub only reaches (and so only creates) conversations that Hub executes.
+      if (actor.hubId && input.executor?.hubId !== actor.hubId) {
+        throw executorInvalid();
+      }
       if (existing) {
         if (
           existing.spaceId !== spaceId ||
@@ -109,7 +115,7 @@ export class CreateConversationUseCase {
         const { conversation: source } = await this.access.findForUser(
           input.movedFrom.spaceId,
           input.movedFrom.conversationId,
-          userId,
+          actor,
         );
         source.assertOwner(userId);
       }

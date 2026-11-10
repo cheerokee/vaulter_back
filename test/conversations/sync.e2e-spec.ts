@@ -806,4 +806,108 @@ describe('conversation feeds (e2e)', () => {
       }
     }, 30_000);
   });
+  // Sessão aberta por um Hub (`POST /hub/user-sessions`): "privado é privado" — ela só alcança os assuntos cujo
+  // executor é esse mesmo Hub, em toda rota de usuário dos assuntos e no feed da pessoa.
+  describe('a session opened through a hub', () => {
+    const expectProblem = (
+      res: request.Response,
+      status: number,
+      type: string,
+    ) => {
+      expect([res.status, String(res.body.type).split('/').pop()]).toEqual([
+        status,
+        type,
+      ]);
+    };
+    it("reaches only the conversations that hub executes: Olivia on Paulo's hub sees Y (executor Paulo's hub), never X (executor her own hub)", async () => {
+      const x = await conversation([]); // executor: casa (Olivia's hub)
+      const yCreated = await k.create(olivia, spaceId);
+      await expectStatus(Promise.resolve(yCreated.res), 201);
+      const y = { id: yCreated.id, keys: yCreated.keys as ConversationKeys };
+      // The executor rule: the owner of Paulo's hub participates.
+      await expectStatus(
+        k.share(olivia, spaceId, y.id, [recipientOf(paulo)], y.keys),
+        200,
+      );
+      await expectStatus(
+        k.changeExecutor(
+          olivia,
+          spaceId,
+          y.id,
+          hubRecipientOf(pauloHub),
+          y.keys,
+        ),
+        200,
+      );
+      const sentX = await send(olivia, x, 'so no meu hub');
+      const sentY = await send(olivia, y, 'no hub do paulo');
+
+      const login = await expectStatus(
+        h.loginPerson(
+          pauloToken,
+          olivia.email,
+          olivia.account.authProof,
+          'Sala do Paulo',
+        ),
+        200,
+      );
+      const onHub = {
+        ...olivia,
+        token: login.body.session.accessToken as string,
+      } as KeyedUser;
+
+      // The person feed through the hub-bound session: Y only (no item of X: not even her own copies or participation).
+      const items = (await drainUser(onHub)).items;
+      expect(of(items, y.id).length).toBeGreaterThan(0);
+      expect(of(items, x.id)).toEqual([]);
+      expect(items.some((i) => i.data.id === sentY.id)).toBe(true);
+      expect(items.some((i) => i.data.id === sentX.id)).toBe(false);
+      expect(
+        (await feed(onHub, { conversationId: x.id, since: 0 })).items,
+      ).toEqual([]);
+      // Her phone session still sees both.
+      const phone = (await drainUser(olivia)).items;
+      expect(of(phone, x.id).length).toBeGreaterThan(0);
+      expect(of(phone, y.id).length).toBeGreaterThan(0);
+
+      // The user routes: X is 404 through the hub-bound session (read, send, header), Y works.
+      expectProblem(
+        await k.get(onHub, spaceId, x.id),
+        404,
+        'conversation-not-found',
+      );
+      await expectStatus(k.get(onHub, spaceId, y.id), 200);
+      expectProblem(
+        (await k.send(onHub, spaceId, x.id, x.keys)).res,
+        404,
+        'conversation-not-found',
+      );
+      await expectStatus(
+        Promise.resolve((await k.send(onHub, spaceId, y.id, y.keys)).res),
+        201,
+      );
+      expectProblem(
+        (await k.replaceHeader(onHub, spaceId, x.id, x.keys)).res,
+        404,
+        'conversation-not-found',
+      );
+      expectProblem(
+        await k.leave(onHub, spaceId, x.id),
+        404,
+        'conversation-not-found',
+      );
+      // Creating through it: only with that hub as executor (here Olivia's own hub: refused).
+      expectProblem(
+        (await k.create(onHub, spaceId, { executor: hubRecipientOf(casa) }))
+          .res,
+        422,
+        'executor-invalid',
+      );
+      expectProblem(
+        (await k.create(onHub, spaceId)).res,
+        422,
+        'executor-invalid',
+      );
+    });
+  });
 });

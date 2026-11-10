@@ -26,6 +26,14 @@ describe('AuthenticateAccessTokenUseCase', () => {
     await expect(useCase.execute('t', NOW)).resolves.toEqual({
       userId: 'u1',
       sessionId: 's1',
+      hubId: null,
+    });
+  });
+
+  it('carries the hub a session is bound to, from the session row', async () => {
+    sessions.findById.mockResolvedValue(makeSession({ hubId: 'hub-1' }));
+    await expect(useCase.execute('t', NOW)).resolves.toMatchObject({
+      hubId: 'hub-1',
     });
   });
 

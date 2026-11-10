@@ -72,7 +72,7 @@ export class ShareConversationUseCase {
     }
     return this.uow.run(async () => {
       await this.uow.setContext({ userId });
-      const scope = await this.access.userScope(spaceId, userId);
+      const scope = await this.access.userScope(spaceId, actor);
       const { organizationId } = scope;
       try {
         await this.spaces.lockAsMember(

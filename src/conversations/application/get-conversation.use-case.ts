@@ -22,7 +22,7 @@ export class GetConversationUseCase {
     const { scope, conversation } = await this.access.findForUser(
       spaceId,
       conversationId,
-      actor.userId,
+      actor,
     );
     return this.views.of(scope, conversation);
   }

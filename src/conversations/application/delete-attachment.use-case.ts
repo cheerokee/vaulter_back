@@ -41,7 +41,7 @@ export class DeleteAttachmentUseCase {
         await this.uow.setContext({ userId: actor.userId });
         await this.uow.setLockTimeout(STORAGE_LOCK_TIMEOUT_MS);
         await this.remove(
-          await this.access.lockForUser(spaceId, conversationId, actor.userId),
+          await this.access.lockForUser(spaceId, conversationId, actor),
           attachmentId,
         );
       });

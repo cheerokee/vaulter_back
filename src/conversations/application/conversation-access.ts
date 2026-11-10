@@ -2,7 +2,10 @@ import { Injectable } from '@nestjs/common';
 import { HubDirectory } from '../../hubs/application/hub-directory.js';
 import { NotFoundError } from '../../shared/domain/errors.js';
 import { SpaceAccess } from '../../spaces/application/space-access.js';
-import type { ConversationScope } from '../domain/conversation-actor.js';
+import type {
+  ConversationScope,
+  UserPrincipal,
+} from '../domain/conversation-actor.js';
 import { conversationNotFound } from '../domain/conversation-errors.js';
 import {
   ConversationRepository,
@@ -20,6 +23,8 @@ export type ScopedConversation = {
 //   membro do espaço resolve). Quem não é membro do espaço, espaço de outra organização, assunto de outro espaço,
 //   inexistente ou de que a pessoa não participa: SEMPRE o mesmo 404 `conversation-not-found`. Quem sai do espaço sai
 //   dos assuntos dele (gancho `SpaceMemberLeftHooks`), então "membro do espaço" nunca nega a um participante.
+//   Sessão aberta por um Hub (`principal.hubId`, da linha da sessão): só alcança os assuntos cujo executor é esse Hub;
+//   os outros dão o mesmo 404 (o escopo leva `sessionHubId` e toda leitura/trava confere).
 // - Hub (rotas `/hub/conversations/...`): procura o assunto nas organizações com vínculo aprovado (no contexto do
 //   próprio Hub, o RLS só mostra onde ele é executor). Não achou: o mesmo 404.
 // `lock*` rodam DENTRO do UnitOfWork.run e travam a linha do assunto (`FOR UPDATE`), que vem DEPOIS de Hub, vínculo,
@@ -33,12 +38,17 @@ export class ConversationAccess {
   ) {}
 
   /** The person's scope in the space's organization (404 `conversation-not-found` for a non-member of the space). */
-  async userScope(spaceId: string, userId: string): Promise<ConversationScope> {
+  async userScope(
+    spaceId: string,
+    principal: UserPrincipal,
+  ): Promise<ConversationScope> {
+    const { userId } = principal;
     try {
       const { space } = await this.spaces.requireSpaceMember(spaceId, userId);
       return {
         organizationId: space.organizationId,
         actor: { kind: 'user', userId },
+        sessionHubId: principal.hubId ?? null,
       };
     } catch (e) {
       if (e instanceof NotFoundError) throw conversationNotFound();
@@ -49,22 +59,22 @@ export class ConversationAccess {
   async findForUser(
     spaceId: string,
     conversationId: string,
-    userId: string,
+    principal: UserPrincipal,
   ): Promise<ScopedConversation> {
-    const scope = await this.userScope(spaceId, userId);
+    const scope = await this.userScope(spaceId, principal);
     const conversation = await this.conversations.findById(
       scope,
       conversationId,
     );
-    return { scope, conversation: inSpace(conversation, spaceId) };
+    return { scope, conversation: reachable(scope, conversation, spaceId) };
   }
 
   async lockForUser(
     spaceId: string,
     conversationId: string,
-    userId: string,
+    principal: UserPrincipal,
   ): Promise<ScopedConversation> {
-    const scope = await this.userScope(spaceId, userId);
+    const scope = await this.userScope(spaceId, principal);
     return {
       scope,
       conversation: await this.lock(scope, conversationId, spaceId),
@@ -78,7 +88,8 @@ export class ConversationAccess {
     spaceId: string,
     mode: ConversationLockMode = 'update',
   ): Promise<Conversation> {
-    return inSpace(
+    return reachable(
+      scope,
       await this.conversations.lockById(scope, conversationId, mode),
       spaceId,
     );
@@ -120,7 +131,18 @@ export class ConversationAccess {
   }
 }
 
-function inSpace(c: Conversation | null, spaceId: string): Conversation {
+/**
+ * The conversation exists in the scope, is in `spaceId` and, for a session bound to a Hub, is executed by that Hub;
+ * anything else is the same 404 `conversation-not-found`.
+ */
+export function reachable(
+  scope: ConversationScope,
+  c: Conversation | null,
+  spaceId: string,
+): Conversation {
   if (!c || c.spaceId !== spaceId) throw conversationNotFound();
+  if (scope.sessionHubId && !c.isExecutor(scope.sessionHubId)) {
+    throw conversationNotFound();
+  }
   return c;
 }

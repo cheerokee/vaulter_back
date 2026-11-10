@@ -10,14 +10,15 @@ export function makeSession(
     hash: string;
     expiresAt: Date;
     revoked: boolean;
+    hubId: string;
   }> = {},
 ): Session {
   const session = Session.restore(
     {
       userId: overrides.userId ?? 'u1',
       deviceName: 'Pixel',
-      devicePlatform: 'android',
-      hubId: null,
+      devicePlatform: overrides.hubId ? 'hub' : 'android',
+      hubId: overrides.hubId ?? null,
       refreshTokenHash: overrides.hash ?? hexHash(1),
       refreshExpiresAt: overrides.expiresAt ?? new Date('2026-11-24T12:00:00Z'),
       lastUsedAt: new Date('2026-10-24T11:00:00Z'),

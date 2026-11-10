@@ -16,9 +16,13 @@ export type ConversationItemType = (typeof CONVERSATION_ITEM_TYPES)[number];
 export type ConversationSyncItem = SyncItemOf<ConversationItemType>;
 export type ConversationSyncBatch = SyncBatchOf<ConversationItemType>;
 
-/** Who reads the feed: a person (participant) or a Hub (executor). Never supplied by the request body. */
+/**
+ * Who reads the feed: a person (participant) or a Hub (executor). Never supplied by the request body. `sessionHubId`:
+ * the person's session was opened through that Hub (from the session row): only the conversations it executes.
+ */
 export type ConversationFeedReader =
-  { kind: 'user'; userId: string } | { kind: 'hub'; hubId: string };
+  | { kind: 'user'; userId: string; sessionHubId?: string | null }
+  | { kind: 'hub'; hubId: string };
 
 export type ConversationChangesQuery = {
   reader: ConversationFeedReader;

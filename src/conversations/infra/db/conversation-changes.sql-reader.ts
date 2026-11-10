@@ -45,7 +45,8 @@ type Row = Record<string, unknown> & {
   deleted: boolean;
   unsafe: boolean;
 };
-// $1 reader (user or hub id), $2 since, $3 limit, $4 organization, $5 conversation filter (or null), $6 safe bound.
+// $1 reader (user or hub id), $2 since, $3 limit, $4 organization, $5 conversation filter (or null), $6 safe bound,
+// $7 the Hub a person's session is bound to (or null): only the conversations it executes.
 type Params = [
   readerId: string,
   since: string,
@@ -53,6 +54,7 @@ type Params = [
   organizationId: string,
   conversationId: string | null,
   bound: string,
+  sessionHubId: string | null,
 ];
 
 const item = (
@@ -70,11 +72,13 @@ const item = (
 
 const iso = (v: unknown) => (v instanceof Date ? v.toISOString() : v);
 
-// The conversation is in the reader's scope (beyond the RLS, which says the same).
+// The conversation is in the reader's scope (beyond the RLS, which says the same). A person's session bound to a Hub
+// ($7) only reaches what that Hub executes.
 const IN_SCOPE = (reader: ConversationFeedReader, alias: string) =>
   reader.kind === 'user'
-    ? `$1::uuid = ANY (${alias}.participant_user_ids)`
-    : `${alias}.executor_hub_id = $1::uuid`;
+    ? `$1::uuid = ANY (${alias}.participant_user_ids)
+       AND ($7::uuid IS NULL OR ${alias}.executor_hub_id = $7::uuid)`
+    : `${alias}.executor_hub_id = $1::uuid AND $7::uuid IS NULL`;
 
 const CONVERSATION_OF = (reader: ConversationFeedReader, table: string) =>
   `EXISTS (SELECT 1 FROM conversations c
@@ -138,6 +142,9 @@ export class ConversationChangesSqlReader extends ConversationChangesReader {
             organizationId,
             query.conversationId,
             bound,
+            query.reader.kind === 'user'
+              ? (query.reader.sessionHubId ?? null)
+              : null,
           ]),
         );
         batches.push(...read.batches);
@@ -198,9 +205,12 @@ async function readOrganization(
     ),
   );
 
-  // Every participant of an in-scope conversation; for a person also the OWN rows (tombstones after leaving).
+  // Every participant of an in-scope conversation; for a person also the OWN rows (tombstones after leaving), except
+  // through a session bound to a Hub (only what that Hub executes).
   const ownParticipation =
-    reader.kind === 'user' ? `p.user_id = $1::uuid OR ` : '';
+    reader.kind === 'user'
+      ? `($7::uuid IS NULL AND p.user_id = $1::uuid) OR `
+      : '';
   out.push(
     await batch(
       `SELECT p.id, p.conversation_id, p.user_id, p.joined_at,
@@ -226,6 +236,7 @@ async function readOrganization(
               g.deleted_at IS NOT NULL AS deleted, ${VERSION('g')}
          FROM conversation_key_grants g
         WHERE ${PAGE('g')} AND ${ownCopy} = $1::uuid
+          AND ($7::uuid IS NULL OR ${CONVERSATION_OF(reader, 'g')})
         ORDER BY g.sync_version LIMIT $3`,
       (r) =>
         item(

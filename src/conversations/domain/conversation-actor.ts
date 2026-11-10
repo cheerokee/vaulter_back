@@ -9,7 +9,15 @@ export type ConversationActor =
 export type ConversationScope = {
   organizationId: string;
   actor: ConversationActor;
+  /**
+   * A person whose session is bound to a Hub (opened through it): only the conversations that Hub executes are
+   * reachable ("private is private": a Hub, even someone else's, never reaches the person's other conversations).
+   */
+  sessionHubId?: string | null;
 };
+
+/** Who calls a user route: the person and, when the session was opened through a Hub, that Hub. */
+export type UserPrincipal = { userId: string; hubId?: string | null };
 
 export function sameActor(a: ConversationActor, b: ConversationActor): boolean {
   return a.kind === 'user'

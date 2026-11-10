@@ -73,12 +73,12 @@ export class ConfirmAttachmentUseCase {
           const { scope } = await this.access.findForUser(
             spaceId,
             conversationId,
-            actor.userId,
+            actor,
           );
           return { scope, spaceId };
         }
         return {
-          scope: await this.access.userScope(spaceId, actor.userId),
+          scope: await this.access.userScope(spaceId, actor),
           spaceId,
         };
       },

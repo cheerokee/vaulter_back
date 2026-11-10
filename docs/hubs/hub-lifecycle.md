@@ -358,7 +358,11 @@ objeto). O backend guarda só o índice (ids, tamanho, sha256 do blob, versão d
   `POST /hub/user-sessions` com `{ "email", "authProof", "device": { "name" } }` (o `device` só tem o nome; a
   plataforma é sempre `hub`). Resposta 200 igual à do `/auth/login`: `user`, `keys` (chave privada trancada, salt,
   parâmetros) e `session` (`sessionId`, `accessToken`, `refreshToken` e as validades). Daí em diante é uma sessão comum
-  de usuário (`/auth/refresh`, `/auth/logout`, rotas de usuário com o `accessToken`).
+  de usuário (`/auth/refresh`, `/auth/logout`, rotas de usuário com o `accessToken`), **com uma exceção nos
+  assuntos**: por essa sessão a pessoa só alcança os assuntos cujo **executor é este Hub** (os outros dão 404
+  `conversation-not-found` e não aparecem no `GET /conversations/changes`; criar só com este Hub como executor). Quando
+  o Hub deixa de ser executor de um assunto (lápide da própria cópia no feed de executor), apague-o também da visão da
+  pessoa.
   - **Só entra quem tem papel no Hub:** dono, `hub_operator`/`hub_user` explícito ou `hub_user` implícito (membro ativo
     de organização com vínculo aprovado). Quem não tem papel recebe o **mesmo** 401 `invalid-credentials` da senha
     errada e do e-mail desconhecido (sem oráculo). O Hub também confere localmente (conhece os membros pela
