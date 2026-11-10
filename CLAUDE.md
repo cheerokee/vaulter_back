@@ -907,8 +907,16 @@ registra a fonte `conversations`), `hubs` (`HubDirectory`: `ownerOf`,
   `conversation.executor_changed` (só ids).
 - **Ordem de locks:** Hub -> vínculo -> hub_space (FOR SHARE, `lockExecutorCandidate`) -> espaço (FOR SHARE ao criar e
   compartilhar) -> assunto (FOR UPDATE) -> participações -> **advisory lock das versões, sempre o ÚLTIMO** (só no
-  COMMIT, `trg_<tabela>_sync_commit`, depois de todas as travas de linha da transação: não fecha ciclo; os commits que
-  gravam nos assuntos se serializam só durante os UPDATEs das versões). Vários assuntos na mesma transação: sempre **(espaço,
+  COMMIT, `trg_<tabela>_sync_commit`, depois de todas as travas de linha da transação: não fecha ciclo). Ele fica preso
+  do primeiro UPDATE de versão **até o fim do commit** (o resto dos triggers adiados, a trava da fila de NOTIFY, o
+  flush do WAL e a réplica síncrona, se houver, e a visibilidade): **os commits que gravam nos assuntos são seriais,
+  fsync incluído**. Custo conhecido: uma cascata grande (desregistrar Hub, desvincular, saída da organização com muitos
+  assuntos) faz os outros que gravam nos assuntos esperarem no COMMIT, segurando a conexão do pool, pelo tempo dela
+  (segundos com dezenas de milhares de linhas); a retenção grava em lotes de até 5.000 linhas
+  (`CONVERSATION_RETENTION_BATCH_ROWS`). Rotas com o `lock_timeout` do storage (anexos: intenção, confirmação, apagar;
+  esvaziar a lixeira) recebem a espera do COMMIT como 55P03 -> 409 `storage-busy` (e2e em `attachments.e2e-spec.ts`).
+  **Proibido** `SET CONSTRAINTS ... IMMEDIATE` e commit em duas fases (`PREPARE TRANSACTION`) em transação que grava
+  nessas tabelas: pegam o advisory lock antes do fim (e seguram travas de linha depois dele). Vários assuntos na mesma transação: sempre **(espaço,
   assunto) em ordem** (`idsWithExecutor`/`idsWithParticipant` ordenam por `space_id, id`; a saída da organização emite
   a saída de cada espaço em ordem de id do espaço). Ordem só pelo id do assunto dá deadlock com o executor perdido.
 - **Mensagens** (`SendMessageUseCase`, `AckMessageUseCase`, `DeleteMessageUseCase`): `POST .../:id/messages`
@@ -1004,7 +1012,8 @@ registra a fonte `conversations`), `hubs` (`HubDirectory`: `ownerOf`,
   "ordem de commit × `sync_version`"):** nas cinco tabelas dos feeds a versão é dada **no COMMIT, na ordem dos commits**
   (migration `ConversationFeedCommitOrder`, helper `addCommitOrderedSyncVersion`, que substituiu a versão por xid de
   `ConversationFeedSafeHorizon`): toda gravação deixa a linha provisória (`sync_pending = true`, trigger
-  `mark_sync_pending`), e o constraint trigger adiado `trg_<tabela>_sync_commit` pega **um** advisory lock de transação
+  `trg_<tabela>_zz_sync_version` -> `mark_sync_pending`; o `zz` o mantém o ÚLTIMO BEFORE trigger: trigger BEFORE novo
+  nessas tabelas precisa ordenar antes dele), e o constraint trigger adiado `trg_<tabela>_sync_commit` pega **um** advisory lock de transação
   (`CONVERSATION_SYNC_FEED.lockKey`) e dá a versão de **uma** sequência (`conversation_sync_version_seq`). O Postgres
   torna o commit visível antes de soltar as travas, então quem viu a versão V viu toda linha confirmada com versão
   <= V: o leitor serve só `sync_pending = false`, sem horizonte, sem segurar página, sem depender de outra transação do
@@ -1014,7 +1023,9 @@ registra a fonte `conversations`), `hubs` (`HubDirectory`: `ownerOf`,
   `sync_commit_in_progress()` (`app.sync_commit` só durante esse UPDATE e `pg_trigger_depth() > 0`), OR nas policies
   restritivas de SELECT/UPDATE e policies permissivas `sync_commit_read`/`sync_commit_update`; nele o
   `mark_sync_pending` mantém a linha inteira e só muda `sync_version`/`sync_pending`. **Policy nova ou recriada nessas
-  tabelas precisa manter o escape**; trigger AFTER novo que trava ou grava precisa de `UPDATE OF` ou
+  tabelas precisa manter o escape** (sem ele o UPDATE do commit muda 0 linhas e a linha fica `sync_pending` para
+  sempre, fora dos feeds; fixado por `test/conversations/commit-order-invariants.e2e-spec.ts`, e o reset e o teardown
+  dos e2e falham se sobrar linha confirmada `sync_pending`: `test/setup/commit-order-check.ts`); trigger AFTER novo que trava ou grava precisa de `UPDATE OF` ou
   `WHEN (NEW.sync_pending)` (como `trg_conversation_participants_sync`), senão roda no commit, depois do advisory lock.
   Os triggers de uso (`UPDATE OF`) não contam duas vezes; os de NOTIFY disparam de novo (o Postgres junta e entrega no
   COMMIT, já com as versões). **Edição:** a mensagem nova é gravada ANTES da lápide da substituída (`sync_version` menor), então uma
@@ -1050,8 +1061,9 @@ registra a fonte `conversations`), `hubs` (`HubDirectory`: `ownerOf`,
   - **Retenção** (`ConversationRetention` + `ConversationRetentionSqlStore`, CLI `npm run conversations:retention`):
     tudo com lápide há mais de 30 dias (`CONVERSATION_RETENTION_DAYS`, relógio do banco; lápide da mensagem/anexo, ou a
     do assunto para tudo dele): corpos zerados (mensagem de assunto com lápide ganha a lápide do assunto, CHECK), anexos
-    `purged` com marca renovada e o cabeçalho zerado; um assunto por transação (assunto FOR UPDATE -> linhas ->
-    contador; nunca o espaço), S3 depois do COMMIT. Os triggers de uso tiram os bytes (mensagem de assunto com lápide
+    `purged` com marca renovada e o cabeçalho zerado; um lote por transação (até `CONVERSATION_RETENTION_BATCH_ROWS` =
+    5.000 corpos + anexos de um assunto, repetido enquanto o lote vier cheio; o cabeçalho no último; assunto FOR UPDATE
+    -> linhas -> contador; nunca o espaço), S3 depois do COMMIT. Os triggers de uso tiram os bytes (mensagem de assunto com lápide
     conta como usada, não lixeira, até a retenção). **Roda com o login DONO** (`typeOrmOptions('migration')`, aberto
     só pelo CLI; a API nunca segura essa conexão): assunto cujo último participante saiu é invisível a todo contexto de
     runtime e o trigger de uso precisa vê-lo; o dono precisa ignorar o RLS (Pendências). **Antes de tudo confere**
