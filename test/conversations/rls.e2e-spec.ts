@@ -542,6 +542,45 @@ describe('conversations: tables and row-level security (e2e, app role)', () => {
     ).rejects.toSatisfy((e) => pgCode(e) === '23514');
   });
 
+  it('the usage counters are written only by their triggers: a direct write by the runtime is refused (42501)', async () => {
+    const s = await seed();
+    const ctx = { organizationId: s.orgA, userId: s.ana };
+    // A message makes the counter row exist (written by the trigger, as the runtime).
+    const [row] = await asApp(
+      ctx,
+      `SELECT space_id, body_bytes::text AS body FROM conversation_space_usage LIMIT 1`,
+    );
+    expect(row).toBeDefined();
+    await expect(
+      asApp(
+        ctx,
+        `UPDATE conversation_space_usage SET body_bytes = 0 WHERE space_id = $1`,
+        [row!.space_id],
+      ),
+    ).rejects.toSatisfy((e) => pgCode(e) === '42501');
+    await expect(
+      asApp(
+        ctx,
+        `INSERT INTO conversation_space_usage (space_id, organization_id) VALUES ($1, $2)
+         ON CONFLICT (space_id) DO UPDATE SET body_bytes = 0`,
+        [row!.space_id, s.orgA],
+      ),
+    ).rejects.toSatisfy((e) => pgCode(e) === '42501');
+    await expect(
+      asApp(
+        ctx,
+        `UPDATE conversation_attachment_usage SET stored = false WHERE organization_id = $1`,
+        [s.orgA],
+      ),
+    ).rejects.toSatisfy((e) => pgCode(e) === '42501');
+    const [after] = await asApp(
+      ctx,
+      `SELECT body_bytes::text AS body FROM conversation_space_usage WHERE space_id = $1`,
+      [row!.space_id],
+    );
+    expect(after!.body).toBe(row!.body);
+  });
+
   it('the executor Hub creates a conversation in the name of its owner; the old executor loses access when replaced', async () => {
     const s = await seed();
     const asHub = hubScope(s.orgA, s.hub);

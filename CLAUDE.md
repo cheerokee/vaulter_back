@@ -934,7 +934,9 @@ registra a fonte `conversations`), `hubs` (`HubDirectory`: `ownerOf`,
   `FOR SHARE` -> assunto `FOR UPDATE` -> grava -> confere (422 `space-storage-full`); criar (pessoa e Hub) também
   confere o uso depois de gravar.
 - **Uso do espaço:** o corpo cifrado conta no uso (spec §4.4.1) por um contador por espaço,
-  `conversation_space_usage`, mantido só pelo trigger `trg_conversation_messages_space_usage` (corpo guardado conta;
+  `conversation_space_usage`, mantido só pelos triggers (escrita direta do runtime: 42501, trigger `trg_<tabela>_guard` com
+  `pg_trigger_depth() < 2`, migration `ConversationUsageWriteGuard`; o GRANT fica porque os triggers são SECURITY INVOKER;
+  o mesmo em `conversation_attachment_usage`) `trg_conversation_messages_space_usage` (corpo guardado conta;
   com lápide, conta também como lixeira; corpo zerado pela retenção sai). É contador e não `SUM` porque as mensagens só
   são visíveis a participantes: o Gestor e o backup somariam só os assuntos deles. `ConversationStorageUsage` registra
   a fonte na porta `SpaceStorageUsage` (soma das fontes, veja `spaces`). **Travas do envio:** espaço `FOR SHARE`
