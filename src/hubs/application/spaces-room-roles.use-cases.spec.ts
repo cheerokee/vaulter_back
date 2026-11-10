@@ -1,3 +1,4 @@
+import type { HubExecutorLostHooks } from '../../shared/application/hub-executor-lost-hooks.js';
 import type { AuditLog } from '../../organizations/application/audit-log.js';
 import type { OrganizationDirectory } from '../../organizations/application/organization-directory.js';
 import {
@@ -118,6 +119,7 @@ const directory = {
   personalOrganizationIdOf: vi.fn(),
 };
 const audit = { record: vi.fn() };
+const executorLost = { run: vi.fn() };
 const personSessions = {
   revokeLostAccess: vi.fn(async (hubIds: Iterable<string>) => {
     calls.push(`revokeLostAccess:${[...hubIds].join(',')}`);
@@ -323,10 +325,16 @@ describe('RemoveHubSpaceUseCase', () => {
       as<HubSpaceRepository>(hubSpaces),
       as<SpaceRoomService>(room),
       as<AuditLog>(audit),
+      as<HubExecutorLostHooks>(executorLost),
       as<UnitOfWork>(uow),
     );
 
   it('the owner removes any space and the Room of that space falls (trusted, in its org)', async () => {
+    executorLost.run.mockImplementation(
+      async (c: { reason: string; spaceId: string }) => {
+        calls.push(`executorLost:${c.reason}:${c.spaceId}`);
+      },
+    );
     await useCase().execute(actor(OWNER), { hubId: HUB_ID, spaceId: SPACE });
     expect(spaceAccess.requireSpacePermission).not.toHaveBeenCalled();
     expect(hubSpaces.remove).toHaveBeenCalledWith(HUB_ID, SPACE, ORG);
@@ -337,8 +345,17 @@ describe('RemoveHubSpaceUseCase', () => {
     expect(calls).toEqual([
       `removeSpace:${HUB_ID}`,
       'revokeRoom:[object Object]',
+      `executorLost:space_removed_from_hub:${SPACE}`,
       'audit:[object Object]',
     ]);
+    expect(executorLost.run).toHaveBeenCalledWith({
+      hubId: HUB_ID,
+      spaceId: SPACE,
+      organizationId: ORG,
+      reason: 'space_removed_from_hub',
+      actorId: OWNER,
+      now: expect.any(Date),
+    });
   });
 
   it('anyone else must be the space Gestor; a space not on the hub is 404', async () => {
@@ -574,6 +591,7 @@ const administration = () =>
     as<OrganizationDirectory>(directory),
     as<AuditLog>(audit),
     as<HubPersonSessions>(personSessions),
+    as<HubExecutorLostHooks>(executorLost),
     as<UnitOfWork>(uow),
   );
 
@@ -619,6 +637,11 @@ describe('DeregisterHubUseCase', () => {
     room.revokeAllRoomForHub.mockImplementation(log('revokeAllRoom', [SPACE]));
     hubRoles.removeAllOfHub.mockImplementation(log('removeRoles', 3));
     hubs.save.mockImplementation(log('saveHub'));
+    executorLost.run.mockImplementation(
+      async (c: { reason: string; organizationId: string; spaceId: null }) => {
+        calls.push(`executorLost:${c.reason}:${c.organizationId}:${c.spaceId}`);
+      },
+    );
     await useCase().execute(actor(OWNER), HUB_ID);
     expect(calls).toEqual([
       `requireOwner:${HUB_ID}`,
@@ -632,6 +655,8 @@ describe('DeregisterHubUseCase', () => {
       `removeSpaces:${ORG}`,
       `removeSpaces:${ORG_B}`,
       'revokeAllRoom:[object Object]',
+      `executorLost:hub_deregistered:${ORG}:null`,
+      `executorLost:hub_deregistered:${ORG_B}:null`,
       `removeRoles:${HUB_ID}`,
       'saveHub:[object Object]',
       `revokeAllSessions:${HUB_ID}`,

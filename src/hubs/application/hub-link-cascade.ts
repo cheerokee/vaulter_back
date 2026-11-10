@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { AuditLog } from '../../organizations/application/audit-log.js';
+import { HubExecutorLostHooks } from '../../shared/application/hub-executor-lost-hooks.js';
 import { UnitOfWork } from '../../shared/infra/db/unit-of-work.js';
 import { SpaceRoomService } from '../../spaces/application/space-room.service.js';
 import type { HubOrganizationLink } from '../domain/hub-organization-link.js';
@@ -14,10 +15,11 @@ export type UnlinkReason = 'unlinked' | 'owner_left_organization';
 // (`HubRepository.lockForShare`) e a linha do vínculo travada FOR UPDATE (`HubOrganizationRepository.lockForUpdate`),
 // nessa ordem. A linha travada FOR UPDATE é o que torna `revokeRoomForOrganization` livre de deadlock: `grantRoom`
 // passa pelo `confirmHubLink` (FOR SHARE nesta linha) antes de travar o espaço.
-// Em ordem (Hub -> vínculo -> hub_space -> espaço):
+// Em ordem (Hub -> vínculo -> hub_space -> espaço -> assuntos):
 // 1. o vínculo vira `revoked` (o Hub o recebe como lápide na sincronização);
 // 2. lápide nos espaços dessa organização no Hub;
-// 3. a Sala dessa organização cai: lápide no papel e nas cópias do Hub, troca de chave pendente;
+// 3. a Sala dessa organização cai: lápide no papel e nas cópias do Hub, troca de chave pendente; depois, o gancho
+//    `HubExecutorLostHooks` (`organization_unlinked`): o `conversations` tira o Hub de executor dos assuntos dela;
 // 4. lápide nos papéis de Hub de quem ficou sem nenhuma organização vinculada (no contexto do Hub, que só grava
 //    lápide em papel atribuível);
 // 5. auditoria na organização desvinculada (nenhuma leva cópia trancada).
@@ -29,6 +31,7 @@ export class HubLinkCascade {
     private readonly hubRoles: HubRoleRepository,
     private readonly room: SpaceRoomService,
     private readonly audit: AuditLog,
+    private readonly executorLost: HubExecutorLostHooks,
     private readonly uow: UnitOfWork,
   ) {}
 
@@ -48,6 +51,14 @@ export class HubLinkCascade {
       organizationId,
       actorId: input.actorId,
       reason: 'hub_unlinked',
+    });
+    await this.executorLost.run({
+      hubId,
+      organizationId,
+      spaceId: null,
+      reason: 'organization_unlinked',
+      actorId: input.actorId,
+      now: new Date(),
     });
     const usersWithoutLink = await this.uow.withContext({ hubId }, () =>
       this.hubRoles.removeUsersWithoutLinkedOrg(hubId),

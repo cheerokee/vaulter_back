@@ -1,3 +1,4 @@
+import type { HubExecutorLostHooks } from '../../shared/application/hub-executor-lost-hooks.js';
 import type { AuditLog } from '../../organizations/application/audit-log.js';
 import type { OrganizationAccess } from '../../organizations/application/organization-access.js';
 import type { OrganizationDirectory } from '../../organizations/application/organization-directory.js';
@@ -87,6 +88,7 @@ const links = { lockForUpdate: vi.fn(), upsert: vi.fn() };
 const linkCodes = { consume: vi.fn(), expireStale: vi.fn(), create: vi.fn() };
 const codes = { hashLinkCode: vi.fn(), newCode: vi.fn() };
 const audit = { record: vi.fn() };
+const executorLost = { run: vi.fn() };
 const personSessions = {
   revokeLostAccess: vi.fn(async (hubIds: Iterable<string>) => {
     calls.push(`revokeLostAccess:${[...hubIds].join(',')}`);
@@ -561,7 +563,13 @@ describe('HubLinkCascade', () => {
       as<HubRoleRepository>(hubRoles),
       as<SpaceRoomService>(room),
       as<AuditLog>(audit),
+      as<HubExecutorLostHooks>(executorLost),
       as<UnitOfWork>(uow),
+    );
+    executorLost.run.mockImplementation(
+      async (c: { reason: string; organizationId: string; spaceId: null }) => {
+        calls.push(`executorLost:${c.reason}:${c.organizationId}:${c.spaceId}`);
+      },
     );
     hubSpaces.removeAllOfOrganization.mockImplementation(
       log('removeSpaces', [SPACE]),
@@ -587,6 +595,7 @@ describe('HubLinkCascade', () => {
       'upsert:[object Object]',
       `removeSpaces:${HUB_ID}`,
       'revokeRoom:[object Object]',
+      `executorLost:organization_unlinked:${ORG}:null`,
       `withContext:${JSON.stringify({ hubId: HUB_ID })}`,
       `removeRoles:${HUB_ID}`,
       'audit:[object Object]',
@@ -634,6 +643,7 @@ describe('HubLinkCascade', () => {
       as<HubRoleRepository>(hubRoles),
       as<SpaceRoomService>(room),
       as<AuditLog>(audit),
+      as<HubExecutorLostHooks>(executorLost),
       as<UnitOfWork>(uow),
     );
     const rejected = pendingByMember();

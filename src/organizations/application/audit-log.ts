@@ -38,7 +38,11 @@ export type AuditAction =
   | 'hub.space.removed'
   | 'hub.room.granted'
   | 'hub.room.revoked'
-  | 'hub.role.changed';
+  | 'hub.role.changed'
+  | 'conversation.shared'
+  | 'conversation.participant_removed'
+  | 'conversation.executor_changed'
+  | 'conversation.executor_lost';
 
 export type AuditRecord = {
   organizationId: string;

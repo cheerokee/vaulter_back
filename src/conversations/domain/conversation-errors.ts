@@ -73,3 +73,10 @@ export const attachmentTooLarge = (maxBytes: number) =>
     'The encrypted attachment is too large.',
     { maxBytes },
   );
+
+/** The device id is already used by another conversation (or by one the caller can no longer see). */
+export const conversationIdConflict = () =>
+  new ConflictError(
+    'conversation-id-conflict',
+    'Another conversation already uses this id.',
+  );

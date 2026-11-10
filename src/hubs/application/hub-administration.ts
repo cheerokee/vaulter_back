@@ -6,6 +6,7 @@ import {
   auditActorFields,
   type AuditActor,
 } from '../../shared/application/audit-actor.js';
+import { HubExecutorLostHooks } from '../../shared/application/hub-executor-lost-hooks.js';
 import { UnitOfWork } from '../../shared/infra/db/unit-of-work.js';
 import { SpaceRoomService } from '../../spaces/application/space-room.service.js';
 import { HubOrganizationRepository } from '../domain/hub-organization.repository.js';
@@ -40,14 +41,15 @@ export type HubAdministrationSummary = {
 // 2. lápide em todos os vínculos vivos (pendente/aprovado viram revogado), organização por organização;
 // 3. lápide nos espaços do Hub em TODAS as organizações a que ele já foi vinculado;
 // 4. a Sala cai em todas essas organizações (vínculos revogados/recusados/com lápide inclusive: a linha da Sala fica
-//    no RLS de cada organização), com lápide nas cópias do Hub e troca de chave pendente;
+//    no RLS de cada organização), com lápide nas cópias do Hub e troca de chave pendente; depois, o gancho
+//    `HubExecutorLostHooks` (`hub_deregistered`) roda uma vez por organização (o `conversations` tira o executor);
 // 5. lápide em todas as atribuições do escopo do Hub, hub_owner e hub_room inclusive;
 // 6. lápide no próprio Hub (o token de Hub passa a ser recusado) e `hub.deregistered` na organização pessoal do
 //    dono; cada organização com vínculo vivo recebe `hub.organization.revoked`;
 // 7. toda sessão de pessoa presa ao Hub cai (`hub_access_lost`, dono inclusive). Sem advisory: o login pelo Hub
 //    segura o Hub FOR SHARE, que o FOR UPDATE do passo 1 serializa.
 // Locks: Hub (FOR UPDATE) -> vínculos (em ordem de organização) -> hub_space -> espaços (em ordem de id, por
-// organização). Hub inexistente, desregistrado ou id malformado: `hub-not-found`.
+// organização) -> o que os ganchos de executor travarem (assuntos). Hub inexistente, desregistrado ou id malformado: `hub-not-found`.
 @Injectable()
 export class HubAdministration {
   constructor(
@@ -59,6 +61,7 @@ export class HubAdministration {
     private readonly directory: OrganizationDirectory,
     private readonly audit: AuditLog,
     private readonly personSessions: HubPersonSessions,
+    private readonly executorLost: HubExecutorLostHooks,
     private readonly uow: UnitOfWork,
   ) {}
 
@@ -98,6 +101,17 @@ export class HubAdministration {
           organizationIds: everLinked,
           auditMetadata: origin.metadata,
         });
+        // Depois da Sala (espaços já travados): quem assina trava as próprias linhas (assuntos) por último.
+        for (const organizationId of everLinked) {
+          await this.executorLost.run({
+            hubId,
+            organizationId,
+            spaceId: null,
+            reason: 'hub_deregistered',
+            actorId: origin.userId,
+            now,
+          });
+        }
         await this.hubRoles.removeAllOfHub(hubId);
         hub.deregister(now);
         await this.hubs.save(hub);

@@ -427,6 +427,28 @@ Todas são atômicas: se algo falha, nada muda.
 Outras rotas do dono: `GET /hubs` (Hubs que a pessoa vê, por cursor), `GET /hubs/:id` e `PATCH /hubs/:id` com
 `{ "name" }`.
 
+## Assuntos (conversas): o Hub como executor
+
+Primeira parte do Hub como executor dos assuntos (spec `2026-11-09-conversations-design.md`; o feed de mudanças, a
+sondagem longa e as mensagens/`ack` chegam nas próximas tarefas e serão descritos aqui). Rotas com o token de Hub:
+
+- `POST /hub/conversations` `{ id, spaceId, ownerUserId, state?, encryptedHeader, grants: [{ userId, wrappedKey }],
+  hubWrappedKey }`: o Hub abre um assunto (o "aviso", `state` padrão `aviso`) em nome de uma pessoa com papel no Hub e
+  membro do espaço, sendo ele o executor. `grants` = a versão 1 da chave trancada para cada participante: a pessoa e,
+  se não for ela, o **dono do Hub** (regra do executor). Espaço que não está no Hub, vínculo não aprovado ou dono do
+  Hub fora das `grants`: 422 `executor-invalid`; participante fora do espaço: 422 `participant-not-space-member`.
+  Mandar de novo o mesmo `id` devolve o mesmo assunto (200).
+- `GET /hub/conversations/:id`: metadado, participantes e as cópias da chave do próprio Hub (todas as versões).
+- `PUT /hub/conversations/:id/state` `{ state }`: os estados de trabalho (`trabalhando`, `na_fila`, `pede_sim`,
+  `esperando_pc`, `concluido`, `aviso`); `arquivado` é do dono (403 `not-conversation-owner`).
+- `POST /hub/conversations/:id/keys` `{ version, grants: [{ userId, wrappedKey }], hubGrants: [{ hubId, wrappedKey }] }`:
+  com a troca pendente (`keyRotationRequired`, alguém saiu), o Hub pode fazer a troca: versão atual + 1 para
+  **exatamente** os participantes vivos e ele mesmo (409 `key-rotation-mismatch` com os ids faltando/sobrando).
+
+O Hub **deixa de ser executor** (404 `conversation-not-found` dali em diante, cópias dele com lápide) quando é
+desregistrado, a organização é desvinculada, o espaço sai dele ou o dono dele deixa de participar do assunto. As
+mensagens pendentes ficam esperando o executor novo.
+
 ## 13. Reset de fábrica
 
 Um aparelho desregistrado **não pode ser reivindicado de novo com as mesmas chaves**: a apresentação dá 409
@@ -454,6 +476,9 @@ Assim nada do dono anterior chega a um dono novo.
 | `POST /hub/spaces/:spaceId/objects/delete` | 120/h | Hub |
 | `GET /hub/spaces/:spaceId/objects` | 1200/h | Hub |
 | `POST /hub/spaces/:spaceId/objects/:objectId/versions/:versionId/download` | 12 mil/h | Hub |
+| `POST /hub/conversations` | 120/h | Hub |
+| `PUT /hub/conversations/:id/state` | 600/h | Hub |
+| `POST /hub/conversations/:id/keys` | 30/h | Hub |
 | demais rotas | 300/min somando todas | IP |
 
 Estourou: 429 `too-many-requests` com `Retry-After` (segundos).

@@ -125,6 +125,28 @@ export class SpaceAccess {
     return { space, roleKey };
   }
 
+  /**
+   * Whether a THIRD person is a member of the space (any space role; every role has `memory.read`), read in the
+   * organization scope. Trusted read, no authorization: the caller already resolved the space through its own actor.
+   * Callers that act on the answer hold the space lock (`lockAsMember`, even `share`): a removal from the space locks
+   * it FOR UPDATE before tombstoning the role, so the answer holds until their commit.
+   */
+  async isSpaceMember(
+    organizationId: string,
+    spaceId: string,
+    userId: string,
+  ): Promise<boolean> {
+    if (![organizationId, spaceId, userId].every((id) => validate(id))) {
+      return false;
+    }
+    return (await this.roles.roleOf(organizationId, spaceId, userId)) !== null;
+  }
+
+  /** People of the space (live space-scope roles, no Room hubs), sorted. Trusted read, like `isSpaceMember`. */
+  spaceMemberIds(organizationId: string, spaceId: string): Promise<string[]> {
+    return this.roles.activeMemberIds(organizationId, spaceId);
+  }
+
   /** Admin-only operations: resolves the space through an organization where the user holds `permission`. */
   async requireOrgPermissionForSpace(
     spaceId: string,

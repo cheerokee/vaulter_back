@@ -37,9 +37,10 @@ export abstract class ConversationRepository {
     spaceId: string,
     userId: string,
   ): Promise<string[]>;
-  /** Live conversations of the organization whose executor is the Hub, ascending by id. */
+  /** Live conversations of the organization whose executor is the Hub (only of `spaceId` when given), ascending by id. */
   abstract idsWithExecutor(
     scope: ConversationScope,
     hubId: string,
+    spaceId?: string | null,
   ): Promise<string[]>;
 }

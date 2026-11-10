@@ -78,6 +78,15 @@ export const RATE_LIMITS = {
    */
   backupList: { limit: 1200, ttl: HOUR },
   backupDownload: { limit: 12_000, ttl: HOUR },
+  /**
+   * Assuntos (módulo `conversations`): por usuário (`userIdTracker`) nas rotas `/spaces/:spaceId/conversations/...` e
+   * por Hub (`hubIdTracker`) nas `/hub/conversations/...`, contador próprio por rota. Criar: 120/h (o Hub cria um
+   * "aviso" por evento). Troca de chave: 30/h (cada uma é uma versão para sempre, e pôr participante/trocar executor
+   * mandam todas as versões num pedido só). O resto do ciclo (compartilhar, sair, tirar, estado, executor): 600/h.
+   */
+  conversationCreate: { limit: 120, ttl: HOUR },
+  conversationKeyRotation: { limit: 30, ttl: HOUR },
+  conversationChange: { limit: 600, ttl: HOUR },
 } as const;
 
 /** Nome do throttler extra, cobrado só nas rotas marcadas com @ThrottleByEmail(). */

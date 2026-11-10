@@ -1,4 +1,5 @@
 import { Global, Module } from '@nestjs/common';
+import { HubExecutorLostHooks } from './hub-executor-lost-hooks.js';
 import { InvitationHooks } from './invitation-hooks.js';
 import { MemberRemovedHooks } from './member-removed-hooks.js';
 import { RegistrationHooks } from './registration-hooks.js';
@@ -13,6 +14,7 @@ import { SpaceQuotaHooks } from './space-quota-hooks.js';
     InvitationHooks,
     SpaceMemberLeftHooks,
     SpaceQuotaHooks,
+    HubExecutorLostHooks,
   ],
   exports: [
     RegistrationHooks,
@@ -20,6 +22,7 @@ import { SpaceQuotaHooks } from './space-quota-hooks.js';
     InvitationHooks,
     SpaceMemberLeftHooks,
     SpaceQuotaHooks,
+    HubExecutorLostHooks,
   ],
 })
 export class SharedApplicationModule {}

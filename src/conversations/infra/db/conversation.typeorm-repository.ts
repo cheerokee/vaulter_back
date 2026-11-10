@@ -1,7 +1,10 @@
 import { Injectable } from '@nestjs/common';
-import { DataSource } from 'typeorm';
+import { DataSource, QueryFailedError } from 'typeorm';
 import type { ConversationScope } from '../../domain/conversation-actor.js';
-import { conversationNotFound } from '../../domain/conversation-errors.js';
+import {
+  conversationIdConflict,
+  conversationNotFound,
+} from '../../domain/conversation-errors.js';
 import { ConversationRepository } from '../../domain/conversation.repository.js';
 import type { Conversation } from '../../domain/conversation.js';
 import { ConversationParticipantTypeormEntity } from './conversation-participant.entity.js';
@@ -21,11 +24,26 @@ export class ConversationTypeormRepository extends ConversationRepository {
 
   // A conversa nasce com participant_user_ids = [dono] (trigger) e a participação do dono entra na mesma transação,
   // então a lista derivada e as participações nunca divergem.
+  // Id já usado (por um assunto que o escopo nem vê): 409 `conversation-id-conflict`, nunca o 409 genérico. O erro
+  // nasce dentro do savepoint do escopo, que é desfeito; quem chama não segue (o erro sobe).
   async create(scope: ConversationScope, c: Conversation): Promise<void> {
     await inScope(this.dataSource, scope, async (m) => {
-      await m
-        .getRepository(ConversationTypeormEntity)
-        .insert(conversationToInsert(c));
+      try {
+        await m
+          .getRepository(ConversationTypeormEntity)
+          .insert(conversationToInsert(c));
+      } catch (e) {
+        if (
+          e instanceof QueryFailedError &&
+          (e.driverError as { code?: string; constraint?: string }).code ===
+            '23505' &&
+          (e.driverError as { constraint?: string }).constraint ===
+            'PK_conversations'
+        ) {
+          throw conversationIdConflict();
+        }
+        throw e;
+      }
       await m.getRepository(ConversationParticipantTypeormEntity).insert({
         organizationId: c.organizationId,
         conversationId: c.id,
@@ -102,13 +120,15 @@ export class ConversationTypeormRepository extends ConversationRepository {
   async idsWithExecutor(
     scope: ConversationScope,
     hubId: string,
+    spaceId: string | null = null,
   ): Promise<string[]> {
     const rows: { id: string }[] = await inScope(this.dataSource, scope, (m) =>
       m.query(
         `SELECT id FROM conversations
           WHERE organization_id = $1 AND executor_hub_id = $2 AND deleted_at IS NULL
+            AND ($3::uuid IS NULL OR space_id = $3::uuid)
           ORDER BY id`,
-        [scope.organizationId, hubId],
+        [scope.organizationId, hubId, spaceId],
       ),
     );
     return rows.map((r) => r.id);

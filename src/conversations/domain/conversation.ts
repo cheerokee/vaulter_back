@@ -1,9 +1,13 @@
-import { DomainValidationError } from '../../shared/domain/errors.js';
+import {
+  ConflictError,
+  DomainValidationError,
+} from '../../shared/domain/errors.js';
 import { Entity } from '../../shared/domain/entity.js';
 import type { ConversationActor } from './conversation-actor.js';
 import {
   conversationKeyRotationRequired,
   conversationKeyVersionStale,
+  conversationNotFound,
   headerTooLarge,
   notConversationOwner,
 } from './conversation-errors.js';
@@ -173,6 +177,25 @@ export class Conversation extends Entity<ConversationProps> {
     if (keyVersion !== this.props.currentKeyVersion) {
       throw conversationKeyVersionStale(this.props.currentKeyVersion);
     }
+  }
+
+  /**
+   * Who may rotate the key (spec §4.2): with a pending rotation, any live participant or the executor (the queue does
+   * not stop); without one, only the owner (manual, e.g. a suspected leak), else 409 `key-rotation-not-required`
+   * (each rotation is a version for good). Neither participant nor executor: 404.
+   */
+  assertRotationAllowed(actor: ConversationActor): void {
+    const inside =
+      actor.kind === 'user'
+        ? this.isParticipant(actor.userId)
+        : this.isExecutor(actor.hubId);
+    if (!inside) throw conversationNotFound();
+    if (this.props.keyRotationRequired) return;
+    if (actor.kind === 'user' && this.isOwner(actor.userId)) return;
+    throw new ConflictError(
+      'key-rotation-not-required',
+      'No rotation is pending: only the owner rotates the key manually.',
+    );
   }
 
   /** Accepts only the immediate next version; clears the pending-rotation flag. */

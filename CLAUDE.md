@@ -491,7 +491,8 @@ consulta só de leitura (veja Sincronização).
 - **Ordem de locks dos Hubs:** linha do Hub (`HubRepository.lockForShare`; `lockForUpdate` no desregistro;
   `lockForStorage` = `FOR NO KEY UPDATE` ao instalar espaço e no aumento de espaço, serializando quem mexe no que está
   instalado contra a capacidade; sempre o primeiro lock) -> linha do vínculo (`HubOrganizationRepository.lockForUpdate`; `lockForShare` na liberação da Sala
-  e ao pôr espaço) -> `hub_space` -> espaço -> Gestores. Desvincular segura o vínculo `FOR UPDATE` antes de
+  e ao pôr espaço) -> `hub_space` -> espaço -> Gestores -> assuntos (`conversations`, sempre por último, em ordem de
+  id; o gancho `HubExecutorLostHooks` roda depois da Sala no desregistro, no desvínculo e ao tirar espaço). Desvincular segura o vínculo `FOR UPDATE` antes de
   `revokeRoomForOrganization`. O gancho de saída do espaço (`hubs.space-member-left`) roda com o espaço já travado e
   **só lê** vínculos. O gancho de saída da organização do `hubs` tem duas fases em `MemberRemovedHooks`: `order: -10`
   só trava (Hub -> vínculos do dono com a organização -> linhas de hub_space), antes do `spaces`; `order: +10`
@@ -839,6 +840,39 @@ mesmo commit).
   inicial por Bluetooth/idioma do Hub, índice `(space_id, updated_at)`, rota de download em lote, limpeza física do
   índice, agendar `storage:reconcile`, aviso de franquia perto do fim, endpoint S3 público).
 
+## Módulo `conversations`
+`src/conversations/` (assuntos: participantes, executor, chave própria por versão; mensagens, anexos e sincronização
+vêm nas próximas tarefas do plano `docs/superpowers/plans/2026-11-09-conversations.md`). Spec:
+`docs/superpowers/specs/2026-11-09-conversations-design.md`; formato em `docs/crypto/conversations.md`; RLS (participante
+vivo ou executor) e "quem sai grava por último" no cabeçalho da migration `CreateConversations`. Depende de `spaces`
+(`SpaceAccess`, inclusive `isSpaceMember`/`spaceMemberIds`), `hubs` (`HubDirectory`: `ownerOf`,
+`installedSpaceOrganization`, `lockExecutorCandidate`; `HubAccess`) e `organizations` (`AuditLog`); ninguém importa
+`conversations`.
+- **Rotas:** token de usuário em `/spaces/:spaceId/conversations` (`POST` cria; `/:id` lê; `/:id/participants` e
+  `/:id/participants/space` compartilham; `DELETE /:id/participants/:userId` tira; `/:id/leave`; `PUT /:id/state`;
+  `PUT /:id/executor`; `POST /:id/keys`): a organização vem do espaço; não membro do espaço, assunto de outro espaço,
+  inexistente ou sem participar = o mesmo 404 `conversation-not-found`. Token de Hub em `/hub/conversations` (`POST`
+  cria o "aviso" em nome de uma pessoa; `/:id`; `PUT /:id/state`; `POST /:id/keys`): o Hub acha o assunto nas
+  organizações com vínculo aprovado em que é executor. Criar com o mesmo `id` de novo = 200 com o mesmo assunto.
+- **Poderes:** dono tira participante, troca executor, arquiva/reabre (`arquivado`); executor muda os estados de
+  trabalho; qualquer participante compartilha e sai (403 `not-conversation-owner` para o resto). Executor = Hub cujo
+  dono participa, com o espaço instalado (`hub_space` vivo, vínculo aprovado); 422 `executor-invalid`. Trocar executor
+  manda as cópias de todas as versões para o Hub novo e deixa a troca de chave pendente. Troca de chave: versão atual + 1
+  para **exatamente** os participantes vivos e o executor (409 `key-rotation-mismatch` com os ids); com troca pendente,
+  qualquer participante ou o executor; sem ela, só o dono (409 `key-rotation-not-required`).
+- **Saída** (`ConversationDeparture`, usada por sair, tirar e pelo gancho `conversations.space-member-left`): dono novo
+  (participante mais antigo), executor sai junto se quem sai é dono do Hub, lápide no assunto quando sai o último,
+  troca pendente, e a lápide da participação de quem sai é **a última gravação** (depois dela o assunto some no RLS).
+- **Executor perdido** (`HubExecutorLostHooks`, em `src/shared/application/`, emitido pelo `hubs` no desregistro, no
+  desvínculo/`HubLinkCascade` e em `RemoveHubSpace`): `executorHubId` nulo, lápide nas cópias do Hub, troca pendente,
+  mensagens `pending` continuam; escrito no contexto do **dono do assunto** (nunca no do Hub: 42501), auditado
+  `conversation.executor_lost`. Auditoria também de `conversation.shared`, `conversation.participant_removed`,
+  `conversation.executor_changed` (só ids).
+- **Ordem de locks:** Hub -> vínculo -> hub_space (FOR SHARE, `lockExecutorCandidate`) -> espaço (FOR SHARE ao criar e
+  compartilhar) -> assunto (FOR UPDATE) -> participações.
+- **Testes:** e2e em `test/conversations/` com a cripto real (`test/support/conversation-crypto.ts`) e os helpers de
+  `test/support/conversations-kit.ts` (criar/compartilhar/trocar chave pela HTTP, pessoas em lote, estado cru).
+
 ## Banco de dados (TypeORM + migrations)
 - **Pool:** o do driver `pg`, com tamanho explícito `DB_POOL_MAX_CONNECTIONS` (10 por instância; instâncias × 10 abaixo
   do `max_connections` do banco) e `connectionTimeoutMillis` = `DB_POOL_CONNECTION_TIMEOUT_MS` (10 s), ambos em
@@ -1033,6 +1067,9 @@ Os valores do `.env.example` para os segredos são **só de desenvolvimento**; p
   | `POST .../objects/delete` (apagar objetos do backup, as mesmas duas formas) | 120/h por Hub / por usuário |
   | `GET /hub/spaces/:spaceId/objects` e `GET /spaces/:spaceId/backup/objects` (listar o índice do backup) | 1200/h por Hub (`hubIdTracker`) / por usuário (`userIdTracker`), contador próprio por rota (restaurar: ~50 páginas de 1000 para 50 mil objetos) |
   | `POST .../objects/:objectId/versions/:versionId/download` (URL de download, as mesmas duas formas) | 12 mil/h por Hub / por usuário (uma URL por versão: 50 mil objetos em ~4 h) |
+  | `POST /spaces/:spaceId/conversations` e `POST /hub/conversations` (criar assunto) | 120/h por usuário (`userIdTracker`) / por Hub (`hubIdTracker`), contador próprio por rota |
+  | `POST .../conversations/:id/keys` (troca da chave do assunto, as duas formas) | 30/h por usuário / por Hub |
+  | compartilhar, sair, tirar, estado e executor do assunto (`/spaces/:spaceId/conversations/:id/...`, `PUT /hub/conversations/:id/state`) | 600/h por usuário / por Hub, contador próprio por rota |
   Rota com `@Throttle` próprio tem contador próprio (por rota); `@ThrottleGroup(THROTTLE_GROUPS.x, tracker?)`
   (`throttling.decorators.ts`) faz rotas dividirem um contador (chave = grupo + tracker, sem a rota); cada grupo é
   UMA constante com nome e limite em `THROTTLE_GROUPS` (`rate-limits.ts`), e o decorator recusa o mesmo grupo com
