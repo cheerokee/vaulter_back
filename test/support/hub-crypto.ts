@@ -103,7 +103,7 @@ export type BackupObjectContext = {
 const BACKUP_FORMAT_VERSION = 1;
 const BACKUP_NONCE_BYTES = 24;
 
-function uuidBytes(uuid: string): Uint8Array {
+export function uuidBytes(uuid: string): Uint8Array {
   const hex = uuid.replaceAll('-', '');
   if (!/^[0-9a-fA-F]{32}$/.test(hex)) throw new Error('invalid uuid');
   return Uint8Array.from(hex.match(/../g)!, (h) => parseInt(h, 16));
