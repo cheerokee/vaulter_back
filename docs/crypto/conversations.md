@@ -107,8 +107,8 @@ monta o `ad` com `Buffer` sem passar pelos helpers, e os dois resultados coincid
 ## Receita do Hub em Python
 
 PyNaCl expõe a mesma primitiva (`nacl.bindings.crypto_aead_xchacha20poly1305_ietf_*`). Receita escrita a partir do
-formato acima. **PyNaCl não estava instalado quando este documento foi escrito**, então a cifragem em si ainda não
-foi rodada com ele (o vetor foi conferido com libsodium em Node); confira com o vetor ao implementar:
+formato acima. **Conferida em 10/11/2026 com PyNaCl** (no `vaulter-hub-back`): cabeçalho, mensagem e anexo saem
+idênticos aos três vetores acima (46 bytes cada) e o decrypt devolve `"hello"`:
 
 ```python
 import struct, uuid
