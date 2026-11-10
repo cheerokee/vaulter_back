@@ -80,10 +80,19 @@ const IN_SCOPE = (reader: ConversationFeedReader, alias: string) =>
        AND ($7::uuid IS NULL OR ${alias}.executor_hub_id = $7::uuid)`
     : `${alias}.executor_hub_id = $1::uuid AND $7::uuid IS NULL`;
 
+// A LIVE conversation in scope. Children of a tombstoned conversation never reach the feeds (a moved conversation keeps
+// its participants, copies and executor): its own tombstone is the whole signal, also on a `since=0` resync.
 const CONVERSATION_OF = (reader: ConversationFeedReader, table: string) =>
   `EXISTS (SELECT 1 FROM conversations c
             WHERE c.id = ${table}.conversation_id AND c.organization_id = ${table}.organization_id
-              AND ${IN_SCOPE(reader, 'c')})`;
+              AND c.deleted_at IS NULL AND ${IN_SCOPE(reader, 'c')})`;
+
+// The reader still gets the conversation's tombstone itself (in scope, tombstoned): skip its children. Rows whose
+// conversation the reader no longer sees (left, executor lost) still go, as the reader's own tombstones.
+const NOT_UNDER_TOMBSTONE = (reader: ConversationFeedReader, table: string) =>
+  `NOT EXISTS (SELECT 1 FROM conversations c
+                WHERE c.id = ${table}.conversation_id AND c.organization_id = ${table}.organization_id
+                  AND c.deleted_at IS NOT NULL AND ${IN_SCOPE(reader, 'c')})`;
 
 const PAGE = (table: string) =>
   `${table}.organization_id = $4 AND ${table}.sync_version > $2::bigint
@@ -209,7 +218,7 @@ async function readOrganization(
   // through a session bound to a Hub (only what that Hub executes).
   const ownParticipation =
     reader.kind === 'user'
-      ? `($7::uuid IS NULL AND p.user_id = $1::uuid) OR `
+      ? `($7::uuid IS NULL AND p.user_id = $1::uuid AND ${NOT_UNDER_TOMBSTONE(reader, 'p')}) OR `
       : '';
   out.push(
     await batch(
@@ -235,7 +244,7 @@ async function readOrganization(
       `SELECT g.id, g.conversation_id, g.key_version, g.user_id, g.hub_id, g.wrapped_key,
               g.deleted_at IS NOT NULL AS deleted, ${VERSION('g')}
          FROM conversation_key_grants g
-        WHERE ${PAGE('g')} AND ${ownCopy} = $1::uuid
+        WHERE ${PAGE('g')} AND ${ownCopy} = $1::uuid AND ${NOT_UNDER_TOMBSTONE(reader, 'g')}
           AND ($7::uuid IS NULL OR ${CONVERSATION_OF(reader, 'g')})
         ORDER BY g.sync_version LIMIT $3`,
       (r) =>

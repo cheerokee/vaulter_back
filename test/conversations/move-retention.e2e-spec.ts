@@ -368,6 +368,53 @@ describe('conversations: move, retention and trash (e2e)', () => {
       );
     });
 
+    it('after a move, both feeds carry only the tombstone of the old conversation, also on a full resync (its executor and copies stay)', async () => {
+      const old = await open(olivia, spaceA, [ana], { executor: true });
+      await send(olivia, spaceA, old, 'antes de mover');
+      const moved = await k.create(olivia, spaceB, {
+        movedFrom: { spaceId: spaceA, conversationId: old.id },
+      });
+      await expectStatus(Promise.resolve(moved.res), 201);
+      await expectStatus(move(olivia, spaceA, old.id, spaceB, moved.id), 204);
+      // The tombstoned conversation keeps its executor and the hub's live copy (nothing cleared it).
+      expect(await conversationRow(old.id)).toMatchObject({
+        deleted: true,
+        executor_hub_id: casa.hubId,
+      });
+
+      type Item = {
+        type: string;
+        deleted: boolean;
+        data: Record<string, unknown>;
+      };
+      const resync = async (token: string, path: string) =>
+        (
+          await expectStatus(
+            http()
+              .get(path)
+              .query({ conversationId: old.id, since: 0 })
+              .set(bearer(token)),
+            200,
+          )
+        ).body.items as Item[];
+      const onlyTombstone = [['conversation', true, { id: old.id }]];
+      const shape = (items: Item[]) =>
+        items.map((i) => [i.type, i.deleted, i.data]);
+      expect(
+        shape(
+          await resync(
+            await h.authenticate(casa),
+            '/hub/conversations/changes',
+          ),
+        ),
+      ).toEqual(onlyTombstone);
+      for (const u of [olivia, ana]) {
+        expect(shape(await resync(u.token, '/conversations/changes'))).toEqual(
+          onlyTombstone,
+        );
+      }
+    });
+
     it('only the owner moves, to another space, to the conversation created from this one', async () => {
       const old = await open(olivia, spaceA, [ana]);
       // A participant who is not the owner.

@@ -991,7 +991,10 @@ registra a fonte `conversations`), `hubs` (`HubDirectory`: `ownerOf`,
   olha o vínculo: a lista `HubDirectory.approvedOrganizationIds` é a trava). Cliente: lápide da própria participação
   (pessoa) / da própria cópia (Hub: só some quando ele deixa de ser executor) = apagar o assunto local; organização
   fora de `organizationIds` = apagar os assuntos dela; assunto que **entra no escopo** (compartilhado, executor de novo)
-  = buscar com `conversationId=<id>&since=0`. **Horizonte seguro (sem a ressalva "ordem de commit × `sync_version`"):**
+  = buscar com `conversationId=<id>&since=0`. **Assunto com lápide** (movido, ou o último saiu): os feeds entregam só a
+  lápide dele, nunca os filhos (mensagens, anexos, participações, cópias), nem numa sincronização completa; um assunto
+  movido mantém executor e cópias vivas, e o filtro é o que impede reentregá-los. Linhas próprias de um assunto que o
+  leitor não vê mais (saiu, deixou de ser executor) continuam saindo como lápides. **Horizonte seguro (sem a ressalva "ordem de commit × `sync_version`"):**
   nas cinco tabelas dos feeds a versão é `xid8 da transação << 16 | n` (migration `ConversationFeedSafeHorizon`,
   trigger `set_xid_sync_version`, helper `useXidSyncVersion`; não é mais a sequência global), e o leitor só entrega
   versões abaixo de `pg_snapshot_xmin(snapshot) << 16` (transações que já terminaram); uma linha visível acima disso
