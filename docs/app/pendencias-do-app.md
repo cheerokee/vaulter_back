@@ -83,8 +83,8 @@ Visão geral: o assunto é dado do espaço, cifrado **no celular** com uma chave
   - mensagem com `replacesMessageId` = edição (esconder a substituída);
   - **itens filhos de um assunto desconhecido** (mensagem, anexo, participação, cópia da chave) **podem chegar antes do
     item `conversation`** (a ordem é só por `sync_version`): guardar e aplicar quando o assunto chegar, nunca descartar;
-  - não precisa de sincronização completa periódica: o feed tem horizonte seguro (nunca pula uma mudança que confirmou
-    atrasada; uma página pode vir vazia por instantes enquanto uma transação antiga termina).
+  - não precisa de sincronização completa periódica: as versões são dadas no COMMIT, na ordem dos commits (nunca pula
+    uma mudança que confirmou atrasada, e o que confirmou já sai na próxima leitura).
   Sem sondagem longa para o app (só o Hub executor tem); com o app aberto, uma passada a cada ~10 s cabe no limite
   (1200/h por pessoa).
 - [ ] **Mover para outro espaço** (só o dono; spec §4.2): (1) criar o assunto no destino com

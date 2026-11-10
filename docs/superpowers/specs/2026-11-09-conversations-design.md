@@ -152,8 +152,9 @@ Ordem dos projetos (decisão do Jonas): **(1) este**; (2) nuvem ativa com termo 
 - **Executor (Hub):** o mesmo para os assuntos em que é executor, com **sondagem longa** *(decisão do Claude)*: o pedido
   fica aberto até ~25 s esperando mudança, para o Antares reagir em segundos a uma mensagem nova sem WebSocket.
 - Quando o app alcança o Hub direto, conversa com o Hub; o Hub grava no backend. Fonte compartilhada = backend.
-- Empate de versão: mesmos cuidados da sincronização do Hub. Ordem de commit: horizonte seguro (versão por xid da
-  transação e leitura só abaixo de `pg_snapshot_xmin`; migration `ConversationFeedSafeHorizon`), sem a ressalva do Hub.
+- Empate de versão: não há (uma versão por linha, de uma sequência). Ordem de commit: a versão é dada **no COMMIT**, na
+  ordem dos commits (constraint trigger adiado + um advisory lock + uma sequência; migration
+  `ConversationFeedCommitOrder`, que substituiu a versão por xid de `ConversationFeedSafeHorizon`), sem a ressalva do Hub.
 
 ### 4.7 Limites
 - Assuntos por espaço, participantes por assunto (ex.: 50), mensagens por minuto por pessoa e por executor, tamanho do
