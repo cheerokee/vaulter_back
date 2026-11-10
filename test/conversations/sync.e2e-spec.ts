@@ -266,7 +266,14 @@ describe('conversation feeds (e2e)', () => {
         // Versions ascend; the page carries no S3 detail.
         const versions = items.map((i) => i.syncVersion);
         expect([...versions].sort((a, b) => a - b)).toEqual(versions);
-        expect(JSON.stringify(items)).not.toMatch(/s3|uploadExpires/i);
+        // Field names only: random base64url values (bodies, copies) may contain "s3".
+        const keys = (v: unknown): string[] =>
+          v && typeof v === 'object'
+            ? Object.entries(v).flatMap(([k, x]) => [k, ...keys(x)])
+            : [];
+        expect(keys(items).filter((k) => /s3|uploadExpires/i.test(k))).toEqual(
+          [],
+        );
       }
 
       // Bruno is a member of the space and of the organization, with the right ids in hand: nothing.
