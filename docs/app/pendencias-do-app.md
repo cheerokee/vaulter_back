@@ -46,6 +46,24 @@ código e no `CLAUDE.md`).
 - [ ] Instalar/desinstalar espaços no Hub como um console, mostrando o que cabe no SSD (erro `hub-storage-full`).
 
 ## Assuntos (conversas)
+Visão geral: o assunto é dado do espaço, cifrado **no celular** com uma chave própria por versão (formato em
+`docs/crypto/conversations.md`; o backend só guarda blobs). O que o app precisa cobrir:
+- [ ] **Cifra no celular:** gerar a chave do assunto (versão 1), trancá-la para cada participante e para o Hub executor
+  (`wrappedKey`, 108 caracteres), cifrar cabeçalho (título, plano), mensagens (≤ 64 KiB cifrados; maior vira anexo) e
+  anexos (≤ 100 MiB cifrados) com os rótulos e o `recordId` do formato; ids UUID v7 gerados no aparelho (reenviar o
+  mesmo id é seguro). Nunca mandar nome ou tipo de arquivo em claro.
+- [ ] **Compartilhar** (`POST .../:id/participants` e `/participants/space`): mandar a cópia de **todas** as versões da
+  chave para cada pessoa nova (até 50 participantes vivos); quem não é membro do espaço dá 422
+  `participant-not-space-member`. **Sair/tirar:** `POST .../:id/leave`, `DELETE .../:id/participants/:userId`.
+- [ ] **Executor:** escolher entre os Hubs do dono com o espaço instalado (`PUT .../:id/executor`; trocar manda as
+  cópias de todas as versões ao Hub novo e deixa a troca de chave pendente); mensagem de pessoa nasce `pending` até o
+  Hub confirmar (mostrar "entregue ao Hub" quando `ackedAt` vier).
+- [ ] **Aviso de troca de chave do assunto:** quando `keyRotationRequired` for `true` (alguém saiu, ou o executor
+  mudou), mensagens e anexos novos dão 409 `conversation-key-rotation-required`: mostrar o aviso e fazer a troca
+  (`POST .../:id/keys`: versão atual + 1 para **exatamente** os participantes vivos e o Hub; 409
+  `key-rotation-mismatch` traz os ids faltando/sobrando). Com a flag, qualquer participante ou o executor troca; sem
+  ela, só o dono (409 `key-rotation-not-required`). Versão velha: 409 `conversation-key-version-stale` (atualizar pelo
+  feed e reenviar).
 - [ ] **Sincronizar** por `GET /conversations/changes?since=&limit=` (um cursor para todas as organizações; resposta
   `{ organizationIds, items, nextSince }`, padrão do `GET /hub/sync`): assuntos em que a pessoa participa, participações,
   as cópias da chave **dela**, mensagens (corpo cifrado) e anexos (metadado). Contrato no comentário de
@@ -55,6 +73,8 @@ código e no `CLAUDE.md`).
   - assunto vivo que o app não tinha (alguém compartilhou com a pessoa) = buscar o histórico com
     `conversationId=<id>&since=0` e seguir com o cursor principal;
   - mensagem com `replacesMessageId` = edição (esconder a substituída);
+  - **itens filhos de um assunto desconhecido** (mensagem, anexo, participação, cópia da chave) **podem chegar antes do
+    item `conversation`** (a ordem é só por `sync_version`): guardar e aplicar quando o assunto chegar, nunca descartar;
   - sincronização completa periódica (ressalva "ordem de commit × `sync_version`" do `CLAUDE.md`).
   Sem sondagem longa para o app (só o Hub executor tem); com o app aberto, uma passada a cada ~10 s cabe no limite
   (1200/h por pessoa).

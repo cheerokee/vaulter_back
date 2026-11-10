@@ -429,7 +429,12 @@ Outras rotas do dono: `GET /hubs` (Hubs que a pessoa vê, por cursor), `GET /hub
 
 ## Assuntos (conversas): o Hub como executor
 
-O Hub como executor dos assuntos (spec `2026-11-09-conversations-design.md`). Rotas com o token de Hub:
+O Hub como executor dos assuntos (spec `2026-11-09-conversations-design.md`; formato da cifra em
+`docs/crypto/conversations.md`). Resumo do ciclo do executor: (1) **acompanhar o feed** com sondagem longa; (2) para cada
+mensagem de pessoa `pending`, **pegar e confirmar (`ack`)**; (3) responder com mensagens e anexos cifrados com a chave
+do assunto; (4) **trocar a chave** quando o assunto pedir (alguém saiu); (5) apagar o que tem localmente ao perder o
+posto. O Hub só vê assuntos em que é o executor (o dono dele participa, o espaço está instalado nele e o vínculo da
+organização está aprovado). Rotas com o token de Hub:
 
 - `GET /hub/conversations/changes?since=&limit=&wait=&conversationId=`: o **feed de mudanças** do executor, com
   **sondagem longa**. Resposta `{ organizationIds, items: [{ type, syncVersion, deleted, data }], nextSince }`, no
@@ -446,13 +451,23 @@ O Hub como executor dos assuntos (spec `2026-11-09-conversations-design.md`). Ro
   - lápide de uma cópia **própria** (`conversation_key_grant` com `hubId` = o Hub) = o Hub **deixou de ser executor**:
     apagar localmente o assunto, as mensagens, os anexos e as chaves; lápide de `conversation` = o mesmo;
   - organização que sai de `organizationIds` = apagar os assuntos dela (as lápides não vêm mais);
-  - **assunto que entra no escopo** (um `conversation` vivo que o Hub não tinha: virou executor de um assunto antigo):
-    o histórico tem versões antigas, então o Hub busca o assunto inteiro com `conversationId=<id>&since=0` (páginas até
-    vir vazia) e segue com o cursor principal;
+  - **assunto que entra no escopo** (um `conversation` vivo que o Hub não tinha: virou executor de um assunto antigo,
+    ou o Hub foi escolhido como executor de um assunto já existente): o histórico tem `sync_version` antigo e **não**
+    reaparece no cursor principal, então o Hub faz o **preenchimento** buscando o assunto inteiro com
+    `conversationId=<id>&since=0` (páginas até vir vazia) e segue com o cursor principal;
   - sincronização completa (`since=0`) **substitui** o estado local; a ressalva "ordem de commit × `sync_version`"
     vale aqui também (mesma mitigação: sincronização completa periódica, ex.: uma vez por dia).
   - mensagem com `replacesMessageId` = edição: esconder a substituída (a lápide dela chega na mesma página ou depois,
-    nunca antes).
+    nunca antes);
+  - **itens filhos de um assunto que o Hub ainda não conhece** (mensagem, anexo, participação ou cópia) **podem chegar
+    antes do item `conversation`** (a ordem é só por `sync_version`): guarde-os e aplique quando o `conversation`
+    chegar (na mesma passada ou na seguinte); não descarte nem trate como erro;
+  - **caixa de entrada:** toda `conversation_message` com `pending: true` e autor pessoa é trabalho a pegar; depois de
+    guardar localmente, chame o `ack` (abaixo). Confirmar de novo é seguro;
+  - **troca de chave pelo executor:** quando o item `conversation` vier com `keyRotationRequired: true`, o Hub **não
+    pode mandar mensagem nem anexo** (409 `conversation-key-rotation-required`); ele (ou qualquer participante) faz a
+    troca com `POST /hub/conversations/:id/keys`, e o assunto volta a aceitar mensagens. Enquanto pendente, guarde o que
+    for enviar numa fila local.
 
 - `POST /hub/conversations` `{ id, spaceId, ownerUserId, state?, encryptedHeader, grants: [{ userId, wrappedKey }],
   hubWrappedKey }`: o Hub abre um assunto (o "aviso", `state` padrão `aviso`) em nome de uma pessoa com papel no Hub e

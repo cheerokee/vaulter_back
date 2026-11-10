@@ -858,6 +858,21 @@ registra a fonte `conversations`), `hubs` (`HubDirectory`: `ownerOf`,
 `ObjectStore` e a peça compartilhada `application/object-uploads.ts`, o diário `journal.ts` e os erros
 `storage-errors.ts`) e `identity` (`CurrentAuthProofVerifier`, para esvaziar a lixeira do assunto); ninguém importa
 `conversations`.
+- **RLS (modelo):** `org_isolation` mais policies **restritivas** por comando: participante vivo (`app.user_id` em
+  `participant_user_ids`) ou executor (`executor_hub_id = app.hub_id`); as filhas consultam a conversa e nada consulta as
+  filhas de volta (sem recursão, sem `SECURITY DEFINER`). `participant_user_ids` é cópia **derivada** das participações
+  vivas, só escrita pelo trigger `conversation_participants_sync` (BEFORE UPDATE recusa mudança de fora). **Quem sai:** o
+  trigger grava com `WHERE CURRENT OF` num cursor `FOR UPDATE` (o `SET` não lê colunas, então a linha nova não é
+  reconferida pela policy de SELECT), e a lápide da participação é a **última gravação** de quem sai; depois dela só a
+  própria participação e as próprias cópias (com lápide) continuam legíveis, para a sincronização dele apagar o local.
+  **Efeitos de um Hub que deixa de valer** (executor nulo, lápide nas cópias) rodam sempre num contexto de **participante**
+  (dono do assunto), nunca no do Hub (42501) e nunca num contexto "de confiança" que abra tudo. Colunas de identidade
+  (organização, espaço, conversa, pessoa/Hub, versão da chave) são imutáveis por trigger `trg_<tabela>_immutable`
+  (migration `ConversationsHardening`). Matriz completa no cabeçalho da migration `CreateConversations`.
+- **Ganchos:** o `conversations` **assina** `SpaceMemberLeftHooks`, `MemberRemovedHooks` (saída da organização) e
+  `SpaceQuotaHooks`/`SpaceStorageUsage` (fonte `conversations`); **recebe** `HubExecutorLostHooks` do `hubs` e **registra**
+  `StorageReconcileHooks` (`conversations.attachments`, rodado pelo `storage:reconcile`); contratos em
+  `src/shared/application/`, nenhum módulo importa `conversations`.
 - **Rotas:** token de usuário em `/spaces/:spaceId/conversations` (`POST` cria; `/:id` lê; `/:id/participants` e
   `/:id/participants/space` compartilham; `DELETE /:id/participants/:userId` tira; `/:id/leave`; `PUT /:id/state`;
   `PUT /:id/executor`; `POST /:id/keys`): a organização vem do espaço; não membro do espaço, assunto de outro espaço,
@@ -999,7 +1014,7 @@ registra a fonte `conversations`), `hubs` (`HubDirectory`: `ownerOf`,
   lote, estado cru: `messageRows`, `conversationSpaceUsage`, `lastMessageAt`).
 
 ## Banco de dados (TypeORM + migrations)
-- **Pool:** o do driver `pg`, com tamanho explícito `DB_POOL_MAX_CONNECTIONS` (10 por instância; instâncias × 10 abaixo
+- **Pool:** o do driver `pg`, com tamanho explícito `DB_POOL_MAX_CONNECTIONS` (10 por instância; instâncias × (10 + 1 da conexão LISTEN dos assuntos) abaixo
   do `max_connections` do banco) e `connectionTimeoutMillis` = `DB_POOL_CONNECTION_TIMEOUT_MS` (10 s), ambos em
   `typeorm.options.ts`: pool esgotado vira erro (500, transações desfeitas) em vez de travar a API. Trabalho longo
   segurando conexão precisa de teto (ex.: o backup limita o lote da confirmação e a espera por trava, veja `storage`).
@@ -1137,6 +1152,16 @@ Os valores do `.env.example` para os segredos são **só de desenvolvimento**; p
   (`storage_objects`/`storage_object_versions` depois da lixeira; o runtime não tem `DELETE`); aviso de franquia perto
   do fim (notificação); endpoint S3 público configurável para dispositivos reais em dev.
 - Exclusão de conta (LGPD) precisa revogar as sessões.
+- **Assuntos (`conversations`), pendências:** notificações (mensagem nova, pedido de "sim", compartilhado: hoje só
+  aparecem pelo feed); nuvem ativa e **executor na nuvem** (hoje o executor é sempre um Hub); API de integradores
+  (o assunto como caixa de entrada de apps); WebSocket no lugar da sondagem longa do executor; reconcile do **contador**
+  `conversation_space_usage` (os triggers o mantêm, mas não há varredura que corrija uma deriva); **limite de lote** no
+  esvaziar das mensagens do assunto (`purgeTrash` das mensagens zera tudo de uma vez; os anexos já vão em 1000);
+  `move` que completa uma segunda cópia movida sem auditar; índice parcial por `deleted_at` para a retenção.
+  **LISTEN:** a conexão `PgConversationChangeSignal` não tem `keepAlive`/ping (meia-aberta = acorda por prazo, até 25 s) e
+  reconectar acorda todos de uma vez (sem jitter); **não funciona atrás de pgbouncer em modo transação** (LISTEN exige
+  conexão de sessão). **Pool:** a conexão do LISTEN fica fora do pool, então conte `instâncias × (DB_POOL_MAX_CONNECTIONS
+  + 1)` (hoje 10 + 1) ao dimensionar `max_connections` do Postgres.
 - **Agendar `npm run conversations:retention`** (1x por dia, fora da aplicação, ANTES do `storage:reconcile`, que
   apaga do bucket o que o `DeleteObjects` dela deixou) até o pg-boss entrar. Sem ela, o conteúdo apagado dos assuntos
   fica para sempre (conta no uso do espaço). **Login:** roda com o dono (`DB_USERNAME`), que só ignora o RLS sendo

@@ -1,6 +1,6 @@
 # Conversas (assuntos) como dado do espaço — design
 
-Data: 09/11/2026 · Status: **aprovada em 09/11/2026** · Repositório: `vaulter_back` (módulo novo `conversations`)
+Data: 09/11/2026 · Status: **aprovada em 09/11/2026 (implementada)** · Repositório: `vaulter_back` (módulo novo `conversations`)
 
 Nasce de uma conversa do Jonas com o Claude que começou na "caixa de entrada" e se juntou ao copiloto pelo app
 (`../vaulter-hub-back/docs/superpowers/specs/2026-11-09-copiloto-pelo-app-design.md`, seção "Onde mora o quê", já
