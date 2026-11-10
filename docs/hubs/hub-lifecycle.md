@@ -429,8 +429,30 @@ Outras rotas do dono: `GET /hubs` (Hubs que a pessoa vê, por cursor), `GET /hub
 
 ## Assuntos (conversas): o Hub como executor
 
-O Hub como executor dos assuntos (spec `2026-11-09-conversations-design.md`; o feed de mudanças e a sondagem longa
-chegam nas próximas tarefas e serão descritos aqui). Rotas com o token de Hub:
+O Hub como executor dos assuntos (spec `2026-11-09-conversations-design.md`). Rotas com o token de Hub:
+
+- `GET /hub/conversations/changes?since=&limit=&wait=&conversationId=`: o **feed de mudanças** do executor, com
+  **sondagem longa**. Resposta `{ organizationIds, items: [{ type, syncVersion, deleted, data }], nextSince }`, no
+  mesmo padrão do `GET /hub/sync` (ordem de `sync_version`, `limit` 1..500, padrão 500; lápide leva só as chaves).
+  Tipos: `conversation`, `conversation_participant`, `conversation_key_grant` (só as cópias **do próprio Hub**),
+  `conversation_message` (com o corpo cifrado) e `conversation_attachment` (metadado). Só os assuntos em que o Hub é
+  executor, só nas organizações com vínculo **aprovado** (`organizationIds`). `wait` (0..25 s, padrão 0): com a página
+  vazia, o pedido fica aberto até chegar uma mudança (acorda em menos de 1 s, por `LISTEN/NOTIFY` do Postgres) ou o
+  tempo acabar, e responde a página (vazia no tempo esgotado). **Laço recomendado:** `wait=25` com o `nextSince`
+  anterior, de novo logo que a resposta chegar; com página cheia, pedir a seguinte com `wait=0`; erro de rede ou 5xx:
+  esperar alguns segundos (com jitter) antes de repetir; 429: o `Retry-After`. No máximo **2 sondagens abertas por
+  Hub** (a terceira responde na hora, sem esperar).
+  **O que o Hub faz com o feed:**
+  - lápide de uma cópia **própria** (`conversation_key_grant` com `hubId` = o Hub) = o Hub **deixou de ser executor**:
+    apagar localmente o assunto, as mensagens, os anexos e as chaves; lápide de `conversation` = o mesmo;
+  - organização que sai de `organizationIds` = apagar os assuntos dela (as lápides não vêm mais);
+  - **assunto que entra no escopo** (um `conversation` vivo que o Hub não tinha: virou executor de um assunto antigo):
+    o histórico tem versões antigas, então o Hub busca o assunto inteiro com `conversationId=<id>&since=0` (páginas até
+    vir vazia) e segue com o cursor principal;
+  - sincronização completa (`since=0`) **substitui** o estado local; a ressalva "ordem de commit × `sync_version`"
+    vale aqui também (mesma mitigação: sincronização completa periódica, ex.: uma vez por dia).
+  - mensagem com `replacesMessageId` = edição: esconder a substituída (a lápide dela chega na mesma página ou depois,
+    nunca antes).
 
 - `POST /hub/conversations` `{ id, spaceId, ownerUserId, state?, encryptedHeader, grants: [{ userId, wrappedKey }],
   hubWrappedKey }`: o Hub abre um assunto (o "aviso", `state` padrão `aviso`) em nome de uma pessoa com papel no Hub e
@@ -516,6 +538,7 @@ Assim nada do dono anterior chega a um dono novo.
 | `POST /hub/conversations/:id/messages` e `DELETE .../messages/:messageId` | 300/min (cada rota) | Hub |
 | `POST /hub/conversations/:id/messages/:messageId/ack` | 600/min | Hub |
 | `POST /hub/conversations/:id/attachments` e `.../attachments/:attachmentId/confirm` | 600/h (cada rota) | Hub |
+| `GET /hub/conversations/changes` (feed do executor, sondagem longa) | 1800/h | Hub |
 | demais rotas | 300/min somando todas | IP |
 
 Estourou: 429 `too-many-requests` com `Retry-After` (segundos).
@@ -527,7 +550,8 @@ Estourou: 429 `too-many-requests` com `Retry-After` (segundos).
 - **Apagamento remoto:** não há comando para o backend mandar o Hub se apagar. O desregistro só corta o acesso.
 - **Transferência de Hub:** não existe. Hoje o caminho é desregistrar e fazer reset de fábrica.
 - **Ordem de commit × `sync_version`:** uma sincronização pode pular de vez uma linha cujo commit chegou atrasado.
-  Até a correção (horizonte seguro), a sincronização completa periódica corrige o estado.
+  Até a correção (horizonte seguro), a sincronização completa periódica corrige o estado. Vale também para o feed dos
+  assuntos (`GET /hub/conversations/changes`).
 - **Backup (storage):** snapshot pago, troca de chave feita pelo Hub editor da Sala (hoje o Hub guarda os envios numa
   fila local até um membro trocar a chave pelo app), visitante em Hub alheio, configuração inicial por Bluetooth e
   idioma, download em lote, endpoint S3 público para aparelhos em desenvolvimento (a URL assinada hoje aponta para o

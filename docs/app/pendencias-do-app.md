@@ -45,6 +45,20 @@ código e no `CLAUDE.md`).
   **trocar de Hub / restaurar** (reinstalar os espaços no Hub novo).
 - [ ] Instalar/desinstalar espaços no Hub como um console, mostrando o que cabe no SSD (erro `hub-storage-full`).
 
+## Assuntos (conversas)
+- [ ] **Sincronizar** por `GET /conversations/changes?since=&limit=` (um cursor para todas as organizações; resposta
+  `{ organizationIds, items, nextSince }`, padrão do `GET /hub/sync`): assuntos em que a pessoa participa, participações,
+  as cópias da chave **dela**, mensagens (corpo cifrado) e anexos (metadado). Contrato no comentário de
+  `SyncConversationsUseCase` e no `CLAUDE.md` (módulo `conversations`). O que o app faz:
+  - lápide da **própria** participação (ou do `conversation`) = apagar o assunto localmente (mensagens, anexos, chaves);
+  - organização fora de `organizationIds` = apagar os assuntos dela;
+  - assunto vivo que o app não tinha (alguém compartilhou com a pessoa) = buscar o histórico com
+    `conversationId=<id>&since=0` e seguir com o cursor principal;
+  - mensagem com `replacesMessageId` = edição (esconder a substituída);
+  - sincronização completa periódica (ressalva "ordem de commit × `sync_version`" do `CLAUDE.md`).
+  Sem sondagem longa para o app (só o Hub executor tem); com o app aberto, uma passada a cada ~10 s cabe no limite
+  (1200/h por pessoa).
+
 ## Ideias para depois (não fazer agora)
 - Configuração inicial do Hub pelo app via **Bluetooth** (no lugar do código falado; resolve o idioma).
 - Visitante em Hub alheio.

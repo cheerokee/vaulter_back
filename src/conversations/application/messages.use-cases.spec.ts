@@ -362,6 +362,10 @@ describe('message use cases', () => {
       expect(view.replacesMessageId).toBe(original.id);
       expect(original.deletedAt).toEqual(DB_NOW);
       expect(messages.save).toHaveBeenCalledWith(userScope, original);
+      // The replacement is written before the tombstone (lower sync_version: a feed page never has the tombstone alone).
+      expect(messages.insertIfAbsent.mock.invocationCallOrder[0]).toBeLessThan(
+        messages.save.mock.invocationCallOrder[0]!,
+      );
 
       const hers = stored({ kind: 'user', userId: BIA });
       found.set(hers.id, hers);

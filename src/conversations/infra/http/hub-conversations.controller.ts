@@ -7,6 +7,7 @@ import {
   Param,
   Post,
   Put,
+  Query,
   Res,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
@@ -30,6 +31,11 @@ import { GetConversationUseCase } from '../../application/get-conversation.use-c
 import { HubCreateConversationUseCase } from '../../application/hub-create-conversation.use-case.js';
 import { RotateConversationKeyUseCase } from '../../application/rotate-conversation-key.use-case.js';
 import { SendMessageUseCase } from '../../application/send-message.use-case.js';
+import { SyncConversationsUseCase } from '../../application/sync-conversations.use-case.js';
+import {
+  HubConversationChangesQuery,
+  conversationChangesResponse,
+} from './dto/changes.dto.js';
 import {
   HubCreateConversationDto,
   RequestAttachmentDto,
@@ -67,7 +73,45 @@ export class HubConversationsController {
     private readonly requestingUpload: RequestAttachmentUploadUseCase,
     private readonly confirming: ConfirmAttachmentUseCase,
     private readonly downloading: GetAttachmentDownloadUrlUseCase,
+    private readonly sync: SyncConversationsUseCase,
   ) {}
+
+  /**
+   * The executor's feed (contract in `SyncConversationsUseCase`): the conversations where this hub is executor, in
+   * organizations with an approved link. `wait` (0..25 s) holds the request while the page is empty, waking on a
+   * change (LISTEN/NOTIFY) without holding a database connection. Declared BEFORE `:id` (Express matches in order).
+   */
+  @perHub(RATE_LIMITS.conversationHubChanges)
+  @ApiBearerAuth()
+  @HubAuth()
+  @Get('changes')
+  async doChanges(
+    @CurrentHub() hub: HubAuthContext,
+    @Query() query: HubConversationChangesQuery,
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    // The hub hung up: stop waiting (frees the long-poll slot); the response would go nowhere. The RESPONSE's `close`
+    // (the request's fires as soon as its body is consumed, i.e. at once on a GET).
+    const abort = new AbortController();
+    const onClose = () => abort.abort();
+    res.once('close', onClose);
+    try {
+      return conversationChangesResponse(
+        await this.sync.byHub(
+          { hubId: hub.hubId },
+          {
+            since: BigInt(query.since),
+            limit: query.limit,
+            conversationId: query.conversationId ?? null,
+            waitSeconds: query.wait,
+          },
+          abort.signal,
+        ),
+      );
+    } finally {
+      res.off('close', onClose);
+    }
+  }
 
   /** 201 when created; 200 with the same conversation when the same id is sent again. */
   @perHub(RATE_LIMITS.conversationCreate)

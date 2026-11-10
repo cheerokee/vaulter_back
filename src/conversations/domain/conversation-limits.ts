@@ -12,3 +12,16 @@ export const MAX_CONVERSATION_PARTICIPANTS = 50;
 export const CONVERSATION_RETENTION_DAYS = 30;
 /** Smallest encrypted blob: version byte (1) + nonce (24) + Poly1305 tag (16), empty plaintext (docs/crypto/conversations.md). */
 export const ENCRYPTED_BLOB_OVERHEAD_BYTES = 41;
+/** Largest page of the conversation feeds (`GET /conversations/changes`, `GET /hub/conversations/changes`). */
+export const CONVERSATION_SYNC_MAX_LIMIT = 500;
+/** Longest wait of the executor's long poll (`wait` of `GET /hub/conversations/changes`), in seconds. */
+export const CONVERSATION_LONG_POLL_MAX_SECONDS = 25;
+/**
+ * Long polls waiting at once (per API instance): per Hub (one loop, plus one overlapping while it reconnects) and in
+ * total. Over either cap the request does not wait (it answers the read at once): a waiting request holds no database
+ * connection, only memory and a socket, so the global cap bounds those and the wake fan-out.
+ */
+export const CONVERSATION_LONG_POLLS_PER_HUB = 2;
+export const CONVERSATION_LONG_POLLS_TOTAL = 1_000;
+/** Without the LISTEN connection (database down or reconnecting), a waiting long poll re-reads at this interval. */
+export const CONVERSATION_LONG_POLL_DEGRADED_REREAD_MS = 5_000;

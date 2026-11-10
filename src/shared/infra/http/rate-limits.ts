@@ -100,6 +100,14 @@ export const RATE_LIMITS = {
    */
   conversationAttachment: { limit: 120, ttl: HOUR },
   conversationHubAttachment: { limit: 600, ttl: HOUR },
+  /**
+   * Feeds de mudanças dos assuntos: por pessoa (`GET /conversations/changes`, `userIdTracker`) 1200/h (o app em primeiro
+   * plano a cada ~10 s são 360/h, mais páginas e preenchimentos por assunto) e por Hub (`GET /hub/conversations/changes`,
+   * `hubIdTracker`) 1800/h: a sondagem longa ociosa faz ~144/h (um pedido a cada 25 s), e cada mudança acorda e devolve,
+   * então um copiloto ativo cabe em média num pedido a cada 2 s.
+   */
+  conversationChanges: { limit: 1200, ttl: HOUR },
+  conversationHubChanges: { limit: 1800, ttl: HOUR },
 } as const;
 
 /** Nome do throttler extra, cobrado só nas rotas marcadas com @ThrottleByEmail(). */

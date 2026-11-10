@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { DomainValidationError } from '../../shared/domain/errors.js';
+import { mergeSyncBatches } from '../../shared/domain/sync-page.js';
 import type { HubAuthContext } from './authenticate-hub-token.use-case.js';
 import {
   HubSyncReader,
@@ -12,21 +13,8 @@ export const SYNC_MAX_LIMIT = 500;
 
 export type SyncPage = { items: SyncItem[]; nextSince: bigint };
 
-const TYPE_RANK = new Map(SYNC_ITEM_TYPES.map((t, i) => [t, i]));
-
-function compareItems(a: SyncItem, b: SyncItem): number {
-  if (a.syncVersion !== b.syncVersion) {
-    return a.syncVersion < b.syncVersion ? -1 : 1;
-  }
-  const byType = TYPE_RANK.get(a.type)! - TYPE_RANK.get(b.type)!;
-  if (byType !== 0) return byType;
-  const ka = JSON.stringify(a.data);
-  const kb = JSON.stringify(b.data);
-  return ka < kb ? -1 : ka > kb ? 1 : 0;
-}
-
 /**
- * Merges the reader's batches into one page.
+ * Merges the reader's batches into one page (the shared `mergeSyncBatches`, in `SYNC_ITEM_TYPES` order).
  * - Horizon: a truncated batch only proves completeness up to its last `syncVersion`; items of other batches above
  *   the lowest such horizon are held back for the next page (otherwise `nextSince` would jump over unread rows).
  * - Ties: `sync_version` is one global sequence, so two rows never share a value, but one row can feed several items
@@ -41,34 +29,7 @@ export function mergeSyncPage(
   since: bigint,
   limit: number,
 ): SyncPage {
-  let horizon: bigint | null = null;
-  for (const b of batches) {
-    const last = b.items.at(-1);
-    if (!b.truncated || !last) continue;
-    if (horizon === null || last.syncVersion < horizon) {
-      horizon = last.syncVersion;
-    }
-  }
-  const all = batches
-    .flatMap((b) => b.items)
-    .filter((i) => horizon === null || i.syncVersion <= horizon)
-    .sort(compareItems);
-
-  let end = Math.min(limit, all.length);
-  if (all.length > limit) {
-    const cut = all[limit - 1]!.syncVersion;
-    if (all[limit]!.syncVersion === cut) {
-      let start = limit - 1;
-      while (start > 0 && all[start - 1]!.syncVersion === cut) start--;
-      if (start > 0) {
-        end = start;
-      } else {
-        while (end < all.length && all[end]!.syncVersion === cut) end++;
-      }
-    }
-  }
-  const items = all.slice(0, end);
-  return { items, nextSince: items.at(-1)?.syncVersion ?? since };
+  return mergeSyncBatches(batches, since, limit, SYNC_ITEM_TYPES);
 }
 
 /**

@@ -847,8 +847,8 @@ mesmo commit).
   índice, agendar `storage:reconcile`, aviso de franquia perto do fim, endpoint S3 público).
 
 ## Módulo `conversations`
-`src/conversations/` (assuntos: participantes, executor, chave própria por versão, mensagens, caixa de entrada e anexos;
-a sincronização vem nas próximas tarefas do plano `docs/superpowers/plans/2026-11-09-conversations.md`). Spec:
+`src/conversations/` (assuntos: participantes, executor, chave própria por versão, mensagens, caixa de entrada, anexos e
+os feeds de sincronização; plano `docs/superpowers/plans/2026-11-09-conversations.md`). Spec:
 `docs/superpowers/specs/2026-11-09-conversations-design.md`; formato em `docs/crypto/conversations.md`; RLS (participante
 vivo ou executor) e "quem sai grava por último" no cabeçalho da migration `CreateConversations`. Depende de `spaces`
 (`SpaceAccess`, inclusive `isSpaceMember`/`spaceMemberIds`; `SpaceStorage.lockQuota`; a porta `SpaceStorageUsage`, onde
@@ -934,6 +934,32 @@ registra a fonte `conversations`), `hubs` (`HubDirectory`: `ownerOf`,
   `BackupObjectHealer`/casos de uso do backup, o `storage` exporta pela `application/` só o genérico
   (`object-uploads.ts`: `removeUnreferencedVersions`, `isUploadedAsDeclared` e as constantes do mecanismo; o backup usa
   as mesmas funções) e o `conversations` tem casos de uso próprios sobre essas peças.
+- **Feeds de sincronização** (`SyncConversationsUseCase` + `ConversationChangesSqlReader`; contrato completo no
+  comentário do caso de uso): pessoa em `GET /conversations/changes?since=&limit=&conversationId=` (fora de
+  `/spaces/:spaceId`: um cursor para todas as organizações em que é membro ativo) e executor em
+  `GET /hub/conversations/changes?since=&limit=&wait=&conversationId=` (declarada antes de `/:id` no controller).
+  Resposta `{ organizationIds, items: [{ type, syncVersion, deleted, data }], nextSince }`, `limit` 1..500. Padrão do
+  `GET /hub/sync`: um snapshot `REPEATABLE READ, READ ONLY` por página, uma leitura por tipo e organização em sequência,
+  `mergeSyncBatches` (`src/shared/domain/sync-page.ts`, a mesma fusão do Hub), lápide só com as chaves. Tipos:
+  `conversation`, `conversation_participant`, `conversation_key_grant` (**só as cópias de quem lê**: nunca de outra
+  pessoa ou Hub), `conversation_message` (corpo cifrado) e `conversation_attachment` (metadado, sem chave/versão do S3;
+  `purged` = lápide). Escopo: pessoa = `participant_user_ids` (e, depois de sair, só as lápides da própria participação
+  e cópias, pelo RLS); Hub = `executor_hub_id`, **só em organização com vínculo aprovado** (a policy do executor não
+  olha o vínculo: a lista `HubDirectory.approvedOrganizationIds` é a trava). Cliente: lápide da própria participação
+  (pessoa) / da própria cópia (Hub: só some quando ele deixa de ser executor) = apagar o assunto local; organização
+  fora de `organizationIds` = apagar os assuntos dela; assunto que **entra no escopo** (compartilhado, executor de novo)
+  = buscar com `conversationId=<id>&since=0`; ressalva "ordem de commit × `sync_version`" (Pendências) com a mesma
+  mitigação. **Edição:** a mensagem nova é gravada ANTES da lápide da substituída (`sync_version` menor), então uma
+  página nunca entrega a lápide sem a substituta.
+- **Sondagem longa do executor** (`wait` 0..25 s): **nunca segura conexão do pool nem transação enquanto espera.** Laço:
+  inscreve no sinal -> lê a página numa transação curta -> vazia: espera FORA de unit of work (wake, prazo ou o Hub
+  desligar: `close` da resposta) -> inscreve e relê. Sinal: triggers `pg_notify('conversation_changes', <hubId>)`
+  (migration `ConversationChangeNotify`: `conversations` avisa o executor novo e o antigo; cópias de Hub avisam o Hub;
+  o resto avisa o executor do assunto) e **uma** conexão `LISTEN` por processo (`PgConversationChangeSignal`, fora do
+  pool, login de runtime, aberta na primeira sondagem), espalhada em memória por Hub. NOTIFY é só dica: a resposta é
+  sempre releitura por `sync_version` (perdeu o aviso: a releitura no prazo entrega; sem a conexão LISTEN, relê a cada
+  5 s; reconectou: acorda todos). Limites por instância (`LongPollSlots`): 2 sondagens por Hub e 1000 no total; acima
+  disso responde na hora, sem esperar. No desligamento, as esperas respondem o que leram.
 - **Testes:** e2e em `test/conversations/` com a cripto real (`test/support/conversation-crypto.ts`) e os helpers de
   `test/support/conversations-kit.ts` (criar/compartilhar/trocar chave/mandar/confirmar/apagar pela HTTP, pessoas em
   lote, estado cru: `messageRows`, `conversationSpaceUsage`, `lastMessageAt`).
@@ -1063,8 +1089,9 @@ Os valores do `.env.example` para os segredos são **só de desenvolvimento**; p
   (o `REPEATABLE READ` só deixa cada página coerente). Opções: horizonte seguro (guardar `pg_current_xact_id()` numa
   coluna xid8 junto da versão e só servir linhas abaixo de `pg_snapshot_xmin(pg_current_snapshot())`) ou carimbo de
   versão no momento do commit. Mitigação até lá: sincronização completa periódica do Hub. O mesmo vale para o `since`
-  da listagem do backup, mas ali a distância entre o carimbo (`clock_timestamp()`, depois do S3) e o COMMIT é limitada a
-  5 min (`limitRemainingTime`), dentro da folga de 1 h do `since`.
+  da listagem do backup e para os feeds dos assuntos (`GET /conversations/changes`, `GET /hub/conversations/changes`,
+  mesma mitigação), mas na listagem do backup a distância entre o carimbo (`clock_timestamp()`, depois do S3) e o
+  COMMIT é limitada a 5 min (`limitRemainingTime`), dentro da folga de 1 h do `since`.
 - **Índice `storage_objects (space_id, updated_at)`** para o `since` da listagem do backup (hoje filtra sem índice, pelo
   índice do espaço + PK); entra numa migration quando os espaços crescerem.
 - **Storage/backup:** snapshot pago (versão do espaço inteiro numa data); contratação de franquia pela organização com
@@ -1138,6 +1165,7 @@ Os valores do `.env.example` para os segredos são **só de desenvolvimento**; p
   | mandar e apagar mensagem do assunto (`POST .../:id/messages`, `DELETE .../:id/messages/:messageId`) | 60/min por usuário / 300/min por Hub, contador próprio por rota |
   | `POST /hub/conversations/:id/messages/:messageId/ack` | 600/min por Hub |
   | anexo do assunto: intenção e confirmação (`POST .../:id/attachments`, `POST .../:id/attachments/:attachmentId/confirm`; a URL de download fica no limite geral) | 120/h por usuário / 600/h por Hub, contador próprio por rota |
+  | `GET /conversations/changes` (feed da pessoa) / `GET /hub/conversations/changes` (feed do executor, sondagem longa) | 1200/h por usuário / 1800/h por Hub (ociosa: ~144/h, um pedido a cada 25 s; cada mudança acorda e devolve) |
   Rota com `@Throttle` próprio tem contador próprio (por rota); `@ThrottleGroup(THROTTLE_GROUPS.x, tracker?)`
   (`throttling.decorators.ts`) faz rotas dividirem um contador (chave = grupo + tracker, sem a rota); cada grupo é
   UMA constante com nome e limite em `THROTTLE_GROUPS` (`rate-limits.ts`), e o decorator recusa o mesmo grupo com

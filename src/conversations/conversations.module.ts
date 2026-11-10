@@ -47,6 +47,13 @@ import { ConversationSpaceUsageTypeormRepository } from './infra/db/conversation
 import { ConversationTypeormEntity } from './infra/db/conversation.entity.js';
 import { ConversationTypeormRepository } from './infra/db/conversation.typeorm-repository.js';
 import { HubConversationsController } from './infra/http/hub-conversations.controller.js';
+import { ConversationChangesController } from './infra/http/conversation-changes.controller.js';
+import { ConversationChangeSignal } from './application/ports/conversation-change-signal.js';
+import { ConversationChangesReader } from './application/ports/conversation-changes-reader.js';
+import { LongPollSlots } from './application/long-poll-slots.js';
+import { SyncConversationsUseCase } from './application/sync-conversations.use-case.js';
+import { ConversationChangesSqlReader } from './infra/db/conversation-changes.sql-reader.js';
+import { PgConversationChangeSignal } from './infra/db/pg-conversation-change-signal.js';
 import { SpaceConversationsController } from './infra/http/space-conversations.controller.js';
 
 /**
@@ -74,7 +81,11 @@ import { SpaceConversationsController } from './infra/http/space-conversations.c
       ConversationAttachmentUsageTypeormEntity,
     ]),
   ],
-  controllers: [SpaceConversationsController, HubConversationsController],
+  controllers: [
+    SpaceConversationsController,
+    HubConversationsController,
+    ConversationChangesController,
+  ],
   providers: [
     {
       provide: ConversationRepository,
@@ -100,6 +111,17 @@ import { SpaceConversationsController } from './infra/http/space-conversations.c
       provide: ConversationSpaceUsageRepository,
       useClass: ConversationSpaceUsageTypeormRepository,
     },
+    {
+      provide: ConversationChangesReader,
+      useClass: ConversationChangesSqlReader,
+    },
+    PgConversationChangeSignal,
+    {
+      provide: ConversationChangeSignal,
+      useExisting: PgConversationChangeSignal,
+    },
+    LongPollSlots,
+    SyncConversationsUseCase,
     ConversationAccess,
     ConversationViews,
     ConversationStorageUsage,

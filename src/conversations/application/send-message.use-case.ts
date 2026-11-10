@@ -41,7 +41,7 @@ export type SendMessageInput = {
 //    outro autor, outro assunto, ou um id que o escopo nem vê: `insertIfAbsent` devolve false) = 409
 //    `message-id-conflict`, nunca "já mandada";
 // 4. troca de chave pendente / versão diferente da atual: 409 (nada gravado); edição: a substituída tem de ser minha
-//    (403) e viva deste assunto (422), e vira lápide;
+//    (403) e viva deste assunto (422), e vira lápide DEPOIS de gravar a nova (ordem do `sync_version` nos feeds);
 // 5. grava no relógio do banco (`sentAt`, `lastMessageAt`); mensagem de pessoa nasce `pending`, a do executor já
 //    confirmada (CHECK no banco);
 // 6. DEPOIS de gravar, lê o uso do espaço inteiro (porta `SpaceStorageUsage`: backup + assuntos; o trigger já contou
@@ -143,8 +143,9 @@ export class SendMessageUseCase {
     }
 
     conversation.assertCanWrite(message.keyVersion);
+    let replaced: ConversationMessage | null = null;
     if (message.replacesMessageId) {
-      const replaced = await this.messages.findById(
+      replaced = await this.messages.findById(
         scope,
         message.replacesMessageId,
         { withDeleted: true },
@@ -157,12 +158,17 @@ export class SendMessageUseCase {
         throw messageReplacesInvalid();
       }
       replaced.assertAuthor(scope.actor);
-      replaced.tombstone(now);
-      await this.messages.save(scope, replaced);
     }
 
     if (!(await this.messages.insertIfAbsent(scope, message))) {
       throw messageIdConflict();
+    }
+    // Edit: the replacement is written BEFORE the tombstone of the original, so its `sync_version` is lower and a feed
+    // page never delivers the tombstone without the replacement (a page may end between them: the client then shows the
+    // replacement, which names the message it replaces, and the original goes on the next page).
+    if (replaced) {
+      replaced.tombstone(now);
+      await this.messages.save(scope, replaced);
     }
     conversation.recordMessage(now);
     await this.conversations.save(scope, conversation);
