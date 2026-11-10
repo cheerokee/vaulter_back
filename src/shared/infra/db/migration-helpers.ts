@@ -103,7 +103,7 @@ export const CONVERSATION_SYNC_FEED: CommitOrderedSyncFeed = {
 
 const SYNC_COMMIT_ESCAPE = 'sync_commit_in_progress()';
 /** Prefix of the policy COMMENT that keeps the expression a policy had before the escape (for the down migration). */
-const ORIGINAL_POLICY_PREFIX = 'sync-commit-original:';
+export const ORIGINAL_POLICY_PREFIX = 'sync-commit-original:';
 
 /** The BEFORE trigger of a commit-ordered table: `zz` so it fires LAST among the BEFORE triggers (name order). */
 export const commitOrderedSyncTrigger = (table: string) =>
