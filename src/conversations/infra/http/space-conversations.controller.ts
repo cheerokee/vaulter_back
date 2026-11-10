@@ -22,9 +22,11 @@ import { uuidPipe } from '../../../shared/infra/http/uuid-pipe.js';
 import { ChangeConversationStateUseCase } from '../../application/change-conversation-state.use-case.js';
 import { ChangeExecutorUseCase } from '../../application/change-executor.use-case.js';
 import { CreateConversationUseCase } from '../../application/create-conversation.use-case.js';
+import { DeleteMessageUseCase } from '../../application/delete-message.use-case.js';
 import { GetConversationUseCase } from '../../application/get-conversation.use-case.js';
 import { LeaveConversationUseCase } from '../../application/leave-conversation.use-case.js';
 import { RotateConversationKeyUseCase } from '../../application/rotate-conversation-key.use-case.js';
+import { SendMessageUseCase } from '../../application/send-message.use-case.js';
 import {
   ShareConversationUseCase,
   type ShareMode,
@@ -33,11 +35,13 @@ import {
   ChangeExecutorDto,
   CreateConversationDto,
   RotateConversationKeyDto,
+  SendMessageDto,
   ShareConversationDto,
   StateDto,
+  messageInput,
   rotationInput,
 } from './dto/conversation.dto.js';
-import { conversationResponse } from './dto/responses.js';
+import { conversationResponse, messageResponse } from './dto/responses.js';
 
 const perUser = (limit: { limit: number; ttl: number }) =>
   Throttle({ default: { ...limit, getTracker: userIdTracker } });
@@ -56,6 +60,8 @@ export class SpaceConversationsController {
     private readonly state: ChangeConversationStateUseCase,
     private readonly executor: ChangeExecutorUseCase,
     private readonly rotate: RotateConversationKeyUseCase,
+    private readonly sending: SendMessageUseCase,
+    private readonly deleting: DeleteMessageUseCase,
   ) {}
 
   /** 201 when created; 200 with the same conversation when the same id is sent again (retry after a network error). */
@@ -195,6 +201,44 @@ export class SpaceConversationsController {
     return conversationResponse(
       await this.rotate.byUser(auth, spaceId, id, rotationInput(dto)),
     );
+  }
+
+  /**
+   * A message (born `pending` until the executor acknowledges it). 201 when created; 200 with the same answer when the
+   * same id is sent again with the same content; 409 `message-id-conflict` for anything else with that id.
+   */
+  @perUser(RATE_LIMITS.conversationMessage)
+  @ApiBearerAuth()
+  @Post(':id/messages')
+  async doSend(
+    @CurrentAuth() auth: AuthContext,
+    @Param('spaceId', uuidPipe('spaceId')) spaceId: string,
+    @Param('id', uuidPipe('id')) id: string,
+    @Body() dto: SendMessageDto,
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    const { view, created } = await this.sending.byUser(
+      auth,
+      spaceId,
+      id,
+      messageInput(dto),
+    );
+    res.status(created ? 201 : 200);
+    return messageResponse(view);
+  }
+
+  /** Only my own messages (403 `not-conversation-owner`); idempotent. */
+  @perUser(RATE_LIMITS.conversationMessage)
+  @ApiBearerAuth()
+  @Delete(':id/messages/:messageId')
+  @HttpCode(204)
+  async doDeleteMessage(
+    @CurrentAuth() auth: AuthContext,
+    @Param('spaceId', uuidPipe('spaceId')) spaceId: string,
+    @Param('id', uuidPipe('id')) id: string,
+    @Param('messageId', uuidPipe('messageId')) messageId: string,
+  ): Promise<void> {
+    await this.deleting.byUser(auth, spaceId, id, messageId);
   }
 
   private async doShareWith(

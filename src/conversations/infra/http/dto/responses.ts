@@ -1,4 +1,5 @@
 import type { ConversationView } from '../../../application/dto/conversation-view.js';
+import type { MessageView } from '../../../application/dto/message-view.js';
 
 const iso = (d: Date | null) => (d ? d.toISOString() : null);
 
@@ -28,5 +29,22 @@ export function conversationResponse(v: ConversationView) {
       keyVersion: k.keyVersion,
       wrappedKey: k.wrappedKey,
     })),
+  };
+}
+
+/** A message: metadata only (never the encrypted body, which the sender already has; the feeds carry it). */
+export function messageResponse(v: MessageView) {
+  return {
+    id: v.id,
+    conversationId: v.conversationId,
+    authorUserId: v.authorUserId,
+    authorHubId: v.authorHubId,
+    keyVersion: v.keyVersion,
+    bodyBytes: v.bodyBytes,
+    replacesMessageId: v.replacesMessageId,
+    pending: v.pending,
+    ackedAt: iso(v.ackedAt),
+    sentAt: v.sentAt.toISOString(),
+    deletedAt: iso(v.deletedAt),
   };
 }

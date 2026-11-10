@@ -24,6 +24,7 @@ import type { ObjectStore } from './ports/object-store.js';
 import { ReconcileStorageUseCase } from './reconcile-storage.use-case.js';
 import { RequestUploadsUseCase } from './request-uploads.use-case.js';
 import type { StorageAccess } from './storage-access.js';
+import { SpaceStorageUsage } from '../../spaces/application/space-storage-usage.js';
 
 const NOW = new Date('2026-11-09T12:00:00Z');
 const ORG = '01900000-0000-7000-8000-000000000001';
@@ -346,6 +347,11 @@ function setup() {
     versionRepo as unknown as BackupObjectVersionRepository;
   const storeDep = store as unknown as ObjectStore;
   const uowDep = uow as unknown as UnitOfWork;
+  // The space usage port, as the app binds it: the backup index (and, in the app, the conversations source).
+  const usage = new SpaceStorageUsage();
+  usage.register('storage', {
+    usedBytes: (o, s) => versionRepoDep.usedBytes(o, s),
+  });
   const healer = new BackupObjectHealer(
     objectRepoDep,
     versionRepoDep,
@@ -382,10 +388,12 @@ function setup() {
       runsBeforeLoss = 1;
     },
     mocks: { access, objectRepo, versionRepo, store, uow },
+    usage,
     request: new RequestUploadsUseCase(
       accessDep,
       objectRepoDep,
       versionRepoDep,
+      usage,
       storeDep,
       uowDep,
     ),
@@ -534,6 +542,18 @@ describe('RequestUploadsUseCase', () => {
       constructor: DomainValidationError,
       code: 'space-storage-full',
       details: { missingBytes: 500 },
+    });
+    expect(t.versions.size).toBe(0);
+  });
+
+  it('the usage is the port (every source: conversation messages too), not only the backup index', async () => {
+    t.setUsed(10 * GiB - 3000);
+    t.usage.register('conversations', { usedBytes: async () => 2000 });
+    await expect(
+      t.request.execute(HUB, SPACE, [item(OBJ_A), item(OBJ_B)], NOW),
+    ).rejects.toMatchObject({
+      code: 'space-storage-full',
+      details: { missingBytes: 1000 },
     });
     expect(t.versions.size).toBe(0);
   });

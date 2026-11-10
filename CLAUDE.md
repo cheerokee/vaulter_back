@@ -408,8 +408,9 @@ exportam); nenhum dos dois importa `spaces`.
   `space-storage-quota-below-usage`); aumentar confere a franquia e os ganchos **`SpaceQuotaHooks`**
   (`src/shared/application/`, global: `lock` antes do lock do espaço, `assertIncrease` depois; o `hubs` confere a
   capacidade de cada Hub onde o espaço está, 422 `hub-storage-full` com `hubId`, e `missingBytes` só para o dono do Hub); auditado
-  `space.storage_quota_changed`. O **uso** vem da porta `SpaceStorageUsage` (exportada; sem fonte, 0): o `storage` liga
-  a implementação real com `use(source)` em `onModuleInit` (e `release` no destroy). `SpaceStorage.lockQuota` (exportado)
+  `space.storage_quota_changed`. O **uso** vem da porta `SpaceStorageUsage` (exportada): a **soma das fontes
+  registradas** (`register(nome, fonte)` em `onModuleInit`, `unregister` no destroy; lidas uma depois da outra, na
+  transação de quem chama; sem fonte, 0): `storage` (backup) e `conversations` (corpo das mensagens). `SpaceStorage.lockQuota` (exportado)
   lê o tamanho com o espaço `FOR SHARE` (instalação no Hub). `GET /spaces/:id`, a criação e o resize trazem
   `storage: { quotaBytes, usedBytes }`; o `GET` traz também `trashBytes` (a parte do uso na lixeira, da porta
   `SpaceStorageUsage.trashBytes`, opcional na fonte; sem ela, 0). Bigint do banco vira número por `byteCount` (`shared/infra/db/byte-count.ts`).
@@ -715,8 +716,9 @@ mesmo commit).
   Leituras entre módulos, todas documentadas onde nascem: o `organizations` soma `spaces.storage_quota_bytes` em SQL
   (franquia; veja "Franquia de nuvem" em `organizations`), o `hubs` lê `spaces.storage_quota_bytes` em SQL ao instalar
   (veja "Capacidade do Hub" em `hubs`) e a sincronização do Hub já era exceção. `SpaceStorageUsage` (porta do `spaces`,
-  sem fonte = 0) tem `use(source)` (o `storage` liga em `onModuleInit`) e `replace(source)`, a costura de teste que
-  devolve a função de restauração. Tamanho do espaço e franquia: veja "Tamanho do espaço" em `spaces`.
+  soma das fontes registradas, sem fonte = 0) tem `register(nome, fonte)` (o `storage` registra `storage` e o
+  `conversations` registra `conversations` em `onModuleInit`) e `replace(source)`, a costura de teste que troca TODAS
+  as fontes por uma e devolve a função de restauração. A intenção de envio lê o uso pela porta (conta as mensagens). Tamanho do espaço e franquia: veja "Tamanho do espaço" em `spaces`.
 - **Regras de tamanho** (`domain/backup-limits.ts`; mudar qualquer valor é decisão de produto): espaço 10 GiB por padrão
   (1 GiB..5 TiB), franquia da organização 50 GiB (só o financeiro da plataforma altera: `PUT /platform/organizations/:orgId/
   storage-quota`, veja `platform`), objeto até 5 GiB (422 `object-too-large`), lote de 100 itens por pedido
@@ -841,11 +843,12 @@ mesmo commit).
   índice, agendar `storage:reconcile`, aviso de franquia perto do fim, endpoint S3 público).
 
 ## Módulo `conversations`
-`src/conversations/` (assuntos: participantes, executor, chave própria por versão; mensagens, anexos e sincronização
-vêm nas próximas tarefas do plano `docs/superpowers/plans/2026-11-09-conversations.md`). Spec:
+`src/conversations/` (assuntos: participantes, executor, chave própria por versão, mensagens e caixa de entrada; anexos e
+sincronização vêm nas próximas tarefas do plano `docs/superpowers/plans/2026-11-09-conversations.md`). Spec:
 `docs/superpowers/specs/2026-11-09-conversations-design.md`; formato em `docs/crypto/conversations.md`; RLS (participante
 vivo ou executor) e "quem sai grava por último" no cabeçalho da migration `CreateConversations`. Depende de `spaces`
-(`SpaceAccess`, inclusive `isSpaceMember`/`spaceMemberIds`), `hubs` (`HubDirectory`: `ownerOf`,
+(`SpaceAccess`, inclusive `isSpaceMember`/`spaceMemberIds`; `SpaceStorage.lockQuota`; a porta `SpaceStorageUsage`, onde
+registra a fonte `conversations`), `hubs` (`HubDirectory`: `ownerOf`,
 `installedSpaceOrganization`, `lockExecutorCandidate`; `HubAccess`) e `organizations` (`AuditLog`); ninguém importa
 `conversations`.
 - **Rotas:** token de usuário em `/spaces/:spaceId/conversations` (`POST` cria; `/:id` lê; `/:id/participants` e
@@ -872,8 +875,31 @@ vivo ou executor) e "quem sai grava por último" no cabeçalho da migration `Cre
   compartilhar) -> assunto (FOR UPDATE) -> participações. Vários assuntos na mesma transação: sempre **(espaço,
   assunto) em ordem** (`idsWithExecutor`/`idsWithParticipant` ordenam por `space_id, id`; a saída da organização emite
   a saída de cada espaço em ordem de id do espaço). Ordem só pelo id do assunto dá deadlock com o executor perdido.
+- **Mensagens** (`SendMessageUseCase`, `AckMessageUseCase`, `DeleteMessageUseCase`): `POST .../:id/messages`
+  `{ id, keyVersion, encryptedBody, replacesMessageId? }` (pessoa em `/spaces/:spaceId/conversations`, executor em
+  `/hub/conversations`), `POST /hub/conversations/:id/messages/:messageId/ack` (só o executor; outro Hub: 404
+  `conversation-not-found`) e `DELETE .../:id/messages/:messageId` (só as próprias: 403 `not-conversation-owner`; 204
+  idempotente; inexistente/de outro assunto: 404 `message-not-found`). Corpo cifrado ≤ 64 KiB (422 `message-too-large`).
+  **Idempotência:** mesmo id + mesmo autor + mesmo conteúdo neste assunto = a mesma resposta (200, nada gravado, mesmo
+  com troca pendente); qualquer outra coisa com o id (outro conteúdo/autor/assunto, ou um id que o RLS esconde:
+  `insertIfAbsent` false) = 409 `message-id-conflict`, nunca "já mandada". Versão = a atual (409
+  `conversation-key-version-stale`), troca pendente = 409 `conversation-key-rotation-required`. Pessoa: nasce
+  `pending`; executor: nasce confirmada (CHECK). `sentAt`, `ackedAt`, lápides e `lastMessageAt` no relógio do banco
+  (`clock_timestamp()` depois das travas). **Editar** = mensagem nova com `replacesMessageId` (só a própria, viva, do
+  mesmo assunto: 403 / 422 `message-replaces-invalid`), e a substituída vira lápide na mesma transação.
+- **Uso do espaço:** o corpo cifrado conta no uso (spec §4.4.1) por um contador por espaço,
+  `conversation_space_usage`, mantido só pelo trigger `trg_conversation_messages_space_usage` (corpo guardado conta;
+  com lápide, conta também como lixeira; corpo zerado pela retenção sai). É contador e não `SUM` porque as mensagens só
+  são visíveis a participantes: o Gestor e o backup somariam só os assuntos deles. `ConversationStorageUsage` registra
+  a fonte na porta `SpaceStorageUsage` (soma das fontes, veja `spaces`). **Travas do envio:** espaço `FOR SHARE`
+  (`SpaceStorage.lockQuota`) -> assunto `FOR UPDATE` -> grava (o trigger trava a linha do contador) -> **só então** lê o
+  uso e confere (422 `space-storage-full` com `missingBytes`, a regra do backup). Envios do mesmo espaço se serializam
+  no contador; a intenção de envio do backup (espaço `FOR UPDATE`) espera os envios e lê o mesmo uso. `FOR SHARE` e não
+  `FOR UPDATE` para uma mensagem não esperar um lote de confirmação do backup (que segura o espaço `FOR SHARE` durante
+  as cópias no S3). Apagar e ack travam só o assunto (nunca o espaço depois do contador).
 - **Testes:** e2e em `test/conversations/` com a cripto real (`test/support/conversation-crypto.ts`) e os helpers de
-  `test/support/conversations-kit.ts` (criar/compartilhar/trocar chave pela HTTP, pessoas em lote, estado cru).
+  `test/support/conversations-kit.ts` (criar/compartilhar/trocar chave/mandar/confirmar/apagar pela HTTP, pessoas em
+  lote, estado cru: `messageRows`, `conversationSpaceUsage`, `lastMessageAt`).
 
 ## Banco de dados (TypeORM + migrations)
 - **Pool:** o do driver `pg`, com tamanho explícito `DB_POOL_MAX_CONNECTIONS` (10 por instância; instâncias × 10 abaixo
@@ -1072,6 +1098,8 @@ Os valores do `.env.example` para os segredos são **só de desenvolvimento**; p
   | `POST /spaces/:spaceId/conversations` e `POST /hub/conversations` (criar assunto) | 120/h por usuário (`userIdTracker`) / por Hub (`hubIdTracker`), contador próprio por rota |
   | `POST .../conversations/:id/keys` (troca da chave do assunto, as duas formas) | 30/h por usuário / por Hub |
   | compartilhar, sair, tirar, estado e executor do assunto (`/spaces/:spaceId/conversations/:id/...`, `PUT /hub/conversations/:id/state`) | 600/h por usuário / por Hub, contador próprio por rota |
+  | mandar e apagar mensagem do assunto (`POST .../:id/messages`, `DELETE .../:id/messages/:messageId`) | 60/min por usuário / 300/min por Hub, contador próprio por rota |
+  | `POST /hub/conversations/:id/messages/:messageId/ack` | 600/min por Hub |
   Rota com `@Throttle` próprio tem contador próprio (por rota); `@ThrottleGroup(THROTTLE_GROUPS.x, tracker?)`
   (`throttling.decorators.ts`) faz rotas dividirem um contador (chave = grupo + tracker, sem a rota); cada grupo é
   UMA constante com nome e limite em `THROTTLE_GROUPS` (`rate-limits.ts`), e o decorator recusa o mesmo grupo com

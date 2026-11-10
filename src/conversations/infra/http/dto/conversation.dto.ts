@@ -17,6 +17,7 @@ import {
 import {
   MAX_CONVERSATION_PARTICIPANTS,
   MAX_HEADER_BYTES,
+  MAX_MESSAGE_BYTES,
 } from '../../../domain/conversation-limits.js';
 import {
   CONVERSATION_STATES,
@@ -27,6 +28,8 @@ import { WRAPPED_CONVERSATION_KEY_PATTERN } from '../../../domain/wrapped-conver
 const BASE64URL = /^[A-Za-z0-9_-]+$/;
 /** base64url text of the largest header (the domain checks the exact size: 422 `header-too-large`). */
 const MAX_HEADER_CHARS = Math.ceil((MAX_HEADER_BYTES * 4) / 3);
+/** base64url text of the largest message (the domain checks the exact size: 422 `message-too-large`). */
+const MAX_MESSAGE_CHARS = Math.ceil((MAX_MESSAGE_BYTES * 4) / 3);
 /** A copy per version: a request sealing every version for a person stays far below the JSON body limit. */
 const MAX_VERSION_GRANTS = 500;
 
@@ -185,5 +188,38 @@ export function rotationInput(dto: RotateConversationKeyDto) {
       hubId: g.hubId,
       wrappedKey: g.wrappedKey,
     })),
+  };
+}
+
+export class SendMessageDto {
+  /** UUID v7 generated on the device (part of the encryption AD): resending the same message is idempotent. */
+  @IsUUID()
+  id!: string;
+
+  /** The current version of the conversation key (409 `conversation-key-version-stale` otherwise). */
+  @IsInt()
+  @Min(1)
+  keyVersion!: number;
+
+  /** `0x01 ‖ nonce ‖ XChaCha20-Poly1305` with the conversation key (docs/crypto/conversations.md), ≤ 64 KiB. */
+  @IsString()
+  @Matches(BASE64URL)
+  @MaxLength(MAX_MESSAGE_CHARS + 4)
+  encryptedBody!: string;
+
+  /** Edit: a live message of mine in this conversation; it becomes a tombstone. */
+  @IsOptional()
+  @ValidateIf((_o, v) => v !== null)
+  @IsUUID()
+  replacesMessageId?: string | null;
+}
+
+/** The use case input of a message (user and hub routes). */
+export function messageInput(dto: SendMessageDto) {
+  return {
+    id: dto.id,
+    keyVersion: dto.keyVersion,
+    encryptedBody: dto.encryptedBody,
+    replacesMessageId: dto.replacesMessageId ?? null,
   };
 }

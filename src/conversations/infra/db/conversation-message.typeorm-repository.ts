@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { DataSource, IsNull } from 'typeorm';
+import { currentManager } from '../../../shared/infra/db/unit-of-work.js';
 import type { ConversationScope } from '../../domain/conversation-actor.js';
 import { conversationNotFound } from '../../domain/conversation-errors.js';
 import { ConversationMessageRepository } from '../../domain/conversation-message.repository.js';
@@ -62,6 +63,13 @@ export class ConversationMessageTypeormRepository extends ConversationMessageRep
       ),
     );
     if (!result.affected) throw conversationNotFound();
+  }
+
+  async databaseNow(): Promise<Date> {
+    const rows: { now: Date }[] = await currentManager(this.dataSource).query(
+      `SELECT clock_timestamp() AS now`,
+    );
+    return rows[0]!.now;
   }
 
   async listPending(

@@ -87,6 +87,13 @@ export const RATE_LIMITS = {
   conversationCreate: { limit: 120, ttl: HOUR },
   conversationKeyRotation: { limit: 30, ttl: HOUR },
   conversationChange: { limit: 600, ttl: HOUR },
+  /**
+   * Mensagens dos assuntos (mandar e apagar, contador próprio por rota): por pessoa 60/min (um app conversando) e por
+   * Hub 300/min (o copiloto responde em vários assuntos). Confirmar (`ack`) por Hub: 600/min (um por mensagem pega).
+   */
+  conversationMessage: { limit: 60, ttl: MINUTE },
+  conversationHubMessage: { limit: 300, ttl: MINUTE },
+  conversationAck: { limit: 600, ttl: MINUTE },
 } as const;
 
 /** Nome do throttler extra, cobrado só nas rotas marcadas com @ThrottleByEmail(). */

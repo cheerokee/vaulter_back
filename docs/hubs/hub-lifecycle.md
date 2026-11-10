@@ -429,8 +429,8 @@ Outras rotas do dono: `GET /hubs` (Hubs que a pessoa vê, por cursor), `GET /hub
 
 ## Assuntos (conversas): o Hub como executor
 
-Primeira parte do Hub como executor dos assuntos (spec `2026-11-09-conversations-design.md`; o feed de mudanças, a
-sondagem longa e as mensagens/`ack` chegam nas próximas tarefas e serão descritos aqui). Rotas com o token de Hub:
+O Hub como executor dos assuntos (spec `2026-11-09-conversations-design.md`; o feed de mudanças e a sondagem longa
+chegam nas próximas tarefas e serão descritos aqui). Rotas com o token de Hub:
 
 - `POST /hub/conversations` `{ id, spaceId, ownerUserId, state?, encryptedHeader, grants: [{ userId, wrappedKey }],
   hubWrappedKey }`: o Hub abre um assunto (o "aviso", `state` padrão `aviso`) em nome de uma pessoa com papel no Hub e
@@ -444,6 +444,21 @@ sondagem longa e as mensagens/`ack` chegam nas próximas tarefas e serão descri
 - `POST /hub/conversations/:id/keys` `{ version, grants: [{ userId, wrappedKey }], hubGrants: [{ hubId, wrappedKey }] }`:
   com a troca pendente (`keyRotationRequired`, alguém saiu), o Hub pode fazer a troca: versão atual + 1 para
   **exatamente** os participantes vivos e ele mesmo (409 `key-rotation-mismatch` com os ids faltando/sobrando).
+
+- `POST /hub/conversations/:id/messages` `{ id, keyVersion, encryptedBody, replacesMessageId? }`: a mensagem do Hub,
+  cifrada com a chave do assunto (`docs/crypto/conversations.md`, rótulo `conversation-message`, `recordId` = id da
+  mensagem, UUID v7 gerado no Hub), até 64 KiB cifrados (maior: 422 `message-too-large`; vira anexo). Nasce confirmada
+  (`pending: false`). 201; **mandar de novo** o mesmo `id` com o mesmo conteúdo devolve a mesma resposta (200), então
+  depois de uma falha de rede é seguro repetir; o mesmo `id` com outro conteúdo (ou já usado em outro lugar): 409
+  `message-id-conflict`. `keyVersion` tem de ser a atual (409 `conversation-key-version-stale` com `expectedVersion`);
+  com troca pendente: 409 `conversation-key-rotation-required` (faça a troca antes). Espaço cheio: 422
+  `space-storage-full` (`missingBytes`; o texto das mensagens conta no tamanho do espaço, junto com o backup).
+  `replacesMessageId` edita uma mensagem do próprio Hub (ela vira lápide).
+- `POST /hub/conversations/:id/messages/:messageId/ack`: caixa de entrada; o Hub confirma que **pegou** a mensagem de
+  uma pessoa (que nasce `pending`). Só o executor; confirmar de novo devolve a mesma resposta (a primeira hora vale).
+  Mensagem inexistente, de outro assunto ou apagada: 404 `message-not-found`.
+- `DELETE /hub/conversations/:id/messages/:messageId`: apaga (lápide) só as mensagens do próprio Hub (as de pessoas:
+  403 `not-conversation-owner`); 204, idempotente.
 
 O Hub **deixa de ser executor** (404 `conversation-not-found` dali em diante, cópias dele com lápide) quando é
 desregistrado, a organização é desvinculada, o espaço sai dele ou o dono dele deixa de participar do assunto. As
@@ -479,6 +494,8 @@ Assim nada do dono anterior chega a um dono novo.
 | `POST /hub/conversations` | 120/h | Hub |
 | `PUT /hub/conversations/:id/state` | 600/h | Hub |
 | `POST /hub/conversations/:id/keys` | 30/h | Hub |
+| `POST /hub/conversations/:id/messages` e `DELETE .../messages/:messageId` | 300/min (cada rota) | Hub |
+| `POST /hub/conversations/:id/messages/:messageId/ack` | 600/min | Hub |
 | demais rotas | 300/min somando todas | IP |
 
 Estourou: 429 `too-many-requests` com `Retry-After` (segundos).

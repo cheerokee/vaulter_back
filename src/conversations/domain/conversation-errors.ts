@@ -80,3 +80,36 @@ export const conversationIdConflict = () =>
     'conversation-id-conflict',
     'Another conversation already uses this id.',
   );
+
+/** The message id is already used: by another message, author or conversation (or by one the caller cannot see). */
+export const messageIdConflict = () =>
+  new ConflictError(
+    'message-id-conflict',
+    'Another message already uses this id.',
+  );
+
+/** Unknown, deleted (for an ack) or of another conversation: always the same 404. */
+export const messageNotFound = () =>
+  new NotFoundError('message-not-found', 'The message was not found.');
+
+/** An edit must replace a live message of the same conversation. */
+export const messageReplacesInvalid = () =>
+  new DomainValidationError(
+    'message-replaces-invalid',
+    'The replaced message must be a live message of this conversation.',
+  );
+
+/**
+ * The same rule (and code) as the backup of the space (`space-storage-full`): the whole usage of the space, already
+ * counting the new content, must fit its size.
+ */
+export function assertSpaceFits(quotaBytes: number, usedBytes: number): void {
+  const missingBytes = usedBytes - quotaBytes;
+  if (missingBytes > 0) {
+    throw new DomainValidationError(
+      'space-storage-full',
+      'The space does not have room for this content.',
+      { missingBytes },
+    );
+  }
+}

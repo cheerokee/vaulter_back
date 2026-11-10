@@ -17,6 +17,11 @@ export abstract class ConversationMessageRepository {
     scope: ConversationScope,
     message: ConversationMessage,
   ): Promise<void>;
+  /**
+   * The database clock at this instant (`clock_timestamp()`): `sentAt`, `ackedAt` and the tombstones come from it, read
+   * after the locks, so the times of one conversation follow the order of its writes.
+   */
+  abstract databaseNow(): Promise<Date>;
   /** Live pending messages of the conversation (inbox), ascending by sentAt then id. */
   abstract listPending(
     scope: ConversationScope,

@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { newId } from '../../shared/domain/id.js';
+import { SpaceStorageUsage } from '../../spaces/application/space-storage-usage.js';
 import { UnitOfWork } from '../../shared/infra/db/unit-of-work.js';
 import { uploadKey } from '../domain/backup-keys.js';
 import { PRESIGNED_URL_TTL_SECONDS } from '../domain/backup-limits.js';
@@ -26,7 +27,7 @@ import {
 //    e juntas estourariam o tamanho; nenhuma chamada ao S3 acontece sob ela), confere troca de chave pendente / versão da chave (409), trava cada objeto em
 //    ordem de id (criando a linha do objeto novo; id de outro espaço = 409), confere `replacesVersionId` (409
 //    `object-version-conflict`), encerra as intenções anteriores do mesmo objeto por quem envia, lê o uso (com as
-//    reservas) e confere que tudo cabe (422 `space-storage-full` com `missingBytes`); grava as versões `pending`;
+//    reservas, e as mensagens dos assuntos pela porta `SpaceStorageUsage`) e confere que tudo cabe (422 `space-storage-full` com `missingBytes`); grava as versões `pending`;
 //    espera por trava além de 10 s (`lock_timeout`) = 409 `storage-busy`, repetível;
 // 3. depois do commit, assina um PUT por objeto no prefixo provisório `uploads/<uploadId>` (15 min), preso ao tamanho
 //    e ao sha256 declarados. Os cabeçalhos devolvidos vão ao cliente sem mudança.
@@ -36,6 +37,7 @@ export class RequestUploadsUseCase {
     private readonly access: StorageAccess,
     private readonly objects: BackupObjectRepository,
     private readonly versions: BackupObjectVersionRepository,
+    private readonly usage: SpaceStorageUsage,
     private readonly store: ObjectStore,
     private readonly uow: UnitOfWork,
   ) {}
@@ -79,7 +81,8 @@ export class RequestUploadsUseCase {
             uploader,
           );
         }
-        const usedBytes = await this.versions.usedBytes(orgId, space.spaceId);
+        // O uso do espaço inteiro (porta `SpaceStorageUsage`: o backup E as mensagens dos assuntos), não só o índice.
+        const usedBytes = await this.usage.usedBytes(orgId, space.spaceId);
         BackupRules.assertFits(
           space,
           usedBytes,

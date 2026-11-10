@@ -38,7 +38,7 @@ const hooks = {
 beforeEach(() => {
   vi.resetAllMocks();
   kit.reset();
-  usage.release();
+  usage.unregister('test');
   hooks.lock.mockImplementation(async () => {
     kit.trace.push('hooks.lock');
   });
@@ -50,33 +50,63 @@ beforeEach(() => {
 });
 afterEach(() => vi.useRealTimers());
 
-describe('SpaceStorageUsage (provisional port, bound by storage later)', () => {
-  it('reads 0 until a source is provided; one source at a time', async () => {
+describe('SpaceStorageUsage (port; the sum of the registered sources)', () => {
+  it('reads 0 until a source is registered; a name registers once', async () => {
     const fresh = new SpaceStorageUsage();
     await expect(fresh.usedBytes(ORG_ID, SPACE_ID)).resolves.toBe(0);
     const source = { usedBytes: vi.fn(async () => 7) };
-    fresh.use(source);
+    fresh.register('storage', source);
     await expect(fresh.usedBytes(ORG_ID, SPACE_ID)).resolves.toBe(7);
     expect(source.usedBytes).toHaveBeenCalledWith(ORG_ID, SPACE_ID);
-    expect(() => fresh.use({ usedBytes: async () => 1 })).toThrow();
-    fresh.release();
+    expect(() =>
+      fresh.register('storage', { usedBytes: async () => 1 }),
+    ).toThrow();
+    fresh.unregister('storage');
     await expect(fresh.usedBytes(ORG_ID, SPACE_ID)).resolves.toBe(0);
     // The trash (part of the usage) reads 0 without a source, or with a source that does not tell it.
     await expect(fresh.trashBytes(ORG_ID, SPACE_ID)).resolves.toBe(0);
-    fresh.use({ usedBytes: async () => 9 });
+    fresh.register('storage', { usedBytes: async () => 9 });
     await expect(fresh.trashBytes(ORG_ID, SPACE_ID)).resolves.toBe(0);
-    fresh.release();
-    fresh.use({ usedBytes: async () => 9, trashBytes: async () => 4 });
+    fresh.unregister('storage');
+    fresh.register('storage', {
+      usedBytes: async () => 9,
+      trashBytes: async () => 4,
+    });
     await expect(fresh.trashBytes(ORG_ID, SPACE_ID)).resolves.toBe(4);
   });
 
-  it('replace (test seam) swaps the bound source and the restore function puts the previous one back', async () => {
+  it('sums every registered source (backup + conversations), one after the other', async () => {
     const fresh = new SpaceStorageUsage();
-    fresh.use({ usedBytes: async () => 7 });
+    const calls: string[] = [];
+    let inFlight = 0;
+    const source = (name: string, used: number, trash?: number) => ({
+      usedBytes: async () => {
+        calls.push(name);
+        expect(inFlight).toBe(0); // the same transaction: never two queries at once
+        inFlight++;
+        await Promise.resolve();
+        inFlight--;
+        return used;
+      },
+      ...(trash !== undefined ? { trashBytes: async () => trash } : {}),
+    });
+    fresh.register('storage', source('storage', 100, 10));
+    fresh.register('conversations', source('conversations', 5, 2));
+    await expect(fresh.usedBytes(ORG_ID, SPACE_ID)).resolves.toBe(105);
+    await expect(fresh.trashBytes(ORG_ID, SPACE_ID)).resolves.toBe(12);
+    expect(calls).toEqual(['storage', 'conversations']);
+    fresh.unregister('conversations');
+    await expect(fresh.usedBytes(ORG_ID, SPACE_ID)).resolves.toBe(100);
+  });
+
+  it('replace (test seam) swaps every source for one and the restore function puts them back', async () => {
+    const fresh = new SpaceStorageUsage();
+    fresh.register('storage', { usedBytes: async () => 7 });
+    fresh.register('conversations', { usedBytes: async () => 3 });
     const restore = fresh.replace({ usedBytes: async () => 42 });
     await expect(fresh.usedBytes(ORG_ID, SPACE_ID)).resolves.toBe(42);
     restore();
-    await expect(fresh.usedBytes(ORG_ID, SPACE_ID)).resolves.toBe(7);
+    await expect(fresh.usedBytes(ORG_ID, SPACE_ID)).resolves.toBe(10);
   });
 });
 
@@ -228,7 +258,7 @@ describe('ResizeSpaceStorageUseCase', () => {
   });
 
   it('a decrease checks only the usage (no quota, no hub capacity)', async () => {
-    usage.use({ usedBytes: async () => 3 * GiB });
+    usage.register('test', { usedBytes: async () => 3 * GiB });
     await expect(
       useCase().execute(actor(MANAGER), SPACE_ID, {
         storageQuotaBytes: 2 * GiB,
@@ -257,7 +287,10 @@ describe('ResizeSpaceStorageUseCase', () => {
 
 describe('GetSpaceUseCase storage', () => {
   it('every member sees the size, the usage and the trash part of it', async () => {
-    usage.use({ usedBytes: async () => 123, trashBytes: async () => 23 });
+    usage.register('test', {
+      usedBytes: async () => 123,
+      trashBytes: async () => 23,
+    });
     const view = await new GetSpaceUseCase(
       d.access,
       d.recoveryKit,

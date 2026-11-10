@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   HttpCode,
   Param,
@@ -19,17 +20,22 @@ import {
 import { hubIdTracker } from '../../../shared/infra/http/hub-id.tracker.js';
 import { RATE_LIMITS } from '../../../shared/infra/http/rate-limits.js';
 import { uuidPipe } from '../../../shared/infra/http/uuid-pipe.js';
+import { AckMessageUseCase } from '../../application/ack-message.use-case.js';
 import { ChangeConversationStateUseCase } from '../../application/change-conversation-state.use-case.js';
+import { DeleteMessageUseCase } from '../../application/delete-message.use-case.js';
 import { GetConversationUseCase } from '../../application/get-conversation.use-case.js';
 import { HubCreateConversationUseCase } from '../../application/hub-create-conversation.use-case.js';
 import { RotateConversationKeyUseCase } from '../../application/rotate-conversation-key.use-case.js';
+import { SendMessageUseCase } from '../../application/send-message.use-case.js';
 import {
   HubCreateConversationDto,
   RotateConversationKeyDto,
+  SendMessageDto,
   StateDto,
+  messageInput,
   rotationInput,
 } from './dto/conversation.dto.js';
-import { conversationResponse } from './dto/responses.js';
+import { conversationResponse, messageResponse } from './dto/responses.js';
 
 const perHub = (limit: { limit: number; ttl: number }) =>
   Throttle({ default: { ...limit, getTracker: hubIdTracker } });
@@ -45,6 +51,9 @@ export class HubConversationsController {
     private readonly getOne: GetConversationUseCase,
     private readonly state: ChangeConversationStateUseCase,
     private readonly rotate: RotateConversationKeyUseCase,
+    private readonly sending: SendMessageUseCase,
+    private readonly acking: AckMessageUseCase,
+    private readonly deleting: DeleteMessageUseCase,
   ) {}
 
   /** 201 when created; 200 with the same conversation when the same id is sent again. */
@@ -117,5 +126,55 @@ export class HubConversationsController {
     return conversationResponse(
       await this.rotate.byHub({ hubId: hub.hubId }, id, rotationInput(dto)),
     );
+  }
+
+  /** The executor's message: born acknowledged. 201 / 200 (same id, same content) / 409 `message-id-conflict`. */
+  @perHub(RATE_LIMITS.conversationHubMessage)
+  @ApiBearerAuth()
+  @HubAuth()
+  @Post(':id/messages')
+  async doSend(
+    @CurrentHub() hub: HubAuthContext,
+    @Param('id', uuidPipe('id')) id: string,
+    @Body() dto: SendMessageDto,
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    const { view, created } = await this.sending.byHub(
+      { hubId: hub.hubId },
+      id,
+      messageInput(dto),
+    );
+    res.status(created ? 201 : 200);
+    return messageResponse(view);
+  }
+
+  /** Inbox: the executor took a person's message (the first ack wins; again = the same answer). */
+  @perHub(RATE_LIMITS.conversationAck)
+  @ApiBearerAuth()
+  @HubAuth()
+  @Post(':id/messages/:messageId/ack')
+  @HttpCode(200)
+  async doAck(
+    @CurrentHub() hub: HubAuthContext,
+    @Param('id', uuidPipe('id')) id: string,
+    @Param('messageId', uuidPipe('messageId')) messageId: string,
+  ) {
+    return messageResponse(
+      await this.acking.execute({ hubId: hub.hubId }, id, messageId),
+    );
+  }
+
+  /** Only the hub's own messages (403 `not-conversation-owner`); idempotent. */
+  @perHub(RATE_LIMITS.conversationHubMessage)
+  @ApiBearerAuth()
+  @HubAuth()
+  @Delete(':id/messages/:messageId')
+  @HttpCode(204)
+  async doDeleteMessage(
+    @CurrentHub() hub: HubAuthContext,
+    @Param('id', uuidPipe('id')) id: string,
+    @Param('messageId', uuidPipe('messageId')) messageId: string,
+  ): Promise<void> {
+    await this.deleting.byHub({ hubId: hub.hubId }, id, messageId);
   }
 }

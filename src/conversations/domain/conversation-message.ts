@@ -1,7 +1,7 @@
-import { DomainValidationError } from '../../shared/domain/errors.js';
 import { Entity } from '../../shared/domain/entity.js';
 import { sameActor, type ConversationActor } from './conversation-actor.js';
 import {
+  messageReplacesInvalid,
   messageTooLarge,
   notConversationOwner,
 } from './conversation-errors.js';
@@ -44,12 +44,7 @@ export class ConversationMessage extends Entity<ConversationMessageProps> {
     now: Date;
   }): ConversationMessage {
     const id = assertDeviceId(input.id, 'message-id-invalid');
-    if (input.replacesMessageId === id) {
-      throw new DomainValidationError(
-        'message-replaces-invalid',
-        'A message cannot replace itself.',
-      );
-    }
+    if (input.replacesMessageId === id) throw messageReplacesInvalid();
     const bodyBytes = assertEncryptedBlob(
       input.encryptedBody,
       MAX_MESSAGE_BYTES,

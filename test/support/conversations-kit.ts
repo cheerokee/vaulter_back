@@ -15,6 +15,7 @@ import {
   openConversationKey,
   sealConversationKey,
   sealHeader,
+  sealMessage,
 } from './conversation-crypto.js';
 import type { ClaimedHub } from './hubs-kit.js';
 import type { KeyedUser, Recipient } from './identity-client.js';
@@ -64,8 +65,125 @@ export function conversationsKit(getApp: () => INestApplication) {
       })),
     );
 
+  /** A message body sealed with the conversation key (AD bound to the space, conversation, message id and version). */
+  const messageBody = async (
+    key: Uint8Array,
+    spaceId: string,
+    conversationId: string,
+    messageId: string,
+    keyVersion: number,
+    text: string,
+  ) =>
+    Buffer.from(
+      await sealMessage(
+        key,
+        { spaceId, conversationId, recordId: messageId, keyVersion },
+        new TextEncoder().encode(text),
+      ),
+    ).toString('base64url');
+
   return {
     allVersions,
+    messageBody,
+    /**
+     * A person sends a message sealed with `keys[keyVersion - 1]` (default: the last version). Returns the body sent so
+     * a spec can resend exactly the same thing.
+     */
+    send: async (
+      user: KeyedUser,
+      spaceId: string,
+      conversationId: string,
+      keys: ConversationKeys,
+      opts: {
+        id?: string;
+        text?: string;
+        keyVersion?: number;
+        replacesMessageId?: string;
+      } = {},
+    ) => {
+      const id = opts.id ?? newId();
+      const keyVersion = opts.keyVersion ?? keys.length;
+      const body = {
+        id,
+        keyVersion,
+        encryptedBody: await messageBody(
+          keys[keyVersion - 1]!,
+          spaceId,
+          conversationId,
+          id,
+          keyVersion,
+          opts.text ?? 'liga a luz',
+        ),
+        ...(opts.replacesMessageId
+          ? { replacesMessageId: opts.replacesMessageId }
+          : {}),
+      };
+      const res = await http()
+        .post(`${base(spaceId, conversationId)}/messages`)
+        .set(bearer(user.token))
+        .send(body);
+      return { res, id, body };
+    },
+    /** The same, raw: resend a body (or a broken one). */
+    sendRaw: (
+      user: KeyedUser,
+      spaceId: string,
+      conversationId: string,
+      body: object,
+    ) =>
+      http()
+        .post(`${base(spaceId, conversationId)}/messages`)
+        .set(bearer(user.token))
+        .send(body),
+    /** The executor hub sends a message (born acknowledged). */
+    hubSend: async (
+      hubToken: string,
+      spaceId: string,
+      conversationId: string,
+      keys: ConversationKeys,
+      opts: { id?: string; text?: string; keyVersion?: number } = {},
+    ) => {
+      const id = opts.id ?? newId();
+      const keyVersion = opts.keyVersion ?? keys.length;
+      const body = {
+        id,
+        keyVersion,
+        encryptedBody: await messageBody(
+          keys[keyVersion - 1]!,
+          spaceId,
+          conversationId,
+          id,
+          keyVersion,
+          opts.text ?? 'feito',
+        ),
+      };
+      const res = await http()
+        .post(`/hub/conversations/${conversationId}/messages`)
+        .set(bearer(hubToken))
+        .send(body);
+      return { res, id, body };
+    },
+    hubAck: (hubToken: string, conversationId: string, messageId: string) =>
+      http()
+        .post(`/hub/conversations/${conversationId}/messages/${messageId}/ack`)
+        .set(bearer(hubToken)),
+    deleteMessage: (
+      user: KeyedUser,
+      spaceId: string,
+      conversationId: string,
+      messageId: string,
+    ) =>
+      http()
+        .delete(`${base(spaceId, conversationId)}/messages/${messageId}`)
+        .set(bearer(user.token)),
+    hubDeleteMessage: (
+      hubToken: string,
+      conversationId: string,
+      messageId: string,
+    ) =>
+      http()
+        .delete(`/hub/conversations/${conversationId}/messages/${messageId}`)
+        .set(bearer(hubToken)),
     /** A person opens a conversation in the space (key v1 sealed for them and, optionally, for the executor hub). */
     create: async (
       user: KeyedUser,
@@ -356,4 +474,53 @@ export async function liveParticipants(id: string): Promise<string[]> {
     [id],
   );
   return rows.map((r) => r.user_id);
+}
+
+/** Raw message rows of a conversation (owner role, no RLS), tombstones included, in send order. */
+export async function messageRows(conversationId: string) {
+  const rows = await (
+    await adminDataSource()
+  ).query(
+    `SELECT id, author_user_id, author_hub_id, key_version, encrypted_body, body_bytes, replaces_message_id,
+            pending, acked_at, sent_at, deleted_at IS NOT NULL AS deleted
+       FROM conversation_messages WHERE conversation_id = $1 ORDER BY sent_at, id`,
+    [conversationId],
+  );
+  return rows as {
+    id: string;
+    author_user_id: string | null;
+    author_hub_id: string | null;
+    key_version: number;
+    encrypted_body: string | null;
+    body_bytes: number;
+    replaces_message_id: string | null;
+    pending: boolean;
+    acked_at: Date | null;
+    sent_at: Date;
+    deleted: boolean;
+  }[];
+}
+
+/** The conversations part of a space usage (the counter kept by trigger): `{ bodyBytes, trashBytes }`. */
+export async function conversationSpaceUsage(spaceId: string) {
+  const rows: { body_bytes: string; trash_bytes: string }[] = await (
+    await adminDataSource()
+  ).query(
+    `SELECT body_bytes::text, trash_bytes::text FROM conversation_space_usage WHERE space_id = $1`,
+    [spaceId],
+  );
+  return {
+    bodyBytes: Number(rows[0]?.body_bytes ?? 0),
+    trashBytes: Number(rows[0]?.trash_bytes ?? 0),
+  };
+}
+
+/** `last_message_at` of a conversation (owner role). */
+export async function lastMessageAt(conversationId: string) {
+  const rows: { last_message_at: Date | null }[] = await (
+    await adminDataSource()
+  ).query(`SELECT last_message_at FROM conversations WHERE id = $1`, [
+    conversationId,
+  ]);
+  return rows[0]?.last_message_at ?? null;
 }

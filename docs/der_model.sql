@@ -936,6 +936,23 @@ CREATE TABLE conversation_attachments (
   CONSTRAINT fk_conversation_attachments_messages FOREIGN KEY (message_id, conversation_id, organization_id) REFERENCES conversation_messages (id, conversation_id, organization_id)
 );
 
+-- A parte dos assuntos no uso do espaço: contador por espaço, mantido só por trigger em conversation_messages
+-- (as mensagens só são visíveis a participantes; quem lê o uso não poderia somá-las). RLS só por organização;
+-- não sincroniza (sem sync_version).
+CREATE TABLE conversation_space_usage (
+  space_id CHAR(36) NOT NULL,
+  created_at DATETIME NOT NULL,
+  updated_at DATETIME NULL,
+  deleted_at DATETIME NULL,
+  organization_id CHAR(36) NOT NULL,
+  body_bytes BIGINT NOT NULL DEFAULT 0 COMMENT 'corpos cifrados ainda guardados (vivos e na lixeira de 30 dias)',
+  trash_bytes BIGINT NOT NULL DEFAULT 0 COMMENT 'a parte de body_bytes com lápide',
+  PRIMARY KEY (space_id),
+  INDEX fk_conversation_space_usage_organizations_idx (organization_id),
+  CONSTRAINT fk_conversation_space_usage_organizations FOREIGN KEY (organization_id) REFERENCES organizations (id),
+  CONSTRAINT fk_conversation_space_usage_spaces FOREIGN KEY (space_id, organization_id) REFERENCES spaces (id, organization_id)
+);
+
 -- Permissões que o app pode pedir. À instalação só se concede a interseção (app declarou x papel concedido).
 CREATE TABLE app_permission (
   app_id CHAR(36) NOT NULL,
