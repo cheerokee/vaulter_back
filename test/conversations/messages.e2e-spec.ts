@@ -395,6 +395,55 @@ describe('conversation messages (e2e)', () => {
       expectProblem(intruder.res, 404, 'conversation-not-found');
     });
 
+    it("a send and an ack do not wait for an attachment confirmation's FOR KEY SHARE; a key rotation's FOR UPDATE would", async () => {
+      const conv = await conversation();
+      const first = await k.send(olivia, spaceId, conv.id, conv.keys);
+      await expectStatus(Promise.resolve(first.res), 201);
+      const t = await token(casa);
+      // What a confirmation holds on the conversation during its S3 copy.
+      const holder = (await adminDataSource()).createQueryRunner();
+      await holder.connect();
+      await holder.startTransaction();
+      try {
+        await holder.query(
+          `SELECT 1 FROM conversations WHERE id = $1 FOR KEY SHARE`,
+          [conv.id],
+        );
+        const within = <T>(p: Promise<T>) =>
+          Promise.race([
+            p,
+            new Promise<never>((_, reject) =>
+              setTimeout(
+                () => reject(new Error('waited for FOR KEY SHARE')),
+                5_000,
+              ),
+            ),
+          ]);
+        const sent = await within(k.send(olivia, spaceId, conv.id, conv.keys));
+        await expectStatus(Promise.resolve(sent.res), 201);
+        await expectStatus(within(k.hubAck(t, conv.id, first.id)), 200);
+        // A rotation-style lock (FOR UPDATE) conflicts with it.
+        const other = (await adminDataSource()).createQueryRunner();
+        await other.connect();
+        try {
+          await other.startTransaction();
+          await other.query(`SET LOCAL lock_timeout = '200ms'`);
+          await expect(
+            other.query(
+              `SELECT 1 FROM conversations WHERE id = $1 FOR UPDATE`,
+              [conv.id],
+            ),
+          ).rejects.toMatchObject({ driverError: { code: '55P03' } });
+          await other.rollbackTransaction();
+        } finally {
+          await other.release();
+        }
+      } finally {
+        await holder.rollbackTransaction();
+        await holder.release();
+      }
+    }, 20_000);
+
     it("without an executor the person's messages wait as pending", async () => {
       const conv = await k.create(olivia, spaceId);
       await expectStatus(Promise.resolve(conv.res), 201);

@@ -35,8 +35,10 @@ type Resolved = { scope: ConversationScope; spaceId: string };
 // 1. DIÁRIO antes de tudo, numa transação curta própria (confirmada antes do unit of work que grava no S3; nunca uma
 //    segunda conexão do pool enquanto ele segura a dele): depois da checagem de acesso (participante ou executor), marca
 //    só o anexo pendente de QUEM confirma, renovando `s3_write_started_at` para o relógio do banco;
-// 2. no unit of work (`lock_timeout` de 10 s: 409 `storage-busy`): assunto `FOR SHARE` (uma troca de chave espera a
-//    cópia; outras confirmações e mensagens não) -> linha do anexo `FOR UPDATE` (a "trava do objeto"). Anexo de outro
+// 2. no unit of work (`lock_timeout` de 10 s: 409 `storage-busy`): assunto `FOR KEY SHARE` (só lê o estado da chave
+//    durante a cópia no S3: troca de chave, saída e troca de executor, que travam `FOR UPDATE`, esperam a cópia;
+//    mensagens e acks travam `FOR NO KEY UPDATE`, que é compatível, e outras confirmações também não esperam; veja
+//    `ConversationLockMode`) -> linha do anexo `FOR UPDATE` (a "trava do objeto"). Anexo de outro
 //    assunto, de outro remetente, fora da janela de 24 h ou inexistente: 404 `attachment-not-found`; já confirmado: a
 //    mesma resposta, nada copiado. Troca de chave pendente / versão velha: 409 (podem ter mudado depois da intenção);
 // 3. HEAD do provisório: tamanho e sha256 iguais aos declarados, senão 422 `upload-mismatch` (nada entra no índice);
@@ -123,7 +125,7 @@ export class ConfirmAttachmentUseCase {
           scope,
           conversationId,
           spaceId,
-          'share',
+          'key-share',
         );
         const a = await this.attachments.lockById(scope, attachmentId);
         if (

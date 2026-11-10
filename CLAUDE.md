@@ -884,7 +884,9 @@ registra a fonte `conversations`), `hubs` (`HubDirectory`: `ownerOf`,
   dono participa, com o espaço instalado (`hub_space` vivo, vínculo aprovado); 422 `executor-invalid`. Trocar executor
   manda as cópias de todas as versões para o Hub novo e deixa a troca de chave pendente. Troca de chave: versão atual + 1
   para **exatamente** os participantes vivos e o executor (409 `key-rotation-mismatch` com os ids); com troca pendente,
-  qualquer participante ou o executor; sem ela, só o dono (409 `key-rotation-not-required`).
+  qualquer participante ou o executor; sem ela, só o dono (409 `key-rotation-not-required`). **Corpo de 100 kB:**
+  "compartilhar com o espaço" manda todas as pessoas que faltam num pedido só e passa do limite por volta de 12 versões
+  × 50 pessoas (~140 bytes por cópia); o app usa o modo `people` em lotes nesse caso (`docs/app/pendencias-do-app.md`).
 - **Saída** (`ConversationDeparture`, usada por sair, tirar e pelo gancho `conversations.space-member-left`): dono novo
   (participante mais antigo), executor sai junto se quem sai é dono do Hub, lápide no assunto quando sai o último,
   troca pendente, e a lápide da participação de quem sai é **a última gravação** (depois dela o assunto some no RLS).
@@ -914,11 +916,15 @@ registra a fonte `conversations`), `hubs` (`HubDirectory`: `ownerOf`,
   com lápide, conta também como lixeira; corpo zerado pela retenção sai). É contador e não `SUM` porque as mensagens só
   são visíveis a participantes: o Gestor e o backup somariam só os assuntos deles. `ConversationStorageUsage` registra
   a fonte na porta `SpaceStorageUsage` (soma das fontes, veja `spaces`). **Travas do envio:** espaço `FOR SHARE`
-  (`SpaceStorage.lockQuota`) -> assunto `FOR UPDATE` -> grava (o trigger trava a linha do contador) -> **só então** lê o
+  (`SpaceStorage.lockQuota`) -> assunto `FOR NO KEY UPDATE` -> grava (o trigger trava a linha do contador) -> **só então** lê o
   uso e confere (422 `space-storage-full` com `missingBytes`, a regra do backup). Envios do mesmo espaço se serializam
   no contador; a intenção de envio do backup (espaço `FOR UPDATE`) espera os envios e lê o mesmo uso. `FOR SHARE` e não
   `FOR UPDATE` para uma mensagem não esperar um lote de confirmação do backup (que segura o espaço `FOR SHARE` durante
-  as cópias no S3). Apagar e ack travam só o assunto (nunca o espaço depois do contador).
+  as cópias no S3). Apagar e ack travam só o assunto (nunca o espaço depois do contador); o ack também `FOR NO KEY
+  UPDATE`. **Modos de trava do assunto** (`ConversationLockMode`): `FOR UPDATE` em toda mudança de quem está dentro,
+  executor ou estado da chave; `FOR NO KEY UPDATE` no envio e no ack (serializam entre si e com o `FOR UPDATE`);
+  `FOR KEY SHARE` na confirmação de anexo (só conflita com `FOR UPDATE`: troca de chave/saída esperam a cópia no S3,
+  mensagens e acks não).
 - **Anexos** (`RequestAttachmentUploadUseCase`, `ConfirmAttachmentUseCase`, `GetAttachmentDownloadUrlUseCase`; spec
   §4.4): o mecanismo do storage com índice próprio (`conversation_attachments`), acesso por **participação** (pessoa) ou
   **executor** (Hub), nunca por `memory.read` do espaço (o resto: o mesmo 404 `conversation-not-found`). Rotas
@@ -933,7 +939,7 @@ registra a fonte `conversations`), `hubs` (`HubDirectory`: `ownerOf`,
   200 com URL nova (ou `upload: null` se confirmado); confirmar de novo = a mesma resposta. **Travas:** intenção = espaço
   `FOR SHARE` -> assunto `FOR UPDATE` -> grava -> lê o uso e confere (como a mensagem); confirmação = diário numa
   transação curta própria ANTES (`markWrite`, só o anexo pendente de quem confirma, relógio do banco) -> assunto `FOR
-  SHARE` -> anexo `FOR UPDATE` (a "trava do objeto") -> HEAD -> marca reconferida sob a trava (`assertStillMarked`;
+  KEY SHARE` -> anexo `FOR UPDATE` (a "trava do objeto") -> HEAD -> marca reconferida sob a trava (`assertStillMarked`;
   sumiu: 409 `storage-busy`) -> reparo da chave final -> cópia -> `limitRemainingTime(INDEX_TAIL_TIMEOUT_MS)` -> índice;
   `lock_timeout` de 10 s (`STORAGE_LOCK_TIMEOUT_MS`) em tudo, 55P03 = 409 `storage-busy`. Falha depois de gravar no S3 =
   reparo numa transação nova (`ConversationAttachmentHealer.repair`, contexto do reparo: quem agiu pode ter saído). Um

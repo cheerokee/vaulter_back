@@ -5,7 +5,10 @@ import {
   conversationIdConflict,
   conversationNotFound,
 } from '../../domain/conversation-errors.js';
-import { ConversationRepository } from '../../domain/conversation.repository.js';
+import {
+  ConversationRepository,
+  type ConversationLockMode,
+} from '../../domain/conversation.repository.js';
 import type { Conversation } from '../../domain/conversation.js';
 import { ConversationParticipantTypeormEntity } from './conversation-participant.entity.js';
 import { inScope, requireUnitOfWork } from './conversation-scope.js';
@@ -15,6 +18,12 @@ import {
   conversationToInsert,
 } from './conversation.mapper.js';
 import { ConversationTypeormEntity } from './conversation.entity.js';
+
+const LOCK_MODES = {
+  update: 'pessimistic_write',
+  'no-key-update': 'for_no_key_update',
+  'key-share': 'for_key_share',
+} as const satisfies Record<ConversationLockMode, string>;
 
 @Injectable()
 export class ConversationTypeormRepository extends ConversationRepository {
@@ -70,7 +79,7 @@ export class ConversationTypeormRepository extends ConversationRepository {
   async lockById(
     scope: ConversationScope,
     id: string,
-    mode: 'update' | 'share' = 'update',
+    mode: ConversationLockMode = 'update',
   ): Promise<Conversation | null> {
     requireUnitOfWork(this.dataSource, 'ConversationRepository.lockById');
     const row = await inScope(this.dataSource, scope, (m) =>
@@ -81,7 +90,7 @@ export class ConversationTypeormRepository extends ConversationRepository {
           id,
           org: scope.organizationId,
         })
-        .setLock(mode === 'share' ? 'pessimistic_read' : 'pessimistic_write')
+        .setLock(LOCK_MODES[mode])
         .getOne(),
     );
     return row ? conversationToDomain(row) : null;

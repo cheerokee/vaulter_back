@@ -4,7 +4,10 @@ import { NotFoundError } from '../../shared/domain/errors.js';
 import { SpaceAccess } from '../../spaces/application/space-access.js';
 import type { ConversationScope } from '../domain/conversation-actor.js';
 import { conversationNotFound } from '../domain/conversation-errors.js';
-import { ConversationRepository } from '../domain/conversation.repository.js';
+import {
+  ConversationRepository,
+  type ConversationLockMode,
+} from '../domain/conversation.repository.js';
 import type { Conversation } from '../domain/conversation.js';
 
 export type ScopedConversation = {
@@ -68,12 +71,12 @@ export class ConversationAccess {
     };
   }
 
-  /** Locks in a scope already resolved (the conversation must still be in `spaceId`); `share` = `FOR SHARE`. */
+  /** Locks in a scope already resolved (the conversation must still be in `spaceId`); modes: `ConversationLockMode`. */
   async lock(
     scope: ConversationScope,
     conversationId: string,
     spaceId: string,
-    mode: 'update' | 'share' = 'update',
+    mode: ConversationLockMode = 'update',
   ): Promise<Conversation> {
     return inSpace(
       await this.conversations.lockById(scope, conversationId, mode),
@@ -104,11 +107,13 @@ export class ConversationAccess {
   async lockForHub(
     hubId: string,
     conversationId: string,
+    mode: ConversationLockMode = 'update',
   ): Promise<ScopedConversation> {
     const { scope } = await this.findForHub(hubId, conversationId);
     const conversation = await this.conversations.lockById(
       scope,
       conversationId,
+      mode,
     );
     if (!conversation) throw conversationNotFound();
     return { scope, conversation };

@@ -12,7 +12,8 @@ import { messageView, type MessageView } from './dto/message-view.js';
 // Caixa de entrada (spec conversations §4.3): SÓ o Hub executor confirma (`ack`) que pegou uma mensagem; o backend vê
 // só isso e a hora (relógio do banco). Hub que não é o executor: 404 `conversation-not-found` (o RLS nem mostra o
 // assunto). Mensagem inexistente, de outro assunto ou apagada: 404 `message-not-found`. Confirmar de novo devolve a
-// mesma resposta (a primeira confirmação vale). Lock: só o assunto (`FOR UPDATE`), o mesmo da troca de executor.
+// mesma resposta (a primeira confirmação vale). Lock: só o assunto (`FOR NO KEY UPDATE`, como o envio: espera a troca de
+// executor, que trava `FOR UPDATE`, mas não a cópia no S3 de uma confirmação de anexo).
 @Injectable()
 export class AckMessageUseCase {
   constructor(
@@ -31,6 +32,7 @@ export class AckMessageUseCase {
       const { scope, conversation } = await this.access.lockForHub(
         hub.hubId,
         conversationId,
+        'no-key-update',
       );
       if (!conversation.isExecutor(hub.hubId)) throw conversationNotFound();
       const message = await this.messages.findById(scope, messageId, {

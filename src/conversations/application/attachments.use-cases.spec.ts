@@ -424,7 +424,7 @@ describe('attachment use cases', () => {
       return a;
     };
 
-    it('marks in its own transaction BEFORE the unit of work; conversation FOR SHARE, row FOR UPDATE, HEAD, mark rechecked, heal, copy, then the index', async () => {
+    it('marks in its own transaction BEFORE the unit of work; conversation FOR KEY SHARE, row FOR UPDATE, HEAD, mark rechecked, heal, copy, then the index', async () => {
       const a = await pending();
       const view = await confirm.byUser(ana, SPACE, CONV, a.id);
       expect(view.status).toBe('committed');
@@ -437,7 +437,7 @@ describe('attachment use cases', () => {
         'run:2',
         'lockTimeout',
         'userScope',
-        'lockConversation:share',
+        'lockConversation:key-share',
         'lockAttachment',
         'readMark',
         `copy:${uploadKey(a.id)}->${finalKey(a.id)}`,

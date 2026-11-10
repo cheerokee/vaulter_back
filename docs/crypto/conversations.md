@@ -12,7 +12,7 @@ privada. A chave da conversa é independente da chave do espaço e de qualquer o
 
 ### Cópias trancadas da chave
 
-Cada participante (e o kit de recuperação, quando couber) recebe uma **cópia trancada** de cada versão, no mesmo
+Cada participante (e o Hub executor) recebe uma **cópia trancada** de cada versão, no mesmo
 formato das cópias da chave do espaço (`user-keys.md`):
 
 ```
@@ -21,6 +21,9 @@ copy = 0x01 ‖ crypto_box_seal(chave da conversa, chave pública X25519 do dest
 
 81 bytes, em base64url sem padding: **108 caracteres** (`^[A-Za-z0-9_-]{108}$`). Quem abre recusa versão diferente
 de `0x01`.
+
+**Nunca** há cópia para o kit de recuperação da organização (privado é privado): quando o último participante
+sai, o assunto acaba, e nenhum admin o reabre.
 
 ## Formato do blob (cabeçalho, mensagem e anexo)
 

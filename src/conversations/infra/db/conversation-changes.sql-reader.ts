@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { validate } from 'uuid';
 import { DataSource, type EntityManager } from 'typeorm';
+import { DomainValidationError } from '../../../shared/domain/errors.js';
 import {
   runInTransaction,
   runWithContext,
@@ -81,11 +82,19 @@ export class ConversationChangesSqlReader extends ConversationChangesReader {
   ): Promise<{ organizationIds: string[]; batches: ConversationSyncBatch[] }> {
     const readerId =
       query.reader.kind === 'user' ? query.reader.userId : query.reader.hubId;
-    if (
-      !validate(readerId) ||
-      (query.conversationId !== null && !validate(query.conversationId))
-    ) {
-      return { organizationIds: [], batches: [] };
+    // A malformed id is a bug or a forged request, never "an empty feed": an empty `organizationIds` would tell the
+    // client to drop every conversation it holds.
+    if (!validate(readerId)) {
+      throw new DomainValidationError(
+        'sync-reader-invalid',
+        'The feed reader id is not a valid UUID.',
+      );
+    }
+    if (query.conversationId !== null && !validate(query.conversationId)) {
+      throw new DomainValidationError(
+        'conversation-id-invalid',
+        'The conversation id is not a valid UUID.',
+      );
     }
     return runInTransaction(this.dataSource, async (tx) => {
       await tx.query(

@@ -54,7 +54,11 @@ Visão geral: o assunto é dado do espaço, cifrado **no celular** com uma chave
   mesmo id é seguro). Nunca mandar nome ou tipo de arquivo em claro.
 - [ ] **Compartilhar** (`POST .../:id/participants` e `/participants/space`): mandar a cópia de **todas** as versões da
   chave para cada pessoa nova (até 50 participantes vivos); quem não é membro do espaço dá 422
-  `participant-not-space-member`. **Sair/tirar:** `POST .../:id/leave`, `DELETE .../:id/participants/:userId`.
+  `participant-not-space-member`. **Limite do corpo (100 kB):** cada cópia ocupa ~140 bytes no JSON, então "compartilhar
+  com o espaço" (`/participants/space`, que exige **todas** as pessoas que faltam num pedido só) passa do limite por
+  volta de **12 versões × 50 pessoas** (413). Antes de mandar, estimar o tamanho (pessoas × versões × ~140 bytes); se
+  passar de ~90 kB, usar o modo `people` (`/participants`) em **lotes** (cada lote é idempotente: quem já participa é
+  pulado). **Sair/tirar:** `POST .../:id/leave`, `DELETE .../:id/participants/:userId`.
 - [ ] **Executor:** escolher entre os Hubs do dono com o espaço instalado (`PUT .../:id/executor`; trocar manda as
   cópias de todas as versões ao Hub novo e deixa a troca de chave pendente); mensagem de pessoa nasce `pending` até o
   Hub confirmar (mostrar "entregue ao Hub" quando `ackedAt` vier).

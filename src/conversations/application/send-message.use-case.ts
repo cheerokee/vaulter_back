@@ -35,7 +35,9 @@ export type SendMessageInput = {
 // Mandar mensagem (spec conversations §4.3), pela pessoa (rotas do espaço) ou pelo Hub executor (rotas `/hub`):
 // 1. formato antes de travar nada (id v7, corpo cifrado ≤ 64 KiB: 422);
 // 2. no unit of work, na ordem global: espaço `FOR SHARE` (`SpaceStorage.lockQuota`: a intenção de envio do backup,
-//    que trava o espaço `FOR UPDATE`, espera este envio e vice-versa) -> assunto `FOR UPDATE`;
+//    que trava o espaço `FOR UPDATE`, espera este envio e vice-versa) -> assunto `FOR NO KEY UPDATE` (envios e acks se
+//    serializam entre si e com toda mudança `FOR UPDATE`, mas não esperam a cópia no S3 de uma confirmação de anexo,
+//    que segura `FOR KEY SHARE`; `ConversationLockMode`);
 // 3. idempotência: o mesmo id já existe NESTE assunto com o mesmo autor e o mesmo conteúdo = a mesma resposta (200,
 //    nada gravado; vale também depois de uma troca de chave pendente). Qualquer outra coisa com esse id (outro conteúdo,
 //    outro autor, outro assunto, ou um id que o escopo nem vê: `insertIfAbsent` devolve false) = 409
@@ -73,6 +75,7 @@ export class SendMessageUseCase {
         scope,
         conversationId,
         spaceId,
+        'no-key-update',
       );
       return this.send(scope, conversation, quotaBytes, input);
     });
@@ -96,6 +99,7 @@ export class SendMessageUseCase {
         scope,
         conversationId,
         seen.spaceId,
+        'no-key-update',
       );
       return this.send(scope, conversation, quotaBytes, input);
     });
