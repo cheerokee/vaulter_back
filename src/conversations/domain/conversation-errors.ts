@@ -132,3 +132,13 @@ export const attachmentUploadMismatch = (attachmentId: string) =>
     'The uploaded object does not match the declared size and checksum.',
     { attachmentId },
   );
+
+/**
+ * A move must go to another space (create with `movedFrom`), and completing it must name the conversation created
+ * with `movedFrom` = this one.
+ */
+export const conversationMoveInvalid = () =>
+  new DomainValidationError(
+    'conversation-move-invalid',
+    'The move must go to a conversation of another space created from this one.',
+  );

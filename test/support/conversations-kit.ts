@@ -192,6 +192,8 @@ export function conversationsKit(getApp: () => INestApplication) {
         executor?: HubRecipient | null;
         id?: string;
         state?: string;
+        /** Move: the old conversation (in another space) this one replaces. */
+        movedFrom?: { spaceId: string; conversationId: string };
       } = {},
     ) => {
       const id = opts.id ?? newId();
@@ -202,6 +204,7 @@ export function conversationsKit(getApp: () => INestApplication) {
         .send({
           id,
           ...(opts.state ? { state: opts.state } : {}),
+          ...(opts.movedFrom ? { movedFrom: opts.movedFrom } : {}),
           encryptedHeader: await header(key, spaceId, id),
           wrappedKey: await sealConversationKey(key, user.account.publicKey),
           ...(opts.executor

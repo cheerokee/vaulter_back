@@ -58,6 +58,24 @@ código e no `CLAUDE.md`).
   - sincronização completa periódica (ressalva "ordem de commit × `sync_version`" do `CLAUDE.md`).
   Sem sondagem longa para o app (só o Hub executor tem); com o app aberto, uma passada a cada ~10 s cabe no limite
   (1200/h por pessoa).
+- [ ] **Mover para outro espaço** (só o dono; spec §4.2): (1) criar o assunto no destino com
+  `POST /spaces/:destino/conversations` + `movedFrom: { spaceId, conversationId }` (chave NOVA, cabeçalho cifrado de
+  novo; o executor é escolhido de novo, entre os Hubs do dono com o destino instalado, ou nenhum); (2) reenviar as
+  mensagens (ids NOVOS, cifradas com a chave nova) e os anexos (intenção, PUT, confirmação); (3) compartilhar só com
+  quem é membro do destino (os outros dão 422 `participant-not-space-member` e ficam de fora: avise o dono antes);
+  (4) `POST /spaces/:origem/conversations/:antigo/move` `{ toSpaceId, toConversationId }` põe a lápide no antigo
+  (idempotente). Erros: 403 `not-conversation-owner`, 422 `conversation-move-invalid` (mesmo espaço, ou o novo não foi
+  criado com `movedFrom` = antigo). Se o passo 2 falhar no meio, repita antes do 4 (criar com o mesmo `id` devolve 200).
+- [ ] **Apagar anexo**: `DELETE /spaces/:spaceId/conversations/:id/attachments/:attachmentId` (só quem enviou; 204,
+  idempotente). Ao apagar uma mensagem, apague também os anexos que ela cita (o backend não sabe quais).
+- [ ] **Esvaziar a lixeira do assunto** (só o dono, com reautenticação, como a do espaço):
+  `POST /spaces/:spaceId/conversations/:id/trash/empty` `{ currentAuthProof }` -> `{ purgedMessages,
+  purgedAttachments, purgedBytes, remainingAttachments }`; repetir enquanto `remainingAttachments > 0` (cada volta gasta
+  o orçamento de reautenticação, 5 por 15 min). Sem esvaziar, a retenção tira o conteúdo apagado depois de 30 dias.
+- [ ] **Lixeira do espaço × assuntos:** `storage.trashBytes` de `GET /spaces/:id` **inclui** a lixeira dos assuntos
+  (mensagens e anexos apagados nos últimos 30 dias), que o esvaziar do Gestor **não** alcança (só o dono de cada
+  assunto, rota acima, ou a retenção em 30 dias). Ao avisar o Gestor de lixeira cheia, dizer que parte pode ser de
+  assuntos privados e que ela some sozinha em até 30 dias. (Decisão da Task 7: documentar em vez de separar o número.)
 
 ## Ideias para depois (não fazer agora)
 - Configuração inicial do Hub pelo app via **Bluetooth** (no lugar do código falado; resolve o idioma).

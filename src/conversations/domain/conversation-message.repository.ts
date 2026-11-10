@@ -27,4 +27,12 @@ export abstract class ConversationMessageRepository {
     scope: ConversationScope,
     conversationId: string,
   ): Promise<ConversationMessage[]>;
+  /**
+   * Nulls the encrypted body of every tombstoned message of the conversation that still has one (its trash). The usage
+   * trigger takes the bytes out of the space usage and trash. Inside `UnitOfWork.run`, with the conversation locked.
+   */
+  abstract purgeTrash(
+    scope: ConversationScope,
+    conversationId: string,
+  ): Promise<{ messages: number; bytes: number }>;
 }

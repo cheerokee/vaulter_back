@@ -25,3 +25,5 @@ export const CONVERSATION_LONG_POLLS_PER_HUB = 2;
 export const CONVERSATION_LONG_POLLS_TOTAL = 1_000;
 /** Without the LISTEN connection (database down or reconnecting), a waiting long poll re-reads at this interval. */
 export const CONVERSATION_LONG_POLL_DEGRADED_REREAD_MS = 5_000;
+/** Attachments purged per "empty the conversation's trash" request (one S3 `DeleteObjects` call). */
+export const MAX_CONVERSATION_PURGE_ATTACHMENTS = 1_000;

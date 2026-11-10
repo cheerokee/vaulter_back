@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { HubsModule } from '../hubs/hubs.module.js';
+import { IdentityModule } from '../identity/identity.module.js';
 import { OrganizationsModule } from '../organizations/organizations.module.js';
 import { SpacesModule } from '../spaces/spaces.module.js';
 import { StorageModule } from '../storage/storage.module.js';
@@ -18,7 +19,10 @@ import { ConversationExecutors } from './application/conversation-executors.js';
 import { ConversationViews } from './application/conversation-views.js';
 import { ConversationStorageUsage } from './application/conversation-storage-usage.js';
 import { CreateConversationUseCase } from './application/create-conversation.use-case.js';
+import { DeleteAttachmentUseCase } from './application/delete-attachment.use-case.js';
 import { DeleteMessageUseCase } from './application/delete-message.use-case.js';
+import { EmptyConversationTrashUseCase } from './application/empty-conversation-trash.use-case.js';
+import { MoveConversationUseCase } from './application/move-conversation.use-case.js';
 import { ConversationsExecutorLostHook } from './application/executor-lost.hook.js';
 import { GetConversationUseCase } from './application/get-conversation.use-case.js';
 import { HubCreateConversationUseCase } from './application/hub-create-conversation.use-case.js';
@@ -58,7 +62,8 @@ import { SpaceConversationsController } from './infra/http/space-conversations.c
 
 /**
  * Conversations ("assuntos") as space data (spec 2026-11-09-conversations): encrypted with their own key, private to
- * their participants and executor Hub. Depends on `spaces` (SpaceAccess, SpaceStorage, and the SpaceStorageUsage
+ * their participants and executor Hub. Depends on `identity` (CurrentAuthProofVerifier, to empty a conversation's
+ * trash), `spaces` (SpaceAccess, SpaceStorage, and the SpaceStorageUsage
  * port, where it registers the message and attachment bytes), `hubs` (HubDirectory, HubAccess), `organizations`
  * (AuditLog) and `storage` (the ObjectStore port and the shared upload/repair pieces of `application/object-uploads`)
  * through what they export; reacts to `SpaceMemberLeftHooks` and `HubExecutorLostHooks`, and joins the
@@ -67,6 +72,7 @@ import { SpaceConversationsController } from './infra/http/space-conversations.c
  */
 @Module({
   imports: [
+    IdentityModule,
     OrganizationsModule,
     SpacesModule,
     HubsModule,
@@ -145,6 +151,9 @@ import { SpaceConversationsController } from './infra/http/space-conversations.c
     RequestAttachmentUploadUseCase,
     ConfirmAttachmentUseCase,
     GetAttachmentDownloadUrlUseCase,
+    DeleteAttachmentUseCase,
+    MoveConversationUseCase,
+    EmptyConversationTrashUseCase,
   ],
 })
 export class ConversationsModule {}

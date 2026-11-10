@@ -500,6 +500,15 @@ no Hub), até **100 MiB** cifrados.
   `storage-busy`: repetir.
 - `POST /hub/conversations/:id/attachments/:attachmentId/download`: `{ url, expiresAt }` (GET assinado, 15 min) de um
   anexo confirmado; pendente, apagado ou de outro assunto: 404 `attachment-not-found`. Abra com `openAttachment`.
+- `DELETE /hub/conversations/:id/attachments/:attachmentId`: apaga (lápide) só os anexos que o próprio Hub enviou (os
+  de pessoas: 403 `not-conversation-owner`); 204, idempotente; inexistente ou de outro assunto: 404
+  `attachment-not-found`. O backend não sabe quais anexos uma mensagem cita (a referência está no corpo cifrado): ao
+  apagar uma mensagem, apague também os anexos dela. O apagado fica 30 dias na lixeira (conta no uso do espaço) e
+  depois a retenção tira o conteúdo; o dono do assunto pode esvaziar antes, pelo app.
+
+**Assunto movido de espaço** (pelo dono, no app): o assunto antigo ganha lápide (chega no feed como `conversation` com
+`deleted: true`: apague-o localmente) e o novo, criado no destino com `movedFromConversationId`, só chega a este Hub se
+ele for escolhido de novo como executor (entrada no escopo: busque com `conversationId=<id>&since=0`).
 
 O Hub **deixa de ser executor** (404 `conversation-not-found` dali em diante, cópias dele com lápide) quando é
 desregistrado, a organização é desvinculada, o espaço sai dele ou o dono dele deixa de participar do assunto. As

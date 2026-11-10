@@ -17,6 +17,7 @@ import {
   CurrentAuth,
 } from '../../../shared/infra/http/auth.decorators.js';
 import { RATE_LIMITS } from '../../../shared/infra/http/rate-limits.js';
+import { ThrottleReauth } from '../../../shared/infra/http/throttling.decorators.js';
 import { userIdTracker } from '../../../shared/infra/http/user-id.tracker.js';
 import { uuidPipe } from '../../../shared/infra/http/uuid-pipe.js';
 import { ChangeConversationStateUseCase } from '../../application/change-conversation-state.use-case.js';
@@ -25,7 +26,10 @@ import { ConfirmAttachmentUseCase } from '../../application/confirm-attachment.u
 import { GetAttachmentDownloadUrlUseCase } from '../../application/get-attachment-download-url.use-case.js';
 import { RequestAttachmentUploadUseCase } from '../../application/request-attachment-upload.use-case.js';
 import { CreateConversationUseCase } from '../../application/create-conversation.use-case.js';
+import { DeleteAttachmentUseCase } from '../../application/delete-attachment.use-case.js';
 import { DeleteMessageUseCase } from '../../application/delete-message.use-case.js';
+import { EmptyConversationTrashUseCase } from '../../application/empty-conversation-trash.use-case.js';
+import { MoveConversationUseCase } from '../../application/move-conversation.use-case.js';
 import { GetConversationUseCase } from '../../application/get-conversation.use-case.js';
 import { LeaveConversationUseCase } from '../../application/leave-conversation.use-case.js';
 import { RotateConversationKeyUseCase } from '../../application/rotate-conversation-key.use-case.js';
@@ -37,6 +41,8 @@ import {
 import {
   ChangeExecutorDto,
   CreateConversationDto,
+  EmptyConversationTrashDto,
+  MoveConversationDto,
   RequestAttachmentDto,
   RotateConversationKeyDto,
   SendMessageDto,
@@ -75,6 +81,9 @@ export class SpaceConversationsController {
     private readonly requestingUpload: RequestAttachmentUploadUseCase,
     private readonly confirming: ConfirmAttachmentUseCase,
     private readonly downloading: GetAttachmentDownloadUrlUseCase,
+    private readonly deletingAttachment: DeleteAttachmentUseCase,
+    private readonly moving: MoveConversationUseCase,
+    private readonly emptyingTrash: EmptyConversationTrashUseCase,
   ) {}
 
   /** 201 when created; 200 with the same conversation when the same id is sent again (retry after a network error). */
@@ -94,6 +103,12 @@ export class SpaceConversationsController {
       wrappedKey: dto.wrappedKey,
       executor: dto.executor
         ? { hubId: dto.executor.hubId, wrappedKey: dto.executor.wrappedKey }
+        : null,
+      movedFrom: dto.movedFrom
+        ? {
+            spaceId: dto.movedFrom.spaceId,
+            conversationId: dto.movedFrom.conversationId,
+          }
         : null,
     });
     res.status(created ? 201 : 200);
@@ -307,6 +322,68 @@ export class SpaceConversationsController {
     return downloadUrlResponse(
       await this.downloading.byUser(auth, spaceId, id, attachmentId),
     );
+  }
+
+  /** Only my own attachments (403 `not-conversation-owner`); idempotent. It goes to the trash (30 days). */
+  @perUser(RATE_LIMITS.conversationAttachment)
+  @ApiBearerAuth()
+  @Delete(':id/attachments/:attachmentId')
+  @HttpCode(204)
+  async doDeleteAttachment(
+    @CurrentAuth() auth: AuthContext,
+    @Param('spaceId', uuidPipe('spaceId')) spaceId: string,
+    @Param('id', uuidPipe('id')) id: string,
+    @Param('attachmentId', uuidPipe('attachmentId')) attachmentId: string,
+  ): Promise<void> {
+    await this.deletingAttachment.byUser(auth, spaceId, id, attachmentId);
+  }
+
+  /**
+   * Completes a move (owner only): tombstones this conversation once the one created in the other space with
+   * `movedFrom` = this one exists. Idempotent (204 again).
+   */
+  @perUser(RATE_LIMITS.conversationChange)
+  @ApiBearerAuth()
+  @Post(':id/move')
+  @HttpCode(204)
+  async doMove(
+    @CurrentAuth() auth: AuthContext,
+    @Param('spaceId', uuidPipe('spaceId')) spaceId: string,
+    @Param('id', uuidPipe('id')) id: string,
+    @Body() dto: MoveConversationDto,
+  ): Promise<void> {
+    await this.moving.execute(auth, spaceId, id, {
+      toSpaceId: dto.toSpaceId,
+      toConversationId: dto.toConversationId,
+    });
+  }
+
+  /**
+   * The owner empties the trash of this conversation for good (deleted message bodies, and up to 1000 deleted
+   * attachments per call: repeat while `remainingAttachments > 0`), with reauthentication.
+   */
+  @ThrottleReauth()
+  @ApiBearerAuth()
+  @Post(':id/trash/empty')
+  @HttpCode(200)
+  async doEmptyTrash(
+    @CurrentAuth() auth: AuthContext,
+    @Param('spaceId', uuidPipe('spaceId')) spaceId: string,
+    @Param('id', uuidPipe('id')) id: string,
+    @Body() dto: EmptyConversationTrashDto,
+  ) {
+    const r = await this.emptyingTrash.execute(
+      auth,
+      spaceId,
+      id,
+      dto.currentAuthProof,
+    );
+    return {
+      purgedMessages: r.purgedMessages,
+      purgedAttachments: r.purgedAttachments,
+      purgedBytes: r.purgedBytes,
+      remainingAttachments: r.remainingAttachments,
+    };
   }
 
   private async doShareWith(

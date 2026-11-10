@@ -25,6 +25,7 @@ npm run lint         # oxlint com checagem de tipos
 npm run typecheck    # tsc --noEmit no projeto todo (src e test); roda no CI
 npm run format       # Prettier em src/ e test/
 npm run storage:reconcile [-- <min>]   # reparo do backup (índice × bucket); depois do build, no container
+npm run conversations:retention        # retenção dos assuntos (30 dias); depois do build, no container, login dono
 ```
 Antes de dizer que algo está pronto: `npm run build && npm test && npm run lint && npm run typecheck` precisam passar
 (e `docker exec vaulter-back-app npm run test:e2e`, dentro do container, quando mexer em módulos/banco).
@@ -855,7 +856,8 @@ vivo ou executor) e "quem sai grava por último" no cabeçalho da migration `Cre
 registra a fonte `conversations`), `hubs` (`HubDirectory`: `ownerOf`,
 `installedSpaceOrganization`, `lockExecutorCandidate`; `HubAccess`), `organizations` (`AuditLog`) e `storage` (a porta
 `ObjectStore` e a peça compartilhada `application/object-uploads.ts`, o diário `journal.ts` e os erros
-`storage-errors.ts`); ninguém importa `conversations`.
+`storage-errors.ts`) e `identity` (`CurrentAuthProofVerifier`, para esvaziar a lixeira do assunto); ninguém importa
+`conversations`.
 - **Rotas:** token de usuário em `/spaces/:spaceId/conversations` (`POST` cria; `/:id` lê; `/:id/participants` e
   `/:id/participants/space` compartilham; `DELETE /:id/participants/:userId` tira; `/:id/leave`; `PUT /:id/state`;
   `PUT /:id/executor`; `POST /:id/keys`): a organização vem do espaço; não membro do espaço, assunto de outro espaço,
@@ -960,6 +962,36 @@ registra a fonte `conversations`), `hubs` (`HubDirectory`: `ownerOf`,
   sempre releitura por `sync_version` (perdeu o aviso: a releitura no prazo entrega; sem a conexão LISTEN, relê a cada
   5 s; reconectou: acorda todos). Limites por instância (`LongPollSlots`): 2 sondagens por Hub e 1000 no total; acima
   disso responde na hora, sem esperar. No desligamento, as esperas respondem o que leram.
+- **Mover, apagar anexo, lixeira e retenção** (spec §4.2, §4.4.1; Task 7):
+  - **Mover** (só o dono, pelo app, em dois passos): criar no destino com `movedFrom: { spaceId, conversationId }`
+    (`CreateConversationUseCase`: dono do antigo, membro dos dois espaços, outro espaço; 403 `not-conversation-owner`,
+    404 `conversation-not-found`, 422 `conversation-move-invalid`; o executor é validado no destino; o app reenvia
+    mensagens e anexos cifrados com a chave nova e compartilha só com membros do destino, os outros dão 422
+    `participant-not-space-member`) e depois `POST /spaces/:spaceId/conversations/:id/move` `{ toSpaceId,
+    toConversationId }` (`MoveConversationUseCase`, 204, idempotente): o novo precisa ter `movedFromConversationId` = o
+    antigo (422 `conversation-move-invalid`); o antigo ganha lápide (participações, cópias e executor ficam; a sincronização
+    entrega a lápide) e auditoria `conversation.moved` (só ids). Trava só o antigo.
+  - **Apagar anexo** (`DeleteAttachmentUseCase`, `DELETE .../:id/attachments/:attachmentId` nas duas formas): só quem
+    enviou (403), 204 idempotente, 404 `attachment-not-found`; lápide: confirmado vira lixeira, pendente solta a
+    reserva. `messageId` continua nulo: o app apaga a mensagem e os anexos dela (a referência está no corpo cifrado).
+  - **Esvaziar a lixeira do assunto** (`EmptyConversationTrashUseCase`, `POST .../:id/trash/empty`
+    `{ currentAuthProof }`, `@ThrottleReauth()`): só o dono (não participante, inclusive o Gestor: 404; participante:
+    403, antes do Argon2), reautenticação antes de gravar, assunto FOR UPDATE -> corpos com lápide zerados -> até 1000
+    anexos com lápide `purged` (FOR UPDATE em ordem de id, marca do diário renovada) -> auditoria
+    `conversation.trash_emptied` -> COMMIT -> `DeleteObjects` (`removePurgedAttachments`; o que falhar fica marcado para
+    o `storage:reconcile`). `{ purgedMessages, purgedAttachments, purgedBytes, remainingAttachments }`. O esvaziar do
+    Gestor (backup) nunca toca os assuntos.
+  - **Retenção** (`ConversationRetention` + `ConversationRetentionSqlStore`, CLI `npm run conversations:retention`):
+    tudo com lápide há mais de 30 dias (`CONVERSATION_RETENTION_DAYS`, relógio do banco; lápide da mensagem/anexo, ou a
+    do assunto para tudo dele): corpos zerados (mensagem de assunto com lápide ganha a lápide do assunto, CHECK), anexos
+    `purged` com marca renovada e o cabeçalho zerado; um assunto por transação (assunto FOR UPDATE -> linhas ->
+    contador; nunca o espaço), S3 depois do COMMIT. Os triggers de uso tiram os bytes (mensagem de assunto com lápide
+    conta como usada, não lixeira, até a retenção). **Roda com o login DONO** (`typeOrmOptions('migration')`, aberto
+    só pelo CLI; a API nunca segura essa conexão): assunto cujo último participante saiu é invisível a todo contexto de
+    runtime e o trigger de uso precisa vê-lo; o dono precisa ignorar o RLS (Pendências). Idempotente; erro num assunto
+    é registrado e a rotina segue.
+  - **`storage.trashBytes`** (`GET /spaces/:id`) inclui a lixeira dos assuntos, que só os donos (ou a retenção) esvaziam;
+    decisão: documentar (app avisa, `docs/app/pendencias-do-app.md`) em vez de separar o número.
 - **Testes:** e2e em `test/conversations/` com a cripto real (`test/support/conversation-crypto.ts`) e os helpers de
   `test/support/conversations-kit.ts` (criar/compartilhar/trocar chave/mandar/confirmar/apagar pela HTTP, pessoas em
   lote, estado cru: `messageRows`, `conversationSpaceUsage`, `lastMessageAt`).
@@ -1103,6 +1135,13 @@ Os valores do `.env.example` para os segredos são **só de desenvolvimento**; p
   (`storage_objects`/`storage_object_versions` depois da lixeira; o runtime não tem `DELETE`); aviso de franquia perto
   do fim (notificação); endpoint S3 público configurável para dispositivos reais em dev.
 - Exclusão de conta (LGPD) precisa revogar as sessões.
+- **Agendar `npm run conversations:retention`** (1x por dia, fora da aplicação, ANTES do `storage:reconcile`, que
+  apaga do bucket o que o `DeleteObjects` dela deixou) até o pg-boss entrar. Sem ela, o conteúdo apagado dos assuntos
+  fica para sempre (conta no uso do espaço). **Login:** roda com o dono (`DB_USERNAME`), que só ignora o RLS sendo
+  superusuário ou com `BYPASSRLS`; no Postgres gerenciado (dono sem superusuário e com `FORCE ROW LEVEL SECURITY`), criar
+  um papel de manutenção com `BYPASSRLS` para ela (ou um contexto de confiança `app.conversation_retention` nas
+  policies, como o `app.storage_reconcile`). As consultas da retenção varrem `conversations` (sem índice por
+  `deleted_at`): índice parcial quando crescer.
 - **Agendar `npm run storage:reconcile`** (1x por dia, fora da aplicação) até o pg-boss entrar; aí vira uma tarefa
   dele. Sem a varredura, um objeto que ninguém toca de novo depois de uma queda entre o S3 e o COMMIT pode ter a versão
   do índice expirada pelo ciclo de vida em 30 dias.
@@ -1142,7 +1181,7 @@ Os valores do `.env.example` para os segredos são **só de desenvolvimento**; p
   | `POST /auth/login` | 10/min por IP **e** 5/min por e-mail normalizado |
   | `POST /auth/refresh` | 60/min por IP |
   | `POST /auth/recovery/lookup` e `POST /auth/recovery/complete` (públicas) | 10/min por IP, **um orçamento só para as duas** (`THROTTLE_GROUPS.accountRecovery`) **e** 5/min por e-mail normalizado, por rota |
-  | `PUT /me/password`, `PUT /me/recovery-code`, `PUT /organizations/:id/recovery-key`, `POST /spaces/:id/recover`, `POST /spaces/:id/recover/copies`, `POST /spaces/:spaceId/backup/trash/empty`, `PUT|DELETE /platform/staff/:userId/roles/:roleKey`, `POST /platform/support-requests` e `.../:id/approve|reject` (reautenticação) | 5 por 15 min por usuário, **um orçamento só para todas** |
+  | `PUT /me/password`, `PUT /me/recovery-code`, `PUT /organizations/:id/recovery-key`, `POST /spaces/:id/recover`, `POST /spaces/:id/recover/copies`, `POST /spaces/:spaceId/backup/trash/empty`, `POST /spaces/:spaceId/conversations/:id/trash/empty`, `PUT|DELETE /platform/staff/:userId/roles/:roleKey`, `POST /platform/support-requests` e `.../:id/approve|reject` (reautenticação) | 5 por 15 min por usuário, **um orçamento só para todas** |
   | `POST /invitations/preview` (pública) | 30/min por IP |
   | `POST /invitations/accept` | 10/min por IP |
   | `POST /spaces/:id/keys` (troca da chave do espaço) | 10/h por usuário (`userIdTracker`, contador próprio) |
@@ -1161,10 +1200,10 @@ Os valores do `.env.example` para os segredos são **só de desenvolvimento**; p
   | `POST .../objects/:objectId/versions/:versionId/download` (URL de download, as mesmas duas formas) | 12 mil/h por Hub / por usuário (uma URL por versão: 50 mil objetos em ~4 h) |
   | `POST /spaces/:spaceId/conversations` e `POST /hub/conversations` (criar assunto) | 120/h por usuário (`userIdTracker`) / por Hub (`hubIdTracker`), contador próprio por rota |
   | `POST .../conversations/:id/keys` (troca da chave do assunto, as duas formas) | 30/h por usuário / por Hub |
-  | compartilhar, sair, tirar, estado e executor do assunto (`/spaces/:spaceId/conversations/:id/...`, `PUT /hub/conversations/:id/state`) | 600/h por usuário / por Hub, contador próprio por rota |
+  | compartilhar, sair, tirar, estado, executor e mover o assunto (`/spaces/:spaceId/conversations/:id/...`, `PUT /hub/conversations/:id/state`) | 600/h por usuário / por Hub, contador próprio por rota |
   | mandar e apagar mensagem do assunto (`POST .../:id/messages`, `DELETE .../:id/messages/:messageId`) | 60/min por usuário / 300/min por Hub, contador próprio por rota |
   | `POST /hub/conversations/:id/messages/:messageId/ack` | 600/min por Hub |
-  | anexo do assunto: intenção e confirmação (`POST .../:id/attachments`, `POST .../:id/attachments/:attachmentId/confirm`; a URL de download fica no limite geral) | 120/h por usuário / 600/h por Hub, contador próprio por rota |
+  | anexo do assunto: intenção, confirmação e apagar (`POST .../:id/attachments`, `POST .../:id/attachments/:attachmentId/confirm`, `DELETE .../:id/attachments/:attachmentId`; a URL de download fica no limite geral) | 120/h por usuário / 600/h por Hub, contador próprio por rota |
   | `GET /conversations/changes` (feed da pessoa) / `GET /hub/conversations/changes` (feed do executor, sondagem longa) | 1200/h por usuário / 1800/h por Hub (ociosa: ~144/h, um pedido a cada 25 s; cada mudança acorda e devolve) |
   Rota com `@Throttle` próprio tem contador próprio (por rota); `@ThrottleGroup(THROTTLE_GROUPS.x, tracker?)`
   (`throttling.decorators.ts`) faz rotas dividirem um contador (chave = grupo + tracker, sem a rota); cada grupo é

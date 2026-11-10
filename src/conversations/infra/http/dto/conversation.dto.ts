@@ -83,6 +83,15 @@ class HeaderFields {
   encryptedHeader!: string;
 }
 
+/** The conversation a new one replaces (move to another space; only its owner). */
+export class MovedFromDto {
+  @IsUUID()
+  spaceId!: string;
+
+  @IsUUID()
+  conversationId!: string;
+}
+
 export class CreateConversationDto extends HeaderFields {
   /** Version 1 sealed for the creator. */
   @IsString()
@@ -94,6 +103,29 @@ export class CreateConversationDto extends HeaderFields {
   @ValidateNested()
   @Type(() => HubGrantDto)
   executor?: HubGrantDto | null;
+
+  /** Move: the old conversation (another space) this one replaces; tombstone it afterwards with `POST .../move`. */
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => MovedFromDto)
+  movedFrom?: MovedFromDto | null;
+}
+
+/** Completes a move: the conversation created in the destination with `movedFrom` = this one. */
+export class MoveConversationDto {
+  @IsUUID()
+  toSpaceId!: string;
+
+  @IsUUID()
+  toConversationId!: string;
+}
+
+/** Empty the trash of the conversation (owner): the reauthentication proof of the current password. */
+export class EmptyConversationTrashDto {
+  @IsString()
+  @Matches(BASE64URL)
+  @MaxLength(256)
+  currentAuthProof!: string;
 }
 
 export class HubCreateConversationDto extends HeaderFields {

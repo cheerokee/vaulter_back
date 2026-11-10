@@ -13,6 +13,7 @@ import { conversationNotFound } from '../../domain/conversation-errors.js';
 import {
   ConversationAttachmentRepository,
   type MarkedAttachmentRef,
+  type PurgedAttachment,
 } from '../../domain/conversation-attachment.repository.js';
 import type { ConversationAttachment } from '../../domain/conversation-attachment.js';
 import { ConversationAttachmentTypeormEntity } from './conversation-attachment.entity.js';
@@ -194,6 +195,49 @@ export class ConversationAttachmentTypeormRepository extends ConversationAttachm
     );
   }
 
+  async purgeTrash(
+    scope: ConversationScope,
+    conversationId: string,
+    limit: number,
+  ): Promise<PurgedAttachment[]> {
+    requireUnitOfWork(
+      this.dataSource,
+      'ConversationAttachmentRepository.purgeTrash',
+    );
+    const raw: unknown = await inScope(this.dataSource, scope, (m) =>
+      m.query(
+        `WITH batch AS (
+           SELECT id FROM conversation_attachments
+            WHERE organization_id = $1 AND conversation_id = $2
+              AND status = 'committed' AND deleted_at IS NOT NULL
+            ORDER BY id LIMIT $3
+              FOR UPDATE
+         )
+         UPDATE conversation_attachments a
+            SET status = 'purged', s3_write_started_at = now(), updated_at = now()
+           FROM batch WHERE a.id = batch.id AND a.organization_id = $1
+        RETURNING a.organization_id, a.space_id, a.conversation_id, a.id, a.s3_version_id, a.size_bytes::text`,
+        [scope.organizationId, conversationId, limit],
+      ),
+    );
+    return updatedRows<PurgedRow>(raw).map(purgedFromRow);
+  }
+
+  async trashCount(
+    scope: ConversationScope,
+    conversationId: string,
+  ): Promise<number> {
+    const rows: { n: string }[] = await inScope(this.dataSource, scope, (m) =>
+      m.query(
+        `SELECT count(*)::text AS n FROM conversation_attachments
+          WHERE organization_id = $1 AND conversation_id = $2
+            AND status = 'committed' AND deleted_at IS NOT NULL`,
+        [scope.organizationId, conversationId],
+      ),
+    );
+    return Number(rows[0]?.n ?? 0);
+  }
+
   private lockRow(
     m: EntityManager,
     organizationId: string,
@@ -223,4 +267,24 @@ export class ConversationAttachmentTypeormRepository extends ConversationAttachm
       work,
     );
   }
+}
+
+type PurgedRow = {
+  organization_id: string;
+  space_id: string;
+  conversation_id: string;
+  id: string;
+  s3_version_id: string;
+  size_bytes: string;
+};
+
+export function purgedFromRow(r: PurgedRow): PurgedAttachment {
+  return {
+    organizationId: r.organization_id,
+    spaceId: r.space_id,
+    conversationId: r.conversation_id,
+    id: r.id,
+    s3VersionId: r.s3_version_id,
+    sizeBytes: Number(r.size_bytes),
+  };
 }

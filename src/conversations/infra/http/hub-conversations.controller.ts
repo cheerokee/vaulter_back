@@ -26,6 +26,7 @@ import { ConfirmAttachmentUseCase } from '../../application/confirm-attachment.u
 import { GetAttachmentDownloadUrlUseCase } from '../../application/get-attachment-download-url.use-case.js';
 import { RequestAttachmentUploadUseCase } from '../../application/request-attachment-upload.use-case.js';
 import { ChangeConversationStateUseCase } from '../../application/change-conversation-state.use-case.js';
+import { DeleteAttachmentUseCase } from '../../application/delete-attachment.use-case.js';
 import { DeleteMessageUseCase } from '../../application/delete-message.use-case.js';
 import { GetConversationUseCase } from '../../application/get-conversation.use-case.js';
 import { HubCreateConversationUseCase } from '../../application/hub-create-conversation.use-case.js';
@@ -74,6 +75,7 @@ export class HubConversationsController {
     private readonly confirming: ConfirmAttachmentUseCase,
     private readonly downloading: GetAttachmentDownloadUrlUseCase,
     private readonly sync: SyncConversationsUseCase,
+    private readonly deletingAttachment: DeleteAttachmentUseCase,
   ) {}
 
   /**
@@ -288,5 +290,19 @@ export class HubConversationsController {
     return downloadUrlResponse(
       await this.downloading.byHub({ hubId: hub.hubId }, id, attachmentId),
     );
+  }
+
+  /** Only the hub's own attachments (403 `not-conversation-owner`); idempotent. It goes to the trash (30 days). */
+  @perHub(RATE_LIMITS.conversationHubAttachment)
+  @ApiBearerAuth()
+  @HubAuth()
+  @Delete(':id/attachments/:attachmentId')
+  @HttpCode(204)
+  async doDeleteAttachment(
+    @CurrentHub() hub: HubAuthContext,
+    @Param('id', uuidPipe('id')) id: string,
+    @Param('attachmentId', uuidPipe('attachmentId')) attachmentId: string,
+  ): Promise<void> {
+    await this.deletingAttachment.byHub({ hubId: hub.hubId }, id, attachmentId);
   }
 }

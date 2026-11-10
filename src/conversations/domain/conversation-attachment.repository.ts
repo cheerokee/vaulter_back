@@ -10,6 +10,16 @@ export type MarkedAttachmentRef = {
   attachmentId: string;
 };
 
+/** An attachment the index just marked `purged` (its S3 version is deleted after the COMMIT). */
+export type PurgedAttachment = {
+  organizationId: string;
+  spaceId: string;
+  conversationId: string;
+  id: string;
+  s3VersionId: string;
+  sizeBytes: number;
+};
+
 export abstract class ConversationAttachmentRepository {
   /** Inserts; false when the id already exists (in any conversation, even one the scope cannot see). */
   abstract insertIfAbsent(
@@ -67,4 +77,22 @@ export abstract class ConversationAttachmentRepository {
     id: string,
     olderThanMinutes: number,
   ): Promise<void>;
+
+  // Lixeira do assunto (o dono a esvazia; spec §4.4.1).
+  /**
+   * Marks `purged` up to `limit` committed attachments of the conversation that are in the trash (tombstoned), locking
+   * them `FOR UPDATE` in id order, and renews their journal mark to the database clock in the same statement: the S3
+   * versions are deleted only after the COMMIT, and what is not deleted stays marked for the reconcile sweep. Inside
+   * `UnitOfWork.run`, with the conversation locked.
+   */
+  abstract purgeTrash(
+    scope: ConversationScope,
+    conversationId: string,
+    limit: number,
+  ): Promise<PurgedAttachment[]>;
+  /** Committed attachments of the conversation still in the trash. */
+  abstract trashCount(
+    scope: ConversationScope,
+    conversationId: string,
+  ): Promise<number>;
 }

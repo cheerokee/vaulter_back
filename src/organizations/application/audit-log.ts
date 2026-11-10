@@ -42,7 +42,9 @@ export type AuditAction =
   | 'conversation.shared'
   | 'conversation.participant_removed'
   | 'conversation.executor_changed'
-  | 'conversation.executor_lost';
+  | 'conversation.executor_lost'
+  | 'conversation.moved'
+  | 'conversation.trash_emptied';
 
 export type AuditRecord = {
   organizationId: string;

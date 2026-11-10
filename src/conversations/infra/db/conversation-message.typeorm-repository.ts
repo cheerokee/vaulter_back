@@ -6,7 +6,7 @@ import { conversationNotFound } from '../../domain/conversation-errors.js';
 import { ConversationMessageRepository } from '../../domain/conversation-message.repository.js';
 import type { ConversationMessage } from '../../domain/conversation-message.js';
 import { ConversationMessageTypeormEntity } from './conversation-message.entity.js';
-import { inScope } from './conversation-scope.js';
+import { inScope, updatedRows } from './conversation-scope.js';
 import { messageToDomain, messageToInsert } from './conversation.mapper.js';
 
 @Injectable()
@@ -88,5 +88,25 @@ export class ConversationMessageTypeormRepository extends ConversationMessageRep
       }),
     );
     return rows.map(messageToDomain);
+  }
+
+  async purgeTrash(
+    scope: ConversationScope,
+    conversationId: string,
+  ): Promise<{ messages: number; bytes: number }> {
+    const raw: unknown = await inScope(this.dataSource, scope, (m) =>
+      m.query(
+        `UPDATE conversation_messages SET encrypted_body = NULL, updated_at = now()
+          WHERE organization_id = $1 AND conversation_id = $2
+            AND deleted_at IS NOT NULL AND encrypted_body IS NOT NULL
+        RETURNING body_bytes`,
+        [scope.organizationId, conversationId],
+      ),
+    );
+    const rows = updatedRows<{ body_bytes: number }>(raw);
+    return {
+      messages: rows.length,
+      bytes: rows.reduce((sum, r) => sum + Number(r.body_bytes), 0),
+    };
   }
 }
