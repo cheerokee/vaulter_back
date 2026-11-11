@@ -1,6 +1,7 @@
 # Nuvem ativa — design
 
-Data: 10/11/2026 · Status: **aprovada em 10/11/2026** · Repositório: `vaulter_back` (módulo novo `cloud`)
+Data: 10/11/2026 · Status: **aprovada em 10/11/2026; implementada em 11/11/2026** (plano
+`docs/superpowers/plans/2026-11-10-active-cloud.md`; desvios em §7) · Repositório: `vaulter_back` (módulo novo `cloud`)
 
 Nasce de uma conversa do Jonas com o Claude. Parte da spec de produto
 `../valter-valt-ai/docs/superpowers/specs/2026-10-24-organizacoes-espacos-e-nuvem-design.md` (§6 modo de nuvem por
@@ -180,3 +181,45 @@ por uso); a nuvem ativa é o **cérebro que acompanha quando você está longe**
 - Executor na nuvem com ferramentas e Hub hospedado (projeto 3).
 - OCR/transcrição; API de integradores na nuvem; cobrança automática.
 - "Hub em software" como produto de entrada.
+
+Perguntas que ficaram da implementação (para o Jonas):
+- Texto final do termo: a v1 gravada é um **rascunho provisório**; o texto final entra como versão nova (migration) e
+  exige novo aceite antes de ligar espaços novos.
+- Preços reais em `AiPricing` (hoje provisórios: US$ 2/10 por milhão de tokens no Claude, US$ 0,02/MTok de custo
+  nominal no embedding próprio): definem a velocidade com que o orçamento acaba.
+- Id/perfil do modelo Claude no Bedrock (`CLOUD_LLM_MODEL_ID`, hoje `us.anthropic.claude-sonnet-5-5`, um palpite) e
+  habilitar o acesso ao modelo na conta AWS.
+- Host de produção do serviço de embeddings (o compose é só desenvolvimento; Ollama em CPU).
+- Confirmar quem decide na empresa: implementado como `org.members.manage` (a permissão do kit), não `org.billing`.
+- Confirmar o DELETE físico (em vez de lápide) das cópias do servidor nos assuntos (§7).
+- Ler o prompt do Antares na nuvem (v1, rascunho: tom, regras, exemplos de confidencialidade) e os textos fixos do
+  aviso de orçamento esgotado e da falha da resposta.
+
+## 7. Desvios na implementação
+- **Cópias da chave para o servidor apagadas de verdade** (DELETE físico) também nos assuntos, onde §4.3 diz "lápide na
+  cópia do servidor": é chave que o servidor abre, nenhum feed a entrega (a lápide não serviria a ninguém) e o
+  anti-objetivo pede nada legível depois de desligar.
+- **Quem decide** na empresa = permissão `org.members.manage` (`org_admin` hoje); na pessoal, a própria pessoa.
+- **`allow_online_llm`** é exigido ao autorizar (422 `online-llm-not-allowed`), não ligado automaticamente; o padrão é
+  `true` e ainda não há rota para mudá-lo.
+- **Orçamento** em micro-dólares (`bigint`, padrão 0). Autorizar exige orçamento > 0 com um erro próprio, 422
+  `ai-budget-required` (0 = não contratado); `ai-budget-exceeded` é a recusa interna das tarefas (nenhuma rota HTTP a
+  devolve): a indexação pausa e retoma sozinha (aumento ou mês novo), e num assunto a mensagem fica `pending` para o
+  Hub com **um** aviso fixo da nuvem. Ligar (2º passo) não reconfere o orçamento. Admins com `org.billing` veem os
+  valores; todo membro vê só o nível de aviso. Cada arquivo reserva o custo inteiro antes de começar (um arquivo que não
+  cabe no mês não começa). O livro de uso fica depois de desligar (não é legível).
+- **"Hub online"** não usa heartbeat: a mensagem é do Hub por 30 s sem `ack` a partir do `sentAt` (ou da volta à fila,
+  para o Hub novo); assunto sem Hub executor é respondido na hora.
+- **Assuntos criados pelo Hub** num espaço em nuvem ativa também nascem com a reserva: o Hub manda a cópia do servidor
+  (rota nova `GET /hub/cloud/server-key`). Assunto antigo: **qualquer participante** liga a reserva, menos depois de o
+  dono desligá-la (aí só o dono).
+- **Indexação incremental** por passada do espaço guiada pelos manifestos (2 s de espera depois de cada envio ou
+  apagamento), não por objeto; troca do modelo de embedding ainda sem reindexação automática. Texto extraído não é
+  guardado (só trechos e o metadado do arquivo); o objeto/versão de cada trecho é o da primeira parte do arquivo.
+  Embedding `nomic-embed-text:v1.5` **sem prefixo de tarefa**, como o Hub.
+- **Documentos da nuvem:** um arquivo Markdown por documento, gravado só no espaço do próprio assunto ("espaço mais
+  restrito" vira conselho), em nome da pessoa que confirmou (precisa poder escrever no espaço); a confirmação é
+  conferida pelo servidor (a proposta estava na mensagem da nuvem logo antes). O passo 4 da incorporação (tirar do
+  manifesto da nuvem o que o Hub já incorporou) roda na próxima gravação do manifesto da nuvem.
+- **Chave do servidor** numa linha do banco envelopada pelo KMS, gerada no primeiro uso (rotação por `retired_at`).
+- Rota extra `GET /spaces/:spaceId/cloud` (estado `off|authorized|active`, para o Gestor saber quando mandar a chave).

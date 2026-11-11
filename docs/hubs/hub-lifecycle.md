@@ -241,7 +241,9 @@ Hub, como faria para uma pessoa.
 
 - **Tipos de item:** `hub`, `hub_organization`, `organization`, `member`, `role_assignment`, `space`, `space_key`,
   `space_key_grant`, `hub_space`. O formato de `data` de cada tipo está no comentário de
-  `src/hubs/application/sync-hub.use-case.ts`.
+  `src/hubs/application/sync-hub.use-case.ts`. O item `space` traz `cloudMode` (`encrypted_backup` | `active_cloud`) e
+  `allowOnlineLlm`: é por ele que o Hub sabe se o espaço está em **nuvem ativa** (espelhos de conector no backup,
+  manifesto da nuvem, cópia do servidor nos assuntos; veja "Nuvem ativa: o que muda para o Hub").
 - **Escopo:** só organizações com vínculo **aprovado**, só espaços em `hub_space`, e só as cópias da chave para
   pessoas ou para **este** Hub. Nunca `authHash`, a cópia do kit nem cópias de outro Hub. `member` traz o material
   trancado (`publicKey`, `encryptedPrivateKey`, `kdfSalt`, `kdfParams`) para o login offline.
@@ -400,7 +402,10 @@ Sala**:
 1. `GET /spaces/:id` traz `roomHubs: [{ hubId, roleKey }]`;
 2. `GET /hubs/:hubId` traz a `encryptionPublicKey` de cada um;
 3. a troca leva `hubGrants: [{ hubId, wrappedKey }]` com **exatamente** esses Hubs. Conjunto errado: 409
-   `key-rotation-mismatch`, com `expectedHubIds`, `missingHubIds` e `unexpectedHubIds` no corpo.
+   `key-rotation-mismatch`, com `expectedHubIds`, `missingHubIds` e `unexpectedHubIds` no corpo;
+4. num espaço em **nuvem ativa** (`cloudMode = "active_cloud"`), a troca leva também `serverWrappedKey` (a versão nova
+   selada para `GET /cloud/server-key`); sem ela 409 `key-rotation-mismatch` com `missingServer: true`. A nuvem nunca
+   aparece na sincronização do Hub (a cópia do servidor não vai a nenhum feed).
 
 O Hub recebe a versão nova na próxima sincronização. Um Hub desvinculado ou desregistrado já saiu da Sala e não a
 recebe.
@@ -497,7 +502,7 @@ organização está aprovado). Rotas com o token de Hub:
     `key-rotation-mismatch` com `missingServer: true` (sem a reserva, mandar a cópia dá `unexpectedServer: true`).
 
 - `POST /hub/conversations` `{ id, spaceId, ownerUserId, state?, encryptedHeader, grants: [{ userId, wrappedKey }],
-  hubWrappedKey }`: o Hub abre um assunto (o "aviso", `state` padrão `aviso`) em nome de uma pessoa com papel no Hub e
+  hubWrappedKey, serverWrappedKey? }`: o Hub abre um assunto (o "aviso", `state` padrão `aviso`) em nome de uma pessoa com papel no Hub e
   membro do espaço, sendo ele o executor. `grants` = a versão 1 da chave trancada para cada participante: a pessoa e,
   se não for ela, o **dono do Hub** (regra do executor). Espaço que não está no Hub, vínculo não aprovado ou dono do
   Hub fora das `grants`: 422 `executor-invalid`; participante fora do espaço: 422 `participant-not-space-member`.
@@ -505,7 +510,8 @@ organização está aprovado). Rotas com o token de Hub:
   exceção para o Hub): o assunto nasce com a nuvem de reserva e o pedido leva também `serverWrappedKey` (a versão 1
   selada para a pública do servidor, `GET /hub/cloud/server-key`); sem ela 422 `cloud-reserve-copy-required`; fora da
   nuvem ativa, mandar a cópia é 422 `cloud-reserve-unavailable`; cópia que não abre com a chave do servidor, 422
-  `server-copy-invalid`. O Hub sabe se o espaço está em nuvem ativa pelo app/`cloud` (ou tenta e recebe o 422).
+  `server-copy-invalid`. O Hub sabe se o espaço está em nuvem ativa pelo `cloudMode` do item `space` do `GET /hub/sync`
+  (e, se a sincronização estiver atrasada, recebe o 422 e tenta de novo do jeito certo).
 - `GET /hub/conversations/:id`: metadado, participantes e as cópias da chave do próprio Hub (todas as versões).
 - `PUT /hub/conversations/:id/header` `{ keyVersion, encryptedHeader }`: o executor troca o cabeçalho cifrado (título,
   plano; `docs/crypto/conversations.md`, rótulo do cabeçalho, `recordId` = id do assunto) com a versão **atual** da
@@ -513,9 +519,16 @@ organização está aprovado). Rotas com o token de Hub:
   contam no uso do espaço (422 `space-storage-full`). Devolve o assunto.
 - `PUT /hub/conversations/:id/state` `{ state }`: os estados de trabalho (`trabalhando`, `na_fila`, `pede_sim`,
   `esperando_pc`, `concluido`, `aviso`); `arquivado` é do dono (403 `not-conversation-owner`).
-- `POST /hub/conversations/:id/keys` `{ version, grants: [{ userId, wrappedKey }], hubGrants: [{ hubId, wrappedKey }] }`:
-  com a troca pendente (`keyRotationRequired`, alguém saiu), o Hub pode fazer a troca: versão atual + 1 para
-  **exatamente** os participantes vivos e ele mesmo (409 `key-rotation-mismatch` com os ids faltando/sobrando).
+- `POST /hub/conversations/:id/keys` `{ version, grants: [{ userId, wrappedKey }], hubGrants: [{ hubId, wrappedKey }],
+  serverWrappedKey? }`: com a troca pendente (`keyRotationRequired`, alguém saiu), o Hub pode fazer a troca: versão
+  atual + 1 para **exatamente** os participantes vivos e ele mesmo (409 `key-rotation-mismatch` com os ids
+  faltando/sobrando), e para o servidor **exatamente** quando `cloudReserve: true` (`serverWrappedKey`, a versão nova
+  selada para `GET /hub/cloud/server-key`; 409 com `missingServer` / `unexpectedServer`). A nuvem nunca troca a chave de
+  um assunto: com a reserva ligada e a troca pendente, ela não pega mensagens até o Hub ou um participante trocar.
+- `GET /hub/cloud/server-key` -> `{ publicKey }` (token de Hub): a chave pública X25519 do servidor (43 caracteres
+  base64url) para selar `serverWrappedKey` (`0x01 ‖ crypto_box_seal`, 108 caracteres, como as cópias para Hubs).
+  **Busque de novo antes de selar** (não guarde por muito tempo): numa rotação a pública muda, e uma cópia selada para
+  uma chave desconhecida dá 422 `server-copy-invalid`.
 
 - `POST /hub/conversations/:id/messages` `{ id, keyVersion, encryptedBody, replacesMessageId? }`: a mensagem do Hub,
   cifrada com a chave do assunto (`docs/crypto/conversations.md`, rótulo `conversation-message`, `recordId` = id da
@@ -602,6 +615,32 @@ O Hub **deixa de ser executor** (404 `conversation-not-found` dali em diante, c�
 desregistrado, a organização é desvinculada, o espaço sai dele ou o dono dele deixa de participar do assunto. As
 mensagens pendentes ficam esperando o executor novo.
 
+## Nuvem ativa: o que muda para o Hub
+
+Resumo para quem implementa o Hub (spec `docs/superpowers/specs/2026-11-10-active-cloud-design.md`). Um espaço em
+**nuvem ativa** (`cloudMode = "active_cloud"` no item `space` do `GET /hub/sync`) é lido pelo servidor: a nuvem indexa
+o backup cifrado e responde nos assuntos quando o Hub está fora de alcance. Fora da nuvem ativa nada disto vale (o
+servidor não lê nada).
+
+1. **Manifesto do espaço** (em **todo** espaço, com ou sem nuvem): o Hub mantém o manifesto do Hub (objeto do backup com
+   `objectId` fixo derivado do espaço) listando **só documentos** (arquivos e, na nuvem ativa, espelhos de conector),
+   nunca assuntos, eventos, pedaços do índice ou estado interno. Formato, limites e vetor de teste em
+   `docs/hubs/space-manifest.md`.
+2. **Espelhos de conector** entram no backup **só** nos espaços em nuvem ativa; quando o espaço sai dela, o Hub para de
+   enviá-los e os apaga do backup (`space-manifest.md`, "Espelhos de conector no backup").
+3. **Manifesto da nuvem:** os documentos gravados pela nuvem ficam no manifesto da nuvem (escrito só pelo servidor); o
+   Hub os **incorpora** ao manifesto dele (mesmo `fileId`, mesmos `objectId`s, sem reenviar bytes) a cada passada do
+   backup (`space-manifest.md`, "Manifesto da nuvem e incorporação pelo Hub").
+4. **Executor de reserva nos assuntos:** Hub primeiro (30 s a partir do `sentAt` ou da volta à fila), o ack decide quem
+   pegou, mensagem confirmada pela nuvem nunca é executada pelo Hub, mensagens com "responder pela nuvem" ficam para a
+   nuvem (seção "A nuvem como executor de reserva", acima).
+5. **Cópia para o servidor nos assuntos:** criar assunto num espaço em nuvem ativa e trocar a chave de um assunto com
+   `cloudReserve: true` levam `serverWrappedKey`, selada para `GET /hub/cloud/server-key`.
+6. **Regra de confidencialidade** antes de gravar documento (propor, perguntar, nunca gravar em silêncio) e o **texto em
+   claro das mensagens** na convenção v1 de `docs/crypto/conversations.md`: valem para o Hub também.
+7. **Embeddings:** mesmo modelo (`nomic-embed-text`), sem prefixo de tarefa, mesma divisão em trechos (`space-manifest.md`,
+   "Trechos e embeddings"); mudar isso é mudança conjunta com reindexação dos dois lados.
+
 ## 13. Reset de fábrica
 
 Um aparelho desregistrado **não pode ser reivindicado de novo com as mesmas chaves**: a apresentação dá 409
@@ -650,6 +689,8 @@ Estourou: 429 `too-many-requests` com `Retry-After` (segundos).
 - **Ordem de commit × `sync_version`:** uma sincronização pode pular de vez uma linha cujo commit chegou atrasado.
   Até a correção (versões dadas no COMMIT, como nos assuntos), a sincronização completa periódica corrige o estado. O
   feed dos assuntos (`GET /hub/conversations/changes`) já tem versões na ordem dos commits e não precisa disso.
+- **Nuvem ativa:** prefixos de tarefa nos embeddings (`search_document:`/`search_query:`) só como mudança conjunta com
+  reindexação dos dois lados; executor na nuvem completo e Hub hospedado ficam para depois (hoje a nuvem é só reserva).
 - **Backup (storage):** snapshot pago, troca de chave feita pelo Hub editor da Sala (hoje o Hub guarda os envios numa
   fila local até um membro trocar a chave pelo app), visitante em Hub alheio, configuração inicial por Bluetooth e
   idioma, download em lote, endpoint S3 público para aparelhos em desenvolvimento (a URL assinada hoje aponta para o

@@ -26,6 +26,8 @@ npm run typecheck    # tsc --noEmit no projeto todo (src e test); roda no CI
 npm run format       # Prettier em src/ e test/
 npm run storage:reconcile [-- <min>]   # reparo do backup (índice × bucket); depois do build, no container
 npm run conversations:retention        # retenção dos assuntos (30 dias); depois do build, no container, login dono
+# embeddings reais (nuvem ativa; pulado sem a variável, o CI usa o falso):
+docker exec -e EMBEDDINGS_REAL_URL=http://embeddings:11434 vaulter-back-app npx vitest run src/cloud/infra/embeddings/ollama-embedder.real.spec.ts
 ```
 Antes de dizer que algo está pronto: `npm run build && npm test && npm run lint && npm run typecheck` precisam passar
 (e `docker exec vaulter-back-app npm run test:e2e`, dentro do container, quando mexer em módulos/banco).
@@ -64,7 +66,8 @@ npm run start:dev                    # dentro do container: API em live reload
 - O pgAdmin roda em modo desktop (sem login) e já abre com o servidor `vaulter-back` cadastrado
   (`.docker/pgadmin/servers.json`); só pede a senha do banco (`DB_PASSWORD`) na primeira conexão.
 - **Papel de runtime:** a API conecta como `DB_APP_USERNAME` (padrão `vaulter_app`; `NOSUPERUSER NOBYPASSRLS`,
-  membro de `app_runtime`, com `SELECT/INSERT/UPDATE` e **sem `DELETE`**, exceto em `rate_limit_hits`, contador técnico — veja Rate limit), para o RLS valer de verdade. Migrations,
+  membro de `app_runtime`, com `SELECT/INSERT/UPDATE` e **sem `DELETE`**, exceto nas exceções documentadas em "Dois
+  logins" (Banco de dados: `rate_limit_hits`, o schema `pgboss`, as tabelas legíveis da nuvem ativa), para o RLS valer de verdade. Migrations,
   CLI, testes e pgAdmin usam `DB_USERNAME` (o dono). O login é criado por `.docker/postgres/init/02-app-role.sh`
   (idempotente) na criação do banco; num banco já existente, rode uma vez:
   `docker exec vaulter-back-db sh /docker-entrypoint-initdb.d/02-app-role.sh`. As permissões ficam nas migrations.
@@ -185,7 +188,7 @@ couber (spec de contas, §12).
   pg-boss é separado do TypeORM: `send` dentro de um `uow.run` usa a conexão da transação, mas a criação da fila (uma vez
   por processo) usa o pool do pg-boss (exceção aceita à regra de segunda conexão: pools diferentes). Versão do pg-boss
   fixada exata no `package.json` (a migration gera o SQL do pacote instalado). e2e em `test/shared/jobs.e2e-spec.ts`.
-- **AWS:** região **`us-east-1` (Virgínia)** — o backend fica perto dos serviços externos (Anthropic, OpenRouter,
+- **AWS:** região **`us-east-1` (Virgínia)** — o backend fica perto dos serviços externos (Claude no Bedrock, OpenRouter,
   Sentry), então só a ida app → backend cruza o continente; mais barata e com todos os serviços. LGPD permite
   transferência internacional com salvaguardas (o backup é cifrado e ilegível para nós). Região é
   configuração: se um cliente exigir dados no Brasil, a organização dele pode ir para um bucket em `sa-east-1`.
@@ -1172,8 +1175,68 @@ registra a fonte `conversations`), `hubs` (`HubDirectory`: `ownerOf`,
   lote, estado cru: `messageRows`, `conversationSpaceUsage`, `lastMessageAt`).
 
 ## Módulo `cloud`
-`src/cloud/` (nuvem ativa). Spec: `docs/superpowers/specs/2026-11-10-active-cloud-design.md`; plano
-`docs/superpowers/plans/2026-11-10-active-cloud.md` (em execução; a seção completa entra no fim do plano).
+`src/cloud/` (nuvem ativa: o servidor lê um espaço contratado para o Antares responder com o Hub longe). Spec:
+`docs/superpowers/specs/2026-11-10-active-cloud-design.md` (implementada em 11/11/2026; desvios listados nela); plano
+`docs/superpowers/plans/2026-11-10-active-cloud.md`. Contratos com o Hub: `docs/hubs/space-manifest.md` e
+`docs/hubs/hub-lifecycle.md` ("A nuvem como executor de reserva"); texto em claro das mensagens:
+`docs/crypto/conversations.md`; o que o app faz: `docs/app/pendencias-do-app.md` ("Nuvem ativa").
+- **Regra de ouro:** a nuvem só lê um espaço em `active_cloud` (termo atual aceito, autorizado, cópia da chave do
+  servidor gravada), e todo trabalho legível reconfere o estado **sob a trava do espaço** antes de gravar. Desligar
+  **apaga de verdade** (DELETE físico, sem lixeira) a cópia da chave do servidor, os arquivos (nomes) e os trechos
+  (texto + embeddings) do espaço e as cópias do servidor nos assuntos: **exceção documentada** à regra de lápide (veja
+  "Dois logins" em Banco de dados). Dado legível (trechos, nomes, texto extraído, prompts, respostas em claro, chaves)
+  **nunca** vai a log, Sentry, auditoria, payload de tarefa nem resposta de erro: só ids, contagens, tipos, códigos e a
+  versão do prompt.
+- **Fronteiras:** depende de `spaces` (`SpaceCloud`: estado, `lockActiveForWrite`, `keyVersions`, `audience`;
+  `SpaceAccess`), `storage` (`BackupContentReader`, `ServerBackupWriter`), `conversations` (`CloudConversationExecutor`,
+  `SendMessageUseCase.byCloud`) e `organizations` (`OrganizationAccess`, `OrganizationDirectory.aiBudget/lockAiBudget`,
+  `AuditLog`, a porta `OrganizationAiSpend`), só pelo que exportam; **ninguém importa `cloud`**. Os outros módulos
+  falam com ele por contratos em `src/shared/application/`: o `cloud` **assina** `SpaceKeyRotatedHooks` (guarda a cópia
+  do servidor da troca de chave do espaço), `BackupObjectsChangedHooks` (reindexa), `AiBudgetRaisedHooks` (retoma a
+  indexação), `CloudReservePendingHooks` (agenda a resposta) e **registra** `ServerKeyCopyCheck` (o `conversations`
+  confere as cópias do servidor dos assuntos) e a fonte de `OrganizationAiSpend`; **emite** `SpaceCloudDeactivatedHooks`
+  (os assuntos perdem a reserva). Exporta só rotas; a chave do servidor, o orçamento e o índice ficam dentro dele.
+- **Tabelas** (todas no DER; nenhuma sincroniza): `cloud_server_keys` e `cloud_terms` (dado do servidor, sem RLS; o
+  runtime só lê o termo e só muda `retired_at` da chave); com `organization_id` + RLS por organização:
+  `cloud_term_acceptances` (append-only), `cloud_space_activations` (ciclos), `cloud_space_key_grants`, `cloud_files`,
+  `cloud_chunks` (as três LEGÍVEIS ou chave: GRANT DELETE ao runtime), `cloud_ai_reservations` e `cloud_ai_usage`
+  (livro do orçamento: só ids, tokens e custos; ficam depois de desligar). Colunas novas fora do módulo:
+  `spaces.cloud_activated_at`, `organizations.ai_budget_micro_usd`, `conversations.cloud_reserve|cloud_reserve_declined|
+  cloud_answer`, `conversation_key_grants.server_recipient`, `conversation_messages.author_cloud|acked_by_cloud|
+  requeued_at|cloud_answer_requested`.
+- **Rotas** (todas internas, tag `cloud`; detalhes nos bullets abaixo): `GET /cloud/server-key` (usuário) e
+  `GET /hub/cloud/server-key` (`@HubAuth()`) -> `{ publicKey }`; `GET /organizations/:orgId/cloud/terms`,
+  `POST .../cloud/terms/accept`; `GET /spaces/:spaceId/cloud`, `POST .../cloud/authorize|activate|deactivate`;
+  `GET /organizations/:orgId/ai-usage`. Fora do módulo: `PUT /platform/organizations/:orgId/ai-budget` (`platform`),
+  `POST /spaces/:id/keys` com `serverWrappedKey` (`spaces`), `PUT .../conversations/:id/cloud-reserve|cloud-answer`,
+  `serverWrappedKey` em criar/trocar chave de assunto e `cloudAnswer` na mensagem (`conversations`).
+- **Erros** (problem+json): 422 `server-copy-invalid` (cópia malformada ou que não abre com a chave do servidor, sem
+  oráculo), `cloud-terms-outdated`, `cloud-terms-not-accepted`, `online-llm-not-allowed`, `space-orphaned`,
+  `ai-budget-required` (orçamento 0 ao autorizar), `cloud-not-authorized`; 409 `cloud-already-active`,
+  `key-versions-mismatch` (ligar sem todas as versões), `key-rotation-mismatch` com `missingServer`/`unexpectedServer`
+  (troca de chave de espaço ou assunto); `ai-budget-exceeded` (422, com `resetsAt`) é recusa **interna** do `AiBudget`:
+  nenhuma rota HTTP a devolve hoje (indexação e respostas são tarefas; o assunto recebe um aviso). Do `storage`:
+  422 `object-id-reserved` (id do manifesto da nuvem), 409 `server-write-refused`; do `conversations`: 422
+  `cloud-reserve-copy-required` / `cloud-reserve-unavailable`, 409 `cloud-answer-not-owned`; do `organizations`: 422
+  `ai-budget-invalid`.
+- **Ordem de locks:** ligar/desligar = espaço `FOR UPDATE` -> ciclo vivo `FOR UPDATE` -> cópias do servidor -> trechos
+  -> arquivos (-> assuntos do espaço, pelo gancho de desligar); troca de chave do espaço = a do `spaces` (o gancho grava
+  a cópia com o espaço já travado); gravação do índice = espaço `FOR SHARE` (`SpaceCloud.lockActiveForWrite`) -> linhas
+  de `cloud_files` do lote/arquivo `FOR UPDATE` -> trechos; orçamento = linha da organização `FOR NO KEY UPDATE`
+  (**folha**, numa transação curta própria; acerto = reserva -> uso do mês, sem a organização); resposta = a do
+  `CloudConversationExecutor` (espaço `FOR SHARE` -> assunto `FOR NO KEY UPDATE`); documento = as travas do backup
+  (`ServerBackupWriter`, guarda sob a trava do espaço). **Nenhuma chamada de rede (KMS na abertura fria, embeddings,
+  Bedrock, S3 de leitura) segura transação**, exceto a abertura da cópia ao ligar/trocar a chave (KMS só num processo
+  frio, com o espaço travado; aceito).
+- **RLS e contextos:** tabelas da nuvem por `app.organization_id`; a nuvem como executor dos assuntos usa o contexto
+  `app.cloud_executor` = UM espaço (ator `{ kind: 'cloud', spaceId }`; veja "Nuvem de reserva" em `conversations`); a
+  busca no índice e a leitura do backup rodam no escopo da organização do espaço, sempre filtradas pelo `spaceId`.
+- **Tarefas (pg-boss, filas com chave, payload só com ids `{ organizationId, spaceId, ... }`):**
+  `cloud.index-space` (chave `space:<id>`, 2 s de debounce pelo gancho do backup, 0 ao ligar; e `space-resume:<id>` no
+  começo do mês seguinte quando o orçamento pausou), `cloud.index-file` (chave `file:<cloudFileId>`),
+  `cloud.answer-conversation` (chave `conversation:<id>`; 30 s ou na hora). Todas registradas em `CloudSpaceJobs`:
+  desligar cancela as que esperam (`cancelQueued(fila, { spaceId })`) no mesmo unit of work, e a que já roda reconfere
+  sob trava e não grava. Retentativas do padrão do `JobQueue` (3, de 30 s até 600 s, 15 min de expiração).
 - **Chave do servidor** (`ServerKeyring`, `application/ports/server-keyring.ts`; `KmsServerKeyring` em `infra/crypto/`):
   par X25519 numa linha de `cloud_server_keys` (dado do servidor: sem organização nem RLS), privada **só cifrada pelo
   KMS** (`CLOUD_KMS_KEY_ID`, contexto `{ purpose: 'server-x25519-private-key-v1', publicKey }`), gerada no primeiro uso
@@ -1317,8 +1380,8 @@ registra a fonte `conversations`), `hubs` (`HubDirectory`: `ownerOf`,
   - **runtime** (`DB_APP_USERNAME`/`DB_APP_PASSWORD`, padrão `vaulter_app`): o que a API usa. Sem superusuário,
     sem `BYPASSRLS`, membro do papel de grupo `app_runtime`, que tem só `SELECT, INSERT, UPDATE` — **sem
     `DELETE`** (reforça o soft delete; a limpeza de lápides decide isso depois). Exceções documentadas: `rate_limit_hits`
-    (contador técnico), as tabelas legíveis da nuvem ativa (`cloud_space_key_grants`, `cloud_files`, `cloud_chunks`;
-    desligar apaga de verdade) e, em `conversation_key_grants`, só as cópias para o servidor (`server_recipient`, policy
+    (contador técnico), o schema `pgboss` (fila de tarefas), as tabelas legíveis da nuvem ativa (`cloud_space_key_grants`,
+    `cloud_files`, `cloud_chunks`; desligar apaga de verdade) e, em `conversation_key_grants`, só as cópias para o servidor (`server_recipient`, policy
     restritiva `conversation_server_copy_delete`). As permissões vêm das migrations;
     o login é criado por `.docker/postgres/init/02-app-role.sh` (idempotente);
   - **dono** (`DB_USERNAME`): migrations, CLI, compose, pgAdmin e a preparação do banco de teste.
@@ -1453,18 +1516,41 @@ Os valores do `.env.example` para os segredos são **só de desenvolvimento**; p
 - **Nuvem ativa / Bedrock:** habilitar o acesso ao modelo Claude no Bedrock (`us-east-1`) e dar ao papel IAM da API `bedrock:InvokeModel` no
   modelo/perfil de `CLOUD_LLM_MODEL_ID`; em produção o serviço de embeddings precisa de um host próprio (o compose é só dev).
 - **Assuntos (`conversations`), pendências:** notificações (mensagem nova, pedido de "sim", compartilhado: hoje só
-  aparecem pelo feed); nuvem ativa e **executor na nuvem** (hoje o executor é sempre um Hub); API de integradores
+  aparecem pelo feed); **executor na nuvem completo** (hoje a nuvem é só executor de **reserva** nos espaços em nuvem
+  ativa, sem ferramentas; o executor principal é sempre um Hub; veja "Nuvem ativa" abaixo); API de integradores
   (o assunto como caixa de entrada de apps); WebSocket no lugar da sondagem longa do executor; reconcile do **contador**
   `conversation_space_usage` (os triggers o mantêm, mas não há varredura que corrija uma deriva); **limite de lote** no
   esvaziar das mensagens do assunto (`purgeTrash` das mensagens zera tudo de uma vez; os anexos já vão em 1000);
   `move` que completa uma segunda cópia movida sem auditar; índice parcial por `deleted_at` para a retenção.
   **LISTEN:** a conexão `PgConversationChangeSignal` não tem `keepAlive`/ping (meia-aberta = acorda por prazo, até 25 s) e
   reconectar acorda todos de uma vez (sem jitter); **não funciona atrás de pgbouncer em modo transação** (LISTEN exige
-  conexão de sessão). **Pool:** a conexão do LISTEN fica fora do pool, então conte `instâncias × (DB_POOL_MAX_CONNECTIONS
-  + 1)` (hoje 10 + 1) ao dimensionar `max_connections` do Postgres.
-- **Nuvem ativa, indexação:** troca do modelo de embedding sem reindexação automática (o modelo fica gravado em cada
-  arquivo e trecho; falta uma passada que marque tudo `pending`); arquivo com falha permanente não terminal (sha256 do
-  bucket diferente do índice, embedding fora do ar) fica `pending` e é tentado de novo a cada passada.
+  conexão de sessão). **Pool:** a conexão do LISTEN e o pool do pg-boss ficam fora do pool do TypeORM, então conte
+  `instâncias × (DB_POOL_MAX_CONNECTIONS + 1 + JOB_QUEUE_POOL_MAX)` (hoje 10 + 1 + 4) ao dimensionar `max_connections` do
+  Postgres (veja "Pool" em Banco de dados).
+- **Nuvem ativa** (módulo `cloud`; spec active-cloud §6):
+  - **Do Jonas:** texto final do termo (jurídico; a v1 é rascunho e o final entra como versão nova por migration);
+    preços reais em `AiPricing` (hoje provisórios: US$ 2/10 por MTok no Claude, US$ 0,02/MTok no embedding); id/perfil
+    do modelo no Bedrock (`CLOUD_LLM_MODEL_ID`, hoje um palpite); prompt do Antares na nuvem
+    (`antares-prompt.ts`, v1 rascunho) e os textos fixos do aviso de orçamento e da falha (`answer-conversation.job.ts`).
+  - **Produção:** a chave KMS e o Bedrock (itens acima); host de produção do serviço de embeddings (o compose é só dev;
+    Ollama em CPU); o papel IAM da API também precisa ler o bucket (`s3:GetObject`/`GetObjectVersion`, já na lista do
+    `storage`) e gravar os documentos da nuvem (`s3:PutObject`/`PutObjectTagging`).
+  - **Depois (fora deste projeto):** trazer documentos e gerar artefatos nas respostas; OCR de imagens e transcrição de
+    áudio na indexação; executor na nuvem com ferramentas, containers e tarefas longas, e o **Hub hospedado**
+    (projeto 3); **"Hub em software"** (o software do Pi num PC/VM, sem nuvem ativa, como entrada barata); API de
+    integradores consultando a nuvem; cobrança automática e contratação do orçamento pela própria organização (hoje só o
+    financeiro da plataforma ajusta); notificação dos avisos de orçamento (hoje só `warningLevel`).
+  - **Limites conhecidos:** troca do modelo de embedding sem reindexação automática (o modelo fica gravado em cada
+    arquivo e trecho; falta uma passada que marque tudo `pending`); arquivo com falha permanente não terminal (sha256 do
+    bucket diferente do índice, embedding fora do ar) fica `pending` e é tentado de novo a cada passada; a passada
+    inicial de um espaço enorme enfileira um job por arquivo; um arquivo em extração no desligamento do processo pode
+    virar `unreadable` até a próxima versão; resposta que não pode ser entregue por motivo permanente depois de o modelo
+    rodar (ex.: espaço cheio) é paga de novo a cada sinal seguinte do assunto (uma tentativa por sinal, sem laço);
+    instância que cai segurando uma tarefa com chave bloqueia a chave até a expiração (15 min); sessões abertas por um Hub
+    ainda conseguem aceitar o termo e autorizar/ligar/desligar (decisão: devem ser recusadas, falta a trava); não há rota
+    para mudar `spaces.allow_online_llm` (padrão `true`; autorizar exige `true`); a confirmação do documento por texto
+    livre depende do julgamento do modelo (o botão `documentDecision` é a forma segura); o documento grava só no espaço
+    do assunto (gravar num espaço mais restrito é conselho, a pessoa faz).
 - **Agendar `npm run conversations:retention`** (1x por dia, fora da aplicação, ANTES do `storage:reconcile`, que
   apaga do bucket o que o `DeleteObjects` dela deixou) até o pg-boss entrar. Sem ela, o conteúdo apagado dos assuntos
   fica para sempre (conta no uso do espaço). **Login:** roda com o dono (`DB_USERNAME`), que só ignora o RLS sendo
@@ -1537,6 +1623,7 @@ Os valores do `.env.example` para os segredos são **só de desenvolvimento**; p
   | `POST /organizations/:orgId/cloud/terms/accept` (aceite do termo da nuvem ativa) | 30/h por usuário (`userIdTracker`) |
   | `GET /organizations/:orgId/ai-usage` (uso de IA do mês, admins) | 600/h por usuário (`userIdTracker`), contador próprio |
   | `POST /spaces/:spaceId/cloud/authorize`, `.../activate`, `.../deactivate` (nuvem ativa) | 60/h por usuário, contador próprio por rota |
+  | `GET /cloud/server-key`, `GET /hub/cloud/server-key`, `GET /organizations/:orgId/cloud/terms`, `GET /spaces/:spaceId/cloud` (leituras da nuvem ativa) | limite geral (300/min por IP) |
   | `GET /conversations/changes` (feed da pessoa) / `GET /hub/conversations/changes` (feed do executor, sondagem longa) | 1200/h por usuário / 1800/h por Hub (ociosa: ~144/h, um pedido a cada 25 s; cada mudança acorda e devolve) |
   Rota com `@Throttle` próprio tem contador próprio (por rota); `@ThrottleGroup(THROTTLE_GROUPS.x, tracker?)`
   (`throttling.decorators.ts`) faz rotas dividirem um contador (chave = grupo + tracker, sem a rota); cada grupo é

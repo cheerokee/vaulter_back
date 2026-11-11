@@ -26,6 +26,10 @@
 -- (limite do login offline) faz sincronização completa. LGPD: pedido de esquecimento apaga/anonimiza os
 -- campos pessoais e deixa só id + deleted_at.
 --
+-- Exceção (nuvem ativa, módulo cloud): as tabelas com dado legível ou chave que o servidor abre
+-- (cloud_space_key_grants, cloud_files, cloud_chunks e, em conversation_key_grants, só as cópias para o servidor)
+-- sofrem DELETE físico ao desligar: dado legível não tem lixeira. Nenhuma delas sincroniza.
+--
 -- Convenção: tabelas de entidade no plural; tabelas de ligação com os dois nomes no singular.
 -- Toda tabela tem created_at, updated_at e deleted_at (uma entidade base no TypeORM: @CreateDateColumn,
 -- @UpdateDateColumn, @DeleteDateColumn); sync_version só nas que o hub/app sincronizam.
@@ -164,6 +168,7 @@ CREATE TABLE organizations (
   protected_until DATETIME NULL COMMENT 'fim da janela de proteção (nomeação + 7 dias)',
   personal_owner_user_id CHAR(36) NULL COMMENT 'dono da organização pessoal; nulo nas demais; garante uma pessoal por conta',
   storage_quota_bytes BIGINT NOT NULL DEFAULT 53687091200 COMMENT 'franquia de nuvem (50 GiB): a soma dos storage_quota_bytes dos espaços vivos não passa dela; CHECK > 0',
+  ai_budget_micro_usd BIGINT NOT NULL DEFAULT 0 COMMENT 'orçamento mensal de IA da nuvem ativa em micro-dólares (US$ 1 = 1.000.000); 0 = não contratado; só o financeiro da plataforma ajusta; CHECK >= 0',
   sync_version BIGINT NOT NULL COMMENT 'versão de sincronização: sequência global do servidor, muda a cada insert/update/exclusão',
   PRIMARY KEY (id),
   UNIQUE INDEX uq_organizations_personal_owner (personal_owner_user_id),
@@ -371,8 +376,9 @@ CREATE TABLE spaces (
   deleted_at DATETIME NULL,
   organization_id CHAR(36) NOT NULL,
   name VARCHAR(255) NOT NULL,
-  cloud_mode ENUM('encrypted_backup', 'active_cloud') NOT NULL DEFAULT 'encrypted_backup',
-  allow_online_llm TINYINT NOT NULL DEFAULT 1 COMMENT 'v1: só o campo; todos permitidos',
+  cloud_mode ENUM('encrypted_backup', 'active_cloud') NOT NULL DEFAULT 'encrypted_backup' COMMENT 'active_cloud = o servidor lê o espaço (módulo cloud); muda só pelo SpaceCloud',
+  cloud_activated_at DATETIME NULL COMMENT 'quando o espaço passou a active_cloud; CHECK: (cloud_mode = active_cloud) = (cloud_activated_at preenchido)',
+  allow_online_llm TINYINT NOT NULL DEFAULT 1 COMMENT 'autorizar a nuvem ativa exige 1; ainda sem rota para mudar',
   current_key_version INT NOT NULL DEFAULT 1,
   key_rotation_required TINYINT NOT NULL DEFAULT 0 COMMENT 'flag de coordenação do backend: troca de chave pendente após a saída de um membro',
   storage_quota_bytes BIGINT NOT NULL DEFAULT 10737418240 COMMENT 'tamanho reservado (10 GiB; 1 GiB..5 TiB): soma na franquia da organização e na capacidade de cada Hub onde está; CHECK > 0',
@@ -799,8 +805,12 @@ CREATE TABLE conversations (
   header_key_version INT NULL,
   moved_from_conversation_id CHAR(36) NULL COMMENT 'link por id para o assunto de origem (pode ser de outra organização), sem FK',
   participant_user_ids JSON NOT NULL COMMENT 'uuid[] no Postgres: participantes vivos, derivado por trigger (base do RLS)',
+  cloud_reserve TINYINT NOT NULL DEFAULT 0 COMMENT 'nuvem de reserva ligada (espaço em nuvem ativa; o servidor tem cópia de todas as versões); CHECK: só viva',
+  cloud_reserve_declined TINYINT NOT NULL DEFAULT 0 COMMENT 'o dono desligou a reserva: só ele liga de novo; CHECK NOT (cloud_reserve AND cloud_reserve_declined)',
+  cloud_answer TINYINT NOT NULL DEFAULT 0 COMMENT '"responder pela nuvem" no assunto inteiro; CHECK: só com cloud_reserve',
   sync_version BIGINT NOT NULL,
   PRIMARY KEY (id),
+  INDEX ix_conversations_cloud_reserve (space_id) COMMENT 'WHERE cloud_reserve no Postgres',
   UNIQUE INDEX uq_conversations_id_organization (id, organization_id) COMMENT 'alvo das FKs compostas (filho_id, organization_id)',
   INDEX fk_conversations_organizations_idx (organization_id),
   INDEX fk_conversations_spaces_idx (space_id),
@@ -838,9 +848,10 @@ CREATE TABLE conversation_participants (
   CONSTRAINT fk_conversation_participants_users FOREIGN KEY (user_id) REFERENCES users (id)
 );
 
--- Cópia trancada de uma versão da chave do assunto (0x01 ‖ crypto_box_seal, 108 caracteres) para UMA pessoa OU o
--- Hub executor (CHECK num_nonnulls = 1); nunca para o kit da organização (privado é privado). Todo participante e o
--- executor têm cópia de todas as versões.
+-- Cópia trancada de uma versão da chave do assunto (0x01 ‖ crypto_box_seal, 108 caracteres) para UMA pessoa, o
+-- Hub executor OU a chave do servidor (nuvem de reserva; CHECK num_nonnulls(user_id, hub_id) + server_recipient = 1);
+-- nunca para o kit da organização (privado é privado). Todo participante e o executor têm cópia de todas as versões.
+-- As cópias para o servidor nunca vão a um feed e sofrem DELETE físico quando a reserva cai (exceção documentada).
 CREATE TABLE conversation_key_grants (
   id CHAR(36) NOT NULL,
   created_at DATETIME NOT NULL,
@@ -851,9 +862,11 @@ CREATE TABLE conversation_key_grants (
   key_version INT NOT NULL,
   user_id CHAR(36) NULL,
   hub_id CHAR(36) NULL,
+  server_recipient TINYINT NOT NULL DEFAULT 0 COMMENT 'cópia para a chave do servidor (cloud_server_keys)',
   wrapped_key VARCHAR(108) NOT NULL COMMENT 'CHECK ~ ^[A-Za-z0-9_-]{108}$',
   sync_version BIGINT NOT NULL,
   PRIMARY KEY (id),
+  UNIQUE INDEX uq_conversation_key_grants_server (conversation_id, key_version, deleted_at) COMMENT 'WHERE server_recipient AND deleted_at IS NULL no Postgres',
   UNIQUE INDEX uq_conversation_key_grants_user (conversation_id, key_version, user_id, deleted_at) COMMENT 'WHERE user_id IS NOT NULL AND deleted_at IS NULL no Postgres',
   UNIQUE INDEX uq_conversation_key_grants_hub (conversation_id, key_version, hub_id, deleted_at) COMMENT 'WHERE hub_id IS NOT NULL AND deleted_at IS NULL no Postgres',
   INDEX fk_conversation_key_grants_organizations_idx (organization_id),
@@ -867,11 +880,12 @@ CREATE TABLE conversation_key_grants (
   CONSTRAINT fk_conversation_key_grants_hubs FOREIGN KEY (hub_id) REFERENCES hubs (id)
 );
 
--- Mensagem imutável (id do aparelho; reenviar o mesmo id não duplica). Autor: uma pessoa OU o Hub executor. Caixa de
--- entrada: a de pessoa nasce pending até o executor confirmar (acked_at); a do executor nasce confirmada. Apagar =
--- lápide; o corpo cifrado fica 30 dias e depois a retenção o zera (body_bytes fica). CHECKs no Postgres: um autor,
--- key_version >= 1, body_bytes 1..65536 e igual ao tamanho do corpo, corpo nulo só com lápide, pending = (acked_at
--- nulo), mensagem do Hub nunca pending, replaces_message_id <> id.
+-- Mensagem imutável (id do aparelho; reenviar o mesmo id não duplica). Autor: uma pessoa, o Hub executor OU a nuvem
+-- (author_cloud). Caixa de entrada: a de pessoa nasce pending até o executor (Hub ou nuvem de reserva) confirmar
+-- (acked_at); a do executor nasce confirmada. Apagar = lápide; o corpo cifrado fica 30 dias e depois a retenção o zera
+-- (body_bytes fica). CHECKs no Postgres: um autor, key_version >= 1, body_bytes 1..65536 e igual ao tamanho do corpo,
+-- corpo nulo só com lápide, pending = (acked_at nulo), mensagem do Hub/da nuvem nunca pending, confirmada por no máximo
+-- um (acked_by_hub_id OU acked_by_cloud), cloud_answer_requested só em mensagem de pessoa, replaces_message_id <> id.
 CREATE TABLE conversation_messages (
   id CHAR(36) NOT NULL COMMENT 'gerado no aparelho (uuid v7; entra no AD da cifra), sem default',
   created_at DATETIME NOT NULL,
@@ -881,15 +895,21 @@ CREATE TABLE conversation_messages (
   conversation_id CHAR(36) NOT NULL,
   author_user_id CHAR(36) NULL,
   author_hub_id CHAR(36) NULL,
+  author_cloud TINYINT NOT NULL DEFAULT 0 COMMENT 'escrita pela nuvem (executor de reserva)',
   key_version INT NOT NULL,
   encrypted_body TEXT NULL COMMENT 'até 64 KiB cifrados (maior vira anexo); nulo só depois da retenção',
   body_bytes INT NOT NULL COMMENT 'tamanho do blob cifrado: conta no uso do espaço',
   replaces_message_id CHAR(36) NULL COMMENT 'edição = mensagem nova que referencia a anterior (mesma conversa)',
   pending TINYINT NOT NULL,
   acked_at DATETIME NULL,
+  acked_by_hub_id CHAR(36) NULL COMMENT 'Hub que confirmou; volta a pending (requeue) quando ele deixa de ser executor sem ter respondido',
+  acked_by_cloud TINYINT NOT NULL DEFAULT 0 COMMENT 'a nuvem confirmou (pegou) a mensagem; o ack do Hub dá 404',
+  requeued_at DATETIME NULL COMMENT 'última volta a pending: o Hub novo ganha 30 s a partir daqui antes da nuvem',
+  cloud_answer_requested TINYINT NOT NULL DEFAULT 0 COMMENT '"responder pela nuvem" nesta mensagem (só de pessoa)',
   sent_at DATETIME NOT NULL,
   sync_version BIGINT NOT NULL,
   PRIMARY KEY (id),
+  INDEX fk_conversation_messages_acked_by_hubs_idx (acked_by_hub_id),
   UNIQUE INDEX uq_conversation_messages_id_conversation (id, conversation_id, organization_id) COMMENT 'alvo das FKs compostas da edição e dos anexos',
   INDEX fk_conversation_messages_organizations_idx (organization_id),
   INDEX fk_conversation_messages_conversations_idx (conversation_id),
@@ -902,6 +922,7 @@ CREATE TABLE conversation_messages (
   CONSTRAINT fk_conversation_messages_conversations FOREIGN KEY (conversation_id, organization_id) REFERENCES conversations (id, organization_id),
   CONSTRAINT fk_conversation_messages_author_users FOREIGN KEY (author_user_id) REFERENCES users (id),
   CONSTRAINT fk_conversation_messages_author_hubs FOREIGN KEY (author_hub_id) REFERENCES hubs (id),
+  CONSTRAINT fk_conversation_messages_acked_by_hubs FOREIGN KEY (acked_by_hub_id) REFERENCES hubs (id),
   CONSTRAINT fk_conversation_messages_replaces FOREIGN KEY (replaces_message_id, conversation_id, organization_id) REFERENCES conversation_messages (id, conversation_id, organization_id)
 );
 
@@ -1000,6 +1021,212 @@ CREATE TABLE cloud_server_keys (
   retired_at DATETIME NULL,
   PRIMARY KEY (id),
   UNIQUE INDEX uq_cloud_server_keys_public_key (public_key)
+);
+
+-- Versões publicadas do termo da nuvem ativa (texto pt-BR). Dado do servidor (sem organization_id nem RLS),
+-- publicado só por migration; o runtime só lê. Atual = maior versão. hash = SHA-256 (hex) do texto em UTF-8.
+CREATE TABLE cloud_terms (
+  id CHAR(36) NOT NULL,
+  created_at DATETIME NOT NULL,
+  updated_at DATETIME NULL,
+  deleted_at DATETIME NULL,
+  version INT NOT NULL COMMENT 'CHECK >= 1',
+  hash CHAR(64) NOT NULL COMMENT 'CHECK ~ ^[0-9a-f]{64}$',
+  text TEXT NOT NULL,
+  published_at DATETIME NOT NULL,
+  PRIMARY KEY (id),
+  UNIQUE INDEX uq_cloud_terms_version (version)
+);
+
+-- Aceite do termo por organização, uma vez por versão (quem, quando, IP e o hash aceito). Append-only (runtime só
+-- SELECT/INSERT). RLS por organização; não sincroniza.
+CREATE TABLE cloud_term_acceptances (
+  id CHAR(36) NOT NULL,
+  created_at DATETIME NOT NULL,
+  updated_at DATETIME NULL,
+  deleted_at DATETIME NULL,
+  organization_id CHAR(36) NOT NULL,
+  term_version INT NOT NULL,
+  term_hash CHAR(64) NOT NULL,
+  accepted_by_user_id CHAR(36) NOT NULL,
+  accepted_at DATETIME NOT NULL,
+  ip VARCHAR(45) NULL,
+  PRIMARY KEY (id),
+  UNIQUE INDEX uq_cloud_term_acceptances_org_version (organization_id, term_version),
+  INDEX fk_cloud_term_acceptances_users_idx (accepted_by_user_id),
+  INDEX fk_cloud_term_acceptances_cloud_terms_idx (term_version),
+  CONSTRAINT fk_cloud_term_acceptances_organizations FOREIGN KEY (organization_id) REFERENCES organizations (id),
+  CONSTRAINT fk_cloud_term_acceptances_cloud_terms FOREIGN KEY (term_version) REFERENCES cloud_terms (version),
+  CONSTRAINT fk_cloud_term_acceptances_users FOREIGN KEY (accepted_by_user_id) REFERENCES users (id)
+);
+
+-- Um ciclo da nuvem ativa de um espaço: authorized (quem decide autorizou) -> active (o Gestor mandou a cópia da
+-- chave). Desligar = lápide + quem desligou; autorizar de novo cria outro ciclo. Um ciclo vivo por espaço. Nada
+-- legível. RLS por organização; não sincroniza. CHECKs: state, (state = active) = activated_at = activated_by,
+-- deactivated_by só com lápide.
+CREATE TABLE cloud_space_activations (
+  id CHAR(36) NOT NULL,
+  created_at DATETIME NOT NULL,
+  updated_at DATETIME NULL,
+  deleted_at DATETIME NULL COMMENT 'fim do ciclo (desligado)',
+  organization_id CHAR(36) NOT NULL,
+  space_id CHAR(36) NOT NULL,
+  state ENUM('authorized', 'active') NOT NULL,
+  term_version INT NOT NULL COMMENT 'versão do termo aceita quando o ciclo começou',
+  authorized_by_user_id CHAR(36) NOT NULL,
+  authorized_at DATETIME NOT NULL,
+  activated_by_user_id CHAR(36) NULL,
+  activated_at DATETIME NULL,
+  deactivated_by_user_id CHAR(36) NULL,
+  PRIMARY KEY (id),
+  UNIQUE INDEX uq_cloud_space_activations_live_space (space_id, deleted_at) COMMENT 'WHERE deleted_at IS NULL no Postgres',
+  INDEX fk_cloud_space_activations_spaces_idx (space_id, organization_id),
+  INDEX fk_cloud_space_activations_organizations_idx (organization_id),
+  CONSTRAINT fk_cloud_space_activations_organizations FOREIGN KEY (organization_id) REFERENCES organizations (id),
+  CONSTRAINT fk_cloud_space_activations_spaces FOREIGN KEY (space_id, organization_id) REFERENCES spaces (id, organization_id),
+  CONSTRAINT fk_cloud_space_activations_cloud_terms FOREIGN KEY (term_version) REFERENCES cloud_terms (version),
+  CONSTRAINT fk_cloud_space_activations_authorized_by FOREIGN KEY (authorized_by_user_id) REFERENCES users (id),
+  CONSTRAINT fk_cloud_space_activations_activated_by FOREIGN KEY (activated_by_user_id) REFERENCES users (id),
+  CONSTRAINT fk_cloud_space_activations_deactivated_by FOREIGN KEY (deactivated_by_user_id) REFERENCES users (id)
+);
+
+-- Cópia trancada de cada versão da chave do espaço para a chave do servidor (0x01 ‖ crypto_box_seal, 108
+-- caracteres) enquanto o espaço está em nuvem ativa. DELETE físico ao desligar (exceção documentada). RLS por
+-- organização; não sincroniza.
+CREATE TABLE cloud_space_key_grants (
+  id CHAR(36) NOT NULL,
+  created_at DATETIME NOT NULL,
+  updated_at DATETIME NULL,
+  deleted_at DATETIME NULL,
+  organization_id CHAR(36) NOT NULL,
+  space_id CHAR(36) NOT NULL,
+  space_key_id CHAR(36) NOT NULL,
+  key_version INT NOT NULL COMMENT 'CHECK >= 1',
+  wrapped_key VARCHAR(108) NOT NULL COMMENT 'CHECK ~ ^[A-Za-z0-9_-]{108}$',
+  PRIMARY KEY (id),
+  UNIQUE INDEX uq_cloud_space_key_grants_space_version (space_id, key_version),
+  UNIQUE INDEX uq_cloud_space_key_grants_space_key (space_key_id),
+  INDEX fk_cloud_space_key_grants_spaces_idx (space_id, organization_id),
+  INDEX fk_cloud_space_key_grants_organizations_idx (organization_id),
+  CONSTRAINT fk_cloud_space_key_grants_organizations FOREIGN KEY (organization_id) REFERENCES organizations (id),
+  CONSTRAINT fk_cloud_space_key_grants_spaces FOREIGN KEY (space_id, organization_id) REFERENCES spaces (id, organization_id),
+  CONSTRAINT fk_cloud_space_key_grants_space_keys FOREIGN KEY (space_key_id, organization_id) REFERENCES space_keys (id, organization_id)
+);
+
+-- Arquivo de um espaço em nuvem ativa, como os manifestos o descrevem (docs/hubs/space-manifest.md): nome, caminho,
+-- tipo e origem LEGÍVEIS (nunca em log) e as versões do backup de cada parte indexada. DELETE físico ao desligar
+-- (com os trechos, em cascata). RLS por organização; não sincroniza. CHECKs: status, manifest, source_kind,
+-- connector só com source_kind = connector, skip_reason só com status = skipped, partes com o mesmo tamanho,
+-- chunk_count >= 0.
+CREATE TABLE cloud_files (
+  id CHAR(36) NOT NULL,
+  created_at DATETIME NOT NULL,
+  updated_at DATETIME NULL,
+  deleted_at DATETIME NULL,
+  organization_id CHAR(36) NOT NULL,
+  space_id CHAR(36) NOT NULL,
+  file_id CHAR(36) NOT NULL COMMENT 'fileId do manifesto (estável)',
+  manifest ENUM('hub', 'cloud') NOT NULL COMMENT 'de qual manifesto veio (o do Hub vence)',
+  name VARCHAR(255) NOT NULL,
+  path VARCHAR(1024) NULL,
+  media_type VARCHAR(255) NOT NULL,
+  source_kind ENUM('file', 'connector', 'cloud') NOT NULL,
+  connector VARCHAR(100) NULL,
+  modified_at DATETIME NULL,
+  part_object_ids JSON NOT NULL COMMENT 'uuid[] no Postgres, na ordem',
+  part_version_ids JSON NOT NULL COMMENT 'uuid[] no Postgres: versões do backup indexadas',
+  status ENUM('pending', 'indexed', 'skipped') NOT NULL,
+  skip_reason VARCHAR(40) NULL COMMENT 'unsupported-format, too-large, unreadable...',
+  embedding_model VARCHAR(100) NULL,
+  chunk_count INT NOT NULL DEFAULT 0,
+  indexed_at DATETIME NULL,
+  PRIMARY KEY (id),
+  UNIQUE INDEX uq_cloud_files_id_organization (id, organization_id) COMMENT 'alvo da FK composta dos trechos',
+  UNIQUE INDEX uq_cloud_files_space_file (space_id, file_id),
+  INDEX fk_cloud_files_spaces_idx (space_id, organization_id),
+  INDEX fk_cloud_files_organizations_idx (organization_id),
+  INDEX ix_cloud_files_pending (organization_id, space_id) COMMENT 'WHERE status = pending no Postgres (retomada do orçamento)',
+  CONSTRAINT fk_cloud_files_organizations FOREIGN KEY (organization_id) REFERENCES organizations (id),
+  CONSTRAINT fk_cloud_files_spaces FOREIGN KEY (space_id, organization_id) REFERENCES spaces (id, organization_id)
+);
+
+-- Trecho indexado (texto LEGÍVEL + embedding vector(768) no Postgres, com o modelo que o calculou). object_id /
+-- version_id = a primeira parte do arquivo. Busca por cosseno no índice HNSW ix_cloud_chunks_embedding_hnsw
+-- (vector_cosine_ops, criado na migration). DELETE físico ao desligar. RLS por organização; não sincroniza.
+CREATE TABLE cloud_chunks (
+  id CHAR(36) NOT NULL,
+  created_at DATETIME NOT NULL,
+  updated_at DATETIME NULL,
+  deleted_at DATETIME NULL,
+  organization_id CHAR(36) NOT NULL,
+  space_id CHAR(36) NOT NULL,
+  cloud_file_id CHAR(36) NOT NULL,
+  file_id CHAR(36) NOT NULL,
+  object_id CHAR(36) NOT NULL,
+  version_id CHAR(36) NOT NULL,
+  position INT NOT NULL COMMENT 'CHECK >= 0',
+  text TEXT NOT NULL,
+  embedding JSON NOT NULL COMMENT 'vector(768) no Postgres (pgvector)',
+  embedding_model VARCHAR(100) NOT NULL,
+  PRIMARY KEY (id),
+  UNIQUE INDEX uq_cloud_chunks_file_position (cloud_file_id, position),
+  INDEX fk_cloud_chunks_files_idx (cloud_file_id, organization_id),
+  INDEX fk_cloud_chunks_spaces_idx (space_id, organization_id),
+  INDEX fk_cloud_chunks_organizations_idx (organization_id),
+  CONSTRAINT fk_cloud_chunks_organizations FOREIGN KEY (organization_id) REFERENCES organizations (id),
+  CONSTRAINT fk_cloud_chunks_spaces FOREIGN KEY (space_id, organization_id) REFERENCES spaces (id, organization_id),
+  CONSTRAINT fk_cloud_chunks_files FOREIGN KEY (cloud_file_id, organization_id) REFERENCES cloud_files (id, organization_id) ON DELETE CASCADE
+);
+
+-- Livro do orçamento de IA, parte 1: uma linha por chamada que custa (arquivo indexado ou resposta). Reserva o custo
+-- estimado sob a trava da organização e depois acerta o real (settled) ou devolve (released); reserva esquecida para
+-- de contar em expires_at (expired). Só ids, tipo, modelo, tokens e custos. RLS por organização; não sincroniza;
+-- fica depois de desligar a nuvem. CHECKs: kind, status, valores >= 0, colunas do acerto juntas com settled.
+CREATE TABLE cloud_ai_reservations (
+  id CHAR(36) NOT NULL,
+  created_at DATETIME NOT NULL,
+  updated_at DATETIME NULL,
+  deleted_at DATETIME NULL,
+  organization_id CHAR(36) NOT NULL,
+  space_id CHAR(36) NOT NULL,
+  kind ENUM('answer', 'indexing') NOT NULL,
+  month DATE NOT NULL COMMENT 'primeiro dia do mês UTC (relógio do banco) em que conta',
+  amount_micro_usd BIGINT NOT NULL COMMENT 'reservado (estimativa)',
+  status ENUM('reserved', 'settled', 'released', 'expired') NOT NULL DEFAULT 'reserved',
+  expires_at DATETIME NOT NULL COMMENT '15 min, renovado a cada lote da indexação',
+  settled_at DATETIME NULL,
+  model VARCHAR(100) NULL,
+  input_tokens BIGINT NULL,
+  output_tokens BIGINT NULL,
+  cost_micro_usd BIGINT NULL COMMENT 'gasto real',
+  PRIMARY KEY (id),
+  INDEX ix_cloud_ai_reservations_live (organization_id, month) COMMENT 'WHERE status = reserved no Postgres',
+  INDEX fk_cloud_ai_reservations_spaces_idx (space_id, organization_id),
+  INDEX fk_cloud_ai_reservations_organizations_idx (organization_id),
+  CONSTRAINT fk_cloud_ai_reservations_organizations FOREIGN KEY (organization_id) REFERENCES organizations (id),
+  CONSTRAINT fk_cloud_ai_reservations_spaces FOREIGN KEY (space_id, organization_id) REFERENCES spaces (id, organization_id)
+);
+
+-- Livro do orçamento de IA, parte 2: gasto acertado do mês por espaço e tipo (somado a cada acerto). RLS por
+-- organização; não sincroniza; fica depois de desligar a nuvem.
+CREATE TABLE cloud_ai_usage (
+  id CHAR(36) NOT NULL,
+  created_at DATETIME NOT NULL,
+  updated_at DATETIME NULL,
+  deleted_at DATETIME NULL,
+  organization_id CHAR(36) NOT NULL,
+  space_id CHAR(36) NOT NULL,
+  kind ENUM('answer', 'indexing') NOT NULL,
+  month DATE NOT NULL,
+  cost_micro_usd BIGINT NOT NULL DEFAULT 0,
+  input_tokens BIGINT NOT NULL DEFAULT 0,
+  output_tokens BIGINT NOT NULL DEFAULT 0,
+  calls INT NOT NULL DEFAULT 0 COMMENT 'reservas acertadas (arquivos e respostas), não pedidos HTTP',
+  PRIMARY KEY (id),
+  UNIQUE INDEX uq_cloud_ai_usage_month_space_kind (organization_id, month, space_id, kind),
+  INDEX fk_cloud_ai_usage_spaces_idx (space_id, organization_id),
+  CONSTRAINT fk_cloud_ai_usage_organizations FOREIGN KEY (organization_id) REFERENCES organizations (id),
+  CONSTRAINT fk_cloud_ai_usage_spaces FOREIGN KEY (space_id, organization_id) REFERENCES spaces (id, organization_id)
 );
 
 -- Permissões que o app pode pedir. À instalação só se concede a interseção (app declarou x papel concedido).

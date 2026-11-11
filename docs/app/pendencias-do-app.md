@@ -49,9 +49,19 @@ código e no `CLAUDE.md`).
 - [ ] **Orçamento de IA** (`GET /organizations/:id` -> `ai: { budgetConfigured, warningLevel }`, para todo membro):
   `budgetConfigured: false` = a IA na nuvem não foi contratada (autorizar dá 422 `ai-budget-required`); `warningLevel`
   75 / 90 = avisar que o orçamento do mês está acabando; 100 = a nuvem parou de responder e de indexar até o mês virar
-  (`resetsAt`) ou o financeiro aumentar (o Hub segue normal). Respostas e indexação recusadas trazem 422
-  `ai-budget-exceeded` com `resetsAt`. Admins (`org.billing`) veem os valores e o gasto por espaço e tipo em
-  `GET /organizations/:id/ai-usage` (micro-USD: US$ 1 = 1.000.000). Notificação fica para o módulo de notificações.
+  (`resetsAt` em `ai-usage`) ou o financeiro aumentar (o Hub segue normal). Nenhuma rota do app recebe
+  `ai-budget-exceeded`: a indexação fica parada em silêncio (retoma sozinha) e, num assunto, a nuvem manda **um** aviso
+  fixo (`notice: 'ai-budget-exceeded'`, veja "Responder pela nuvem"). Admins (`org.billing`) veem os valores e o gasto
+  por espaço e tipo em `GET /organizations/:orgId/ai-usage` (`{ month, resetsAt, budgetMicroUsd, spentMicroUsd,
+  reservedMicroUsd, remainingMicroUsd, warningLevel, items }`; micro-USD: US$ 1 = 1.000.000). Quem ajusta o orçamento
+  é o financeiro da plataforma (o app mostra o caminho para pedir aumento). Notificação fica para o módulo de
+  notificações.
+- [ ] **Cópia da chave para o servidor (resumo):** em todo lugar onde o app tranca uma chave para os membros, num
+  espaço/assunto com nuvem ele tranca também para a pública de `GET /cloud/server-key` (`0x01 ‖ crypto_box_seal`, 108
+  caracteres, como a cópia de um Hub): ligar o espaço (`serverGrants`, todas as versões), trocar a chave do espaço
+  (`serverWrappedKey`), criar assunto (`serverWrappedKey`, versão 1), ligar a reserva de um assunto antigo
+  (`serverGrants`, todas as versões) e trocar a chave de um assunto com reserva (`serverWrappedKey`). Recarregue a
+  pública antes de selar (ela muda numa rotação; uma cópia que não abre dá 422 `server-copy-invalid`).
 
 ## Backup e espaço ocupado
 - [ ] **Espaço quase cheio:** com `storage.usedBytes` acima de **80%** de `storage.quotaBytes` e a lixeira
@@ -75,6 +85,10 @@ Visão geral: o assunto é dado do espaço, cifrado **no celular** com uma chave
   (`wrappedKey`, 108 caracteres), cifrar cabeçalho (título, plano), mensagens (≤ 64 KiB cifrados; maior vira anexo) e
   anexos (≤ 100 MiB cifrados) com os rótulos e o `recordId` do formato; ids UUID v7 gerados no aparelho (reenviar o
   mesmo id é seguro). Nunca mandar nome ou tipo de arquivo em claro.
+- [ ] **Texto em claro das mensagens (mudou com a nuvem ativa):** toda mensagem que o app cifra segue a convenção v1 de
+  `docs/crypto/conversations.md` ("Texto em claro das mensagens"): `{"text": "...", ...campos opcionais}` em UTF-8; ao
+  ler, ignorar campos desconhecidos e aceitar texto puro como a mensagem inteira (mensagens antigas). Vale em todo
+  assunto, com ou sem nuvem (Hub, nuvem e app falam o mesmo formato).
 - [ ] **Compartilhar** (`POST .../:id/participants` e `/participants/space`): mandar a cópia de **todas** as versões da
   chave para cada pessoa nova (até 50 participantes vivos); quem não é membro do espaço dá 422
   `participant-not-space-member`. **Limite do corpo (100 kB):** cada cópia ocupa ~140 bytes no JSON, então "compartilhar
@@ -140,6 +154,8 @@ Visão geral: o assunto é dado do espaço, cifrado **no celular** com uma chave
     chega no feed (o feed só traz as cópias de quem lê); `cloudReserve`/`cloudReserveDeclined` vêm no item
     `conversation` do feed e em `GET .../conversations/:id`.
   - Espaço desligado da nuvem: todo assunto perde a reserva (`cloudReserve: false`, troca de chave pendente).
+  - Assunto criado **pelo Hub** (o "aviso") num espaço em nuvem ativa já nasce com a reserva (o Hub manda a cópia do
+    servidor); o app não precisa fazer nada além de mostrar.
 - [ ] **Responder pela nuvem** (spec active-cloud §4.3; a nuvem só responde num assunto com `cloudReserve: true`):
   - **Na mensagem:** um botão/opção "responder pela nuvem" manda `cloudAnswer: true` no `POST .../messages` (a nuvem pega
     na hora, sem esperar os 30 s do Hub; o feed mostra `cloudAnswerRequested`).
