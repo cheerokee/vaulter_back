@@ -986,6 +986,22 @@ CREATE TABLE conversation_space_usage (
   CONSTRAINT fk_conversation_space_usage_spaces FOREIGN KEY (space_id, organization_id) REFERENCES spaces (id, organization_id)
 );
 
+-- Par X25519 do servidor (módulo cloud, nuvem ativa): a pública em claro e a privada só cifrada pelo KMS (envelope).
+-- Dado do servidor, não de cliente: sem organization_id nem RLS; não sincroniza. Atual = retired_at nulo (uma só,
+-- por trava na geração); as aposentadas abrem cópias seladas antes de uma rotação. Runtime só muda retired_at.
+CREATE TABLE cloud_server_keys (
+  id CHAR(36) NOT NULL,
+  created_at DATETIME NOT NULL,
+  updated_at DATETIME NULL,
+  deleted_at DATETIME NULL,
+  public_key VARCHAR(43) NOT NULL COMMENT 'X25519, base64url',
+  encrypted_private_key TEXT NOT NULL COMMENT 'CiphertextBlob do KMS (base64); contexto: purpose + public_key',
+  kms_key_arn VARCHAR(2048) NOT NULL,
+  retired_at DATETIME NULL,
+  PRIMARY KEY (id),
+  UNIQUE INDEX uq_cloud_server_keys_public_key (public_key)
+);
+
 -- Permissões que o app pode pedir. À instalação só se concede a interseção (app declarou x papel concedido).
 CREATE TABLE app_permission (
   app_id CHAR(36) NOT NULL,

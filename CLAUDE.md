@@ -55,7 +55,7 @@ npm run start:dev                    # dentro do container: API em live reload
   | `app` | `vaulter-back-app` | — | `localhost:${API_PORT}` |
   | `db` (PostgreSQL 18 + pgvector) | `vaulter-back-db` | `db:5432` | `localhost:${DB_EXTERNAL_PORT}` |
   | `pgadmin` | `vaulter-back-pgadmin` | — | `localhost:${PGADMIN_PORT}` |
-  | `aws` (LocalStack, só S3) | `vaulter-back-aws` | `http://aws:4566` | `localhost:${AWS_EXTERNAL_PORT}` |
+  | `aws` (LocalStack, S3 e KMS) | `vaulter-back-aws` | `http://aws:4566` | `localhost:${AWS_EXTERNAL_PORT}` |
 - **Banco único:** o Postgres guarda tanto os dados relacionais quanto os embeddings de RAG (extensão
   **pgvector**, já habilitada na criação do banco por `.docker/postgres/init/01-extensions.sql`). Não criar
   outro banco para vetores sem uma razão forte.
@@ -81,6 +81,10 @@ npm run start:dev                    # dentro do container: API em live reload
   `uploads/` fica no meio; o LocalStack guarda as regras mas não as executa) e o CI roda o mesmo script no serviço
   LocalStack. `S3_SKIP_SIGNATURE_VALIDATION=0` (compose e CI) faz o LocalStack conferir a assinatura das URLs
   assinadas, como o S3; sem isso o tamanho e os cabeçalhos assinados do PUT não seriam exigidos.
+- **KMS local** (`SERVICES: s3,kms`): `.docker/localstack/init/ready.d/02-kms.sh` recria a cada subida a chave que
+  envelopa a privada do servidor (módulo `cloud`), com **id e material fixos** (tags `_custom_id_`/`_custom_key_material_`
+  do LocalStack, só de desenvolvimento) e o alias `alias/cloud-server-key` (`CLOUD_KMS_KEY_ID`): a cópia cifrada fica no
+  banco, que sobrevive ao reinício do LocalStack. O CI roda o mesmo script.
 - Não há imagem de produção ainda — o `Dockerfile` é só para desenvolvimento.
 - Novo serviço (banco, cache, fila) entra no `docker-compose.yaml`, com suas variáveis no `.env.example`.
 
@@ -153,7 +157,20 @@ couber (spec de contas, §12).
     banco de desenvolvimento antes de migrar (veja Docker). O `globalSetup` só **cria** o banco dos e2e se ele faltar
     (não recria): se ele já tinha usuários de antes, apague-o uma vez e deixe o próximo `test:e2e` recriá-lo:
     `docker exec vaulter-back-db dropdb -U <DB_USERNAME> <DB_TEST_DATABASE>`.
-- **Tarefas em segundo plano:** **pg-boss** (fila no próprio Postgres, sem serviço novo).
+- **Tarefas em segundo plano:** **pg-boss** (fila no próprio Postgres, sem serviço novo), atrás da porta `JobQueue`
+  (`src/shared/application/job-queue.ts`; implementação `PgBossJobQueue` em `src/shared/infra/jobs/`, módulo global
+  `JobsModule`). Schema próprio `pgboss`, **instalado pela migration** `CreateJobQueue` (login dono, SQL do
+  `getConstructionPlans` da versão do pacote); a API conecta com o **login de runtime** (`migrate: false`, GRANT de
+  SELECT/INSERT/UPDATE/DELETE no schema: exceção documentada, como `rate_limit_hits`), sem DDL em execução (filas sem
+  partição, `reindex` e `persistQueueStats` desligados). Atualizar o pg-boss para uma versão de schema nova = migration
+  nova com `getMigrationPlans` (veja `pg-boss-schema.ts`). **Payload só com ids** (UUID ou inteiro; `send` recusa o
+  resto) e falha de tarefa guardada/logada só pelo tipo do erro (nunca a mensagem). Dentro de um `uow.run`, `send` e
+  `cancelQueued` entram na transação (a tarefa só existe se ela confirmar). Pelo menos uma vez: handler idempotente, que
+  reconfere sob trava. `send` com `startAfterSeconds` (atraso) e `singletonKey` (uma tarefa à espera por chave; enviar
+  de novo substitui a que espera); `cancelQueued(nome, { spaceId })` apaga as que ainda esperam. Workers (busca,
+  manutenção, cron) só com `JOB_WORKERS_ENABLED` (padrão `true`); **os e2e rodam com `false`** (enfileirar funciona,
+  nada roda sozinho) e o teste que precisa liga com `createTestApp({ env: { JOB_WORKERS_ENABLED: 'true' } })`;
+  `resetDatabase` apaga `pgboss.job`. Para no `onApplicationShutdown` (gracioso, 20 s). e2e em `test/shared/jobs.e2e-spec.ts`.
 - **AWS:** região **`us-east-1` (Virgínia)** — o backend fica perto dos serviços externos (Anthropic, OpenRouter,
   Sentry), então só a ida app → backend cruza o continente; mais barata e com todos os serviços. LGPD permite
   transferência internacional com salvaguardas (o backup é cifrado e ilegível para nós). Região é
@@ -1076,8 +1093,22 @@ registra a fonte `conversations`), `hubs` (`HubDirectory`: `ownerOf`,
   `test/support/conversations-kit.ts` (criar/compartilhar/trocar chave/mandar/confirmar/apagar pela HTTP, pessoas em
   lote, estado cru: `messageRows`, `conversationSpaceUsage`, `lastMessageAt`).
 
+## Módulo `cloud`
+`src/cloud/` (nuvem ativa). Spec: `docs/superpowers/specs/2026-11-10-active-cloud-design.md`; plano
+`docs/superpowers/plans/2026-11-10-active-cloud.md` (em execução; a seção completa entra no fim do plano).
+- **Chave do servidor** (`ServerKeyring`, `application/ports/server-keyring.ts`; `KmsServerKeyring` em `infra/crypto/`):
+  par X25519 numa linha de `cloud_server_keys` (dado do servidor: sem organização nem RLS), privada **só cifrada pelo
+  KMS** (`CLOUD_KMS_KEY_ID`, contexto `{ purpose: 'server-x25519-private-key-v1', publicKey }`), gerada no primeiro uso
+  (advisory lock entre instâncias), aberta em memória num campo privado, conferida contra a pública e apagada
+  (`memzero`) no desligamento. KMS que recusa = erro, **nunca** um par novo. O runtime só pode mudar `retired_at`.
+  `openSealed(copy)` abre `0x01 ‖ crypto_box_seal` (108 chars; atual, depois as aposentadas) e devolve os 32 bytes (quem
+  chama apaga); malformada ou que não abre: o mesmo 422 `server-copy-invalid`. **Rotação:** material da chave KMS =
+  rotação automática do KMS (transparente); par novo = `retired_at` na atual (o próximo uso cria outro), as cópias
+  antigas continuam abrindo até a nuvem reselar para a pública nova. `GET /cloud/server-key` -> `{ publicKey }` (qualquer
+  usuário autenticado). e2e em `test/cloud/` (KMS do LocalStack).
+
 ## Banco de dados (TypeORM + migrations)
-- **Pool:** o do driver `pg`, com tamanho explícito `DB_POOL_MAX_CONNECTIONS` (10 por instância; instâncias × (10 + 1 da conexão LISTEN dos assuntos) abaixo
+- **Pool:** o do driver `pg`, com tamanho explícito `DB_POOL_MAX_CONNECTIONS` (10 por instância; instâncias × (10 + 1 da conexão LISTEN dos assuntos + 4 do pool do pg-boss, `JOB_QUEUE_POOL_MAX`) abaixo
   do `max_connections` do banco) e `connectionTimeoutMillis` = `DB_POOL_CONNECTION_TIMEOUT_MS` (10 s), ambos em
   `typeorm.options.ts`: pool esgotado vira erro (500, transações desfeitas) em vez de travar a API. Trabalho longo
   segurando conexão precisa de teto (ex.: o backup limita o lote da confirmação e a espera por trava, veja `storage`).
@@ -1186,6 +1217,8 @@ Validadas na subida por `src/shared/infra/config/env.validation.ts` (faltou ou i
 | `AWS_ENDPOINT_URL` | endpoint do S3 (LocalStack em dev; vazio em produção) | vazio |
 | `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` | credenciais estáticas, as duas ou nenhuma (sem elas, papel IAM) | vazio |
 | `S3_FORCE_PATH_STYLE` | path-style (obrigatório no LocalStack) | `false` |
+| `CLOUD_KMS_KEY_ID` | chave KMS (id, ARN ou `alias/...`) que envelopa a privada X25519 do servidor (módulo `cloud`) | obrigatória |
+| `JOB_WORKERS_ENABLED` | este processo roda workers do pg-boss (busca, manutenção, cron); `send` funciona sempre | `true` |
 
 Os valores do `.env.example` para os segredos são **só de desenvolvimento**; produção gera os próprios:
 `node -e "console.log(require('crypto').randomBytes(32).toString('base64url'))"`.
@@ -1219,6 +1252,8 @@ Os valores do `.env.example` para os segredos são **só de desenvolvimento**; p
   (`storage_objects`/`storage_object_versions` depois da lixeira; o runtime não tem `DELETE`); aviso de franquia perto
   do fim (notificação); endpoint S3 público configurável para dispositivos reais em dev.
 - Exclusão de conta (LGPD) precisa revogar as sessões.
+- **Nuvem ativa / KMS:** criar a chave KMS simétrica real (`us-east-1`, rotação automática ligada) e o alias de
+  `CLOUD_KMS_KEY_ID`; papel IAM da API com `kms:Encrypt` e `kms:Decrypt` nela. Sem nome de produto no alias.
 - **Assuntos (`conversations`), pendências:** notificações (mensagem nova, pedido de "sim", compartilhado: hoje só
   aparecem pelo feed); nuvem ativa e **executor na nuvem** (hoje o executor é sempre um Hub); API de integradores
   (o assunto como caixa de entrada de apps); WebSocket no lugar da sondagem longa do executor; reconcile do **contador**
@@ -1236,8 +1271,8 @@ Os valores do `.env.example` para os segredos são **só de desenvolvimento**; p
   um papel de manutenção com `BYPASSRLS` para ela (ou um contexto de confiança `app.conversation_retention` nas
   policies, como o `app.storage_reconcile`). As consultas da retenção varrem `conversations` (sem índice por
   `deleted_at`): índice parcial quando crescer.
-- **Agendar `npm run storage:reconcile`** (1x por dia, fora da aplicação) até o pg-boss entrar; aí vira uma tarefa
-  dele. Sem a varredura, um objeto que ninguém toca de novo depois de uma queda entre o S3 e o COMMIT pode ter a versão
+- **Agendar `npm run storage:reconcile`** (1x por dia, fora da aplicação) até virar uma tarefa agendada do pg-boss (a
+  fila já existe, `JobQueue`; falta a tarefa). Sem a varredura, um objeto que ninguém toca de novo depois de uma queda entre o S3 e o COMMIT pode ter a versão
   do índice expirada pelo ciclo de vida em 30 dias.
 - Plataforma: quarentena/aviso por e-mail ao dono e aos admins quando a equipe age numa organização ou Hub; leitura da
   auditoria da organização pelo cliente (hoje só se grava); endurecer a aprovação dupla (hoje basta outra pessoa com

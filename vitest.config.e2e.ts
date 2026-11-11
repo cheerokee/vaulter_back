@@ -12,6 +12,9 @@ process.env.LOG_LEVEL = process.env.E2E_LOG_LEVEL ?? 'silent';
 // Rate limit desligado nos e2e gerais (um login em loop estouraria o limite); test/shared/rate-limit liga.
 process.env.RATE_LIMIT_ENABLED = 'false';
 process.env.API_DOCS_INTERNAL_ENABLED ??= 'true';
+// Sem workers de tarefas (pg-boss) nos e2e: enfileirar funciona, nada roda sozinho entre testes. O teste que precisa
+// rodar tarefas liga com createTestApp({ env: { JOB_WORKERS_ENABLED: 'true' } }).
+process.env.JOB_WORKERS_ENABLED = 'false';
 
 export default defineConfig({
   resolve: { tsconfigPaths: true },

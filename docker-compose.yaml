@@ -59,7 +59,7 @@ services:
     container_name: vaulter-back-aws
     restart: always
     environment:
-      SERVICES: s3
+      SERVICES: s3,kms
       # Confere a assinatura das URLs assinadas como o S3 (o padrão do LocalStack é ignorá-la): sem isso, o tamanho
       # e os cabeçalhos assinados do PUT (checksum, tag) não seriam exigidos em desenvolvimento nem no e2e.
       S3_SKIP_SIGNATURE_VALIDATION: "0"

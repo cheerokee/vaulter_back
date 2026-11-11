@@ -22,6 +22,7 @@ function validConfig(): Record<string, unknown> {
     IDENTITY_RECOVERY_HASH_KEY: seed,
     AWS_REGION: 'us-east-1',
     S3_BUCKET_HUB_BRAIN: 'hub-brain',
+    CLOUD_KMS_KEY_ID: 'alias/cloud-server-key',
   };
 }
 
@@ -220,5 +221,27 @@ describe('validateEnv S3', () => {
     expect(() =>
       validateEnv({ ...validConfig(), AWS_SECRET_ACCESS_KEY: 'test' }),
     ).toThrow(/AWS_ACCESS_KEY_ID/);
+  });
+});
+
+describe('validateEnv cloud and jobs', () => {
+  it('requires CLOUD_KMS_KEY_ID', () => {
+    const config = validConfig();
+    delete config.CLOUD_KMS_KEY_ID;
+    expect(() => validateEnv(config)).toThrow(/CLOUD_KMS_KEY_ID/);
+    expect(() =>
+      validateEnv({ ...validConfig(), CLOUD_KMS_KEY_ID: '' }),
+    ).toThrow(/CLOUD_KMS_KEY_ID/);
+  });
+
+  it('defaults JOB_WORKERS_ENABLED to true and parses false', () => {
+    expect(validateEnv(validConfig()).JOB_WORKERS_ENABLED).toBe(true);
+    expect(
+      validateEnv({ ...validConfig(), JOB_WORKERS_ENABLED: 'false' })
+        .JOB_WORKERS_ENABLED,
+    ).toBe(false);
+    expect(() =>
+      validateEnv({ ...validConfig(), JOB_WORKERS_ENABLED: 'no' }),
+    ).toThrow(/JOB_WORKERS_ENABLED/);
   });
 });

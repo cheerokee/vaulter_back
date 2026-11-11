@@ -108,6 +108,11 @@ export async function resetDatabase(): Promise<void> {
   }
   const list = [...names].map((t) => `"${t}"`).join(', ');
   await ds.query(`TRUNCATE ${list} RESTART IDENTITY CASCADE`);
+  // Jobs (pg-boss, schema of its own) left by the previous spec file; the queues themselves stay (pg-boss caches them).
+  const [{ jobs }] = (await ds.query(
+    `SELECT to_regclass('pgboss.job') IS NOT NULL AS jobs`,
+  )) as [{ jobs: boolean }];
+  if (jobs) await ds.query(`DELETE FROM pgboss.job`);
   for (const [t] of catalog) {
     await ds.query(
       `INSERT INTO "${t}" SELECT * FROM jsonb_populate_recordset(null::"${t}", $1::jsonb)`,

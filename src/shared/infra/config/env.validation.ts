@@ -252,6 +252,16 @@ export class EnvironmentVariables {
   @IsString()
   @IsNotEmpty()
   S3_BUCKET_HUB_BRAIN!: string;
+
+  /** KMS key (id, ARN or `alias/...`) that envelopes the server X25519 private key (module cloud). */
+  @IsString()
+  @IsNotEmpty()
+  CLOUD_KMS_KEY_ID!: string;
+
+  /** Whether this process runs job workers (pg-boss fetch, maintenance, cron). `send` works either way. */
+  @Transform(toBoolean)
+  @IsBoolean()
+  JOB_WORKERS_ENABLED: boolean = true;
 }
 
 export function validateEnv(

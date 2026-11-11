@@ -29,11 +29,12 @@ jobs:
           --health-interval 5s
           --health-timeout 5s
           --health-retries 20
-      # Mesmo S3 do docker-compose (LocalStack 4.14.0, a última sem LOCALSTACK_AUTH_TOKEN), para o e2e do storage.
+      # Mesmo S3 e KMS do docker-compose (LocalStack 4.14.0, a última sem LOCALSTACK_AUTH_TOKEN), para o e2e do
+      # storage e da chave do servidor (cloud).
       aws:
         image: localstack/localstack:4.14.0
         env:
-          SERVICES: s3
+          SERVICES: s3,kms
           # Confere a assinatura das URLs assinadas, como o S3 (o padrão do LocalStack é ignorá-la).
           S3_SKIP_SIGNATURE_VALIDATION: "0"
         ports:
@@ -70,6 +71,7 @@ jobs:
       AWS_SECRET_ACCESS_KEY: test
       S3_FORCE_PATH_STYLE: "true"
       S3_BUCKET_HUB_BRAIN: vaulter-hub-brain
+      CLOUD_KMS_KEY_ID: alias/cloud-server-key
 
     steps:
       - uses: actions/checkout@v4
@@ -109,4 +111,9 @@ jobs:
         run: |
           docker cp .docker/localstack/init/ready.d/01-buckets.sh "${{ job.services.aws.id }}:/tmp/01-buckets.sh"
           docker exec -e S3_BUCKET_HUB_BRAIN "${{ job.services.aws.id }}" bash /tmp/01-buckets.sh
+      # Mesmo script do compose: chave KMS de dev (id e material fixos) que envelopa a chave do servidor.
+      - name: Create KMS key (LocalStack)
+        run: |
+          docker cp .docker/localstack/init/ready.d/02-kms.sh "${{ job.services.aws.id }}:/tmp/02-kms.sh"
+          docker exec "${{ job.services.aws.id }}" bash /tmp/02-kms.sh
       - run: npm run test:e2e

@@ -32,6 +32,9 @@ const BASE_KEYS = [
   'recoveryEncryptedPrivateKey',
   'newRecoveryEncryptedPrivateKey',
   'recoveryHash',
+  // Server X25519 key (module cloud): the opened private key never reaches a log or Sentry.
+  'privateKey',
+  'secretKey',
 ] as const;
 
 const toSnake = (k: string) =>
