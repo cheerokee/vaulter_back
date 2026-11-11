@@ -225,6 +225,16 @@ describe('validateEnv S3', () => {
 });
 
 describe('validateEnv cloud and jobs', () => {
+  it('defaults the embedding and language model settings and validates the driver', () => {
+    const env = validateEnv(validConfig());
+    expect(env.EMBEDDINGS_URL).toBe('http://embeddings:11434');
+    expect(env.EMBEDDING_MODEL).toBe('nomic-embed-text:v1.5');
+    expect(env.CLOUD_LLM_DRIVER).toBe('bedrock');
+    expect(() =>
+      validateEnv({ ...validConfig(), CLOUD_LLM_DRIVER: 'openai' }),
+    ).toThrow(/CLOUD_LLM_DRIVER/);
+  });
+
   it('requires CLOUD_KMS_KEY_ID', () => {
     const config = validConfig();
     delete config.CLOUD_KMS_KEY_ID;

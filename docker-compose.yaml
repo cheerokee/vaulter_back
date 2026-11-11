@@ -15,6 +15,7 @@ services:
     depends_on:
       - db
       - aws
+      - embeddings
 
   db:
     image: pgvector/pgvector:pg18
@@ -67,3 +68,25 @@ services:
       - ./.docker/localstack/init/ready.d:/etc/localstack/init/ready.d:ro
     ports:
       - "${AWS_EXTERNAL_PORT:-4566}:4566"
+
+  embeddings:
+    # Embeddings da nuvem ativa (módulo cloud): o mesmo modelo do Hub (nomic-embed-text, 768 dimensões), do nosso lado.
+    # Versão do Ollama fixada (não usar latest: o formato do vetor depende do binário e do modelo). O modelo
+    # (EMBEDDING_MODEL, tag v1.5 = id 0a109f422b47, o mesmo `nomic-embed-text:latest` do Hub) é baixado na primeira
+    # subida para .docker/ollama/models (fora do git); sem GPU, roda em CPU.
+    image: ollama/ollama:0.40.16
+    container_name: vaulter-back-embeddings
+    restart: always
+    entrypoint: ["/bin/sh", "/start.sh"]
+    environment:
+      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-nomic-embed-text:v1.5}
+    volumes:
+      - ./.docker/ollama/start.sh:/start.sh:ro
+      - ./.docker/ollama/models:/root/.ollama
+    ports:
+      - "${EMBEDDINGS_EXTERNAL_PORT:-11434}:11434"
+    healthcheck:
+      test: ["CMD-SHELL", "ollama list | grep -q \"$${EMBEDDING_MODEL}\""]
+      interval: 10s
+      timeout: 5s
+      retries: 60

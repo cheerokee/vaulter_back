@@ -56,6 +56,7 @@ npm run start:dev                    # dentro do container: API em live reload
   | `db` (PostgreSQL 18 + pgvector) | `vaulter-back-db` | `db:5432` | `localhost:${DB_EXTERNAL_PORT}` |
   | `pgadmin` | `vaulter-back-pgadmin` | — | `localhost:${PGADMIN_PORT}` |
   | `aws` (LocalStack, S3 e KMS) | `vaulter-back-aws` | `http://aws:4566` | `localhost:${AWS_EXTERNAL_PORT}` |
+  | `embeddings` (Ollama, nomic-embed-text) | `vaulter-back-embeddings` | `http://embeddings:11434` | `localhost:${EMBEDDINGS_EXTERNAL_PORT}` |
 - **Banco único:** o Postgres guarda tanto os dados relacionais quanto os embeddings de RAG (extensão
   **pgvector**, já habilitada na criação do banco por `.docker/postgres/init/01-extensions.sql`). Não criar
   outro banco para vetores sem uma razão forte.
@@ -1116,6 +1117,24 @@ registra a fonte `conversations`), `hubs` (`HubDirectory`: `ownerOf`,
   faltam, então a cópia selada para o par novo abre na hora em qualquer instância. As cópias do par aposentado continuam
   abrindo até a nuvem reselar para a pública nova. `GET /cloud/server-key` -> `{ publicKey }` (qualquer
   usuário autenticado). e2e em `test/cloud/` (KMS do LocalStack).
+- **Embeddings** (`Embedder`, `application/ports/embedder.ts`; `OllamaEmbedder` em `infra/embeddings/`): serviço `embeddings` do
+  compose (`ollama/ollama:0.40.16`, modelo `nomic-embed-text:v1.5` = id `0a109f422b47`, o mesmo `nomic-embed-text:latest` do Hub; baixado
+  na primeira subida para `.docker/ollama/models`, ~274 MB; `.docker/ollama/start.sh`). `embed(textos, 'document'|'query')` ->
+  `{ vectors (768), model, dimensions, inputTokens }`, em lotes de 32 por `POST /api/embed`. **Sem prefixo de tarefa, de propósito:**
+  o Hub (`index_docs.py`) embute sem prefixo; usar `search_document:`/`search_query:` é mudança **conjunta com o Hub + reindexação
+  completa dos dois lados** (o `kind` existe na porta para esse dia). O Hub usa o `/api/embeddings` antigo (sem normalizar);
+  o `/api/embed` normaliza: mesma direção (cosseno 1,0 medido), e só usamos cosseno. Teste contra o serviço real:
+  `docker exec -e EMBEDDINGS_REAL_URL=http://embeddings:11434 vaulter-back-app npx vitest run src/cloud/infra/embeddings/ollama-embedder.real.spec.ts`
+  (pulado sem a variável; **o CI não baixa o modelo**, os e2e usam o `FakeEmbedder` por DI).
+- **Modelo de linguagem** (`LanguageModel`, `application/ports/language-model.ts`): `complete({ system, messages, tools?, maxTokens })` ->
+  `{ text, toolCalls, stopReason, usage, model }`, um turno por chamada (com `toolCalls` o chamador roda e chama de novo).
+  `BedrockLanguageModel` (`infra/bedrock/`, Converse API, `us-east-1`, papel IAM, sem endpoint do LocalStack) escolhido por
+  `CLOUD_LLM_DRIVER` (`bedrock`|`fake`); `CLOUD_LLM_MODEL_ID` precisa ter preço. Falha = `LanguageModelError` (`retryable`), só
+  o nome do erro, nunca o prompt. Falsos determinísticos em `src/cloud/testing/` (`FakeEmbedder` bag-of-words 768 dim;
+  `FakeLanguageModel` com turnos roteirizados `enqueue({ toolCalls })` e uso computado), trocados por DI nos e2e.
+- **Preço** (`AiPricing`, `domain/ai-pricing.ts`): tabela em código, micro-USD por milhão de tokens (`bigint`), conta com
+  arredondamento **para cima** por chamada; modelo sem preço = `UnpricedModelError` (falha fechada). Valores atuais são
+  **provisórios** (Jonas decide); embedding próprio tem custo nominal de US$ 0,02/MTok para a indexação consumir o orçamento.
 
 ## Banco de dados (TypeORM + migrations)
 - **Pool:** o do driver `pg`, com tamanho explícito `DB_POOL_MAX_CONNECTIONS` (10 por instância; instâncias × (10 + 1 da conexão LISTEN dos assuntos + 4 do pool do pg-boss, `JOB_QUEUE_POOL_MAX`) abaixo
@@ -1228,6 +1247,8 @@ Validadas na subida por `src/shared/infra/config/env.validation.ts` (faltou ou i
 | `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` | credenciais estáticas, as duas ou nenhuma (sem elas, papel IAM) | vazio |
 | `S3_FORCE_PATH_STYLE` | path-style (obrigatório no LocalStack) | `false` |
 | `CLOUD_KMS_KEY_ID` | chave KMS (id, ARN ou `alias/...`) que envelopa a privada X25519 do servidor (módulo `cloud`) | obrigatória |
+| `EMBEDDINGS_URL` / `EMBEDDING_MODEL` | serviço de embeddings (Ollama) e o modelo (tag fixada, gravado em cada trecho) | `http://embeddings:11434` / `nomic-embed-text:v1.5` |
+| `CLOUD_LLM_DRIVER` / `CLOUD_LLM_MODEL_ID` | `bedrock` ou `fake` (dev sem Bedrock); id/perfil do Claude no Bedrock (precisa de preço em `AiPricing`) | `bedrock` / `us.anthropic.claude-sonnet-5-5` |
 | `JOB_WORKERS_ENABLED` | este processo roda workers do pg-boss (busca, manutenção, cron); `send` funciona sempre | `true` |
 
 Os valores do `.env.example` para os segredos são **só de desenvolvimento**; produção gera os próprios:
@@ -1264,6 +1285,8 @@ Os valores do `.env.example` para os segredos são **só de desenvolvimento**; p
 - Exclusão de conta (LGPD) precisa revogar as sessões.
 - **Nuvem ativa / KMS:** criar a chave KMS simétrica real (`us-east-1`, rotação automática ligada) e o alias de
   `CLOUD_KMS_KEY_ID`; papel IAM da API com `kms:Encrypt` e `kms:Decrypt` nela. Sem nome de produto no alias.
+- **Nuvem ativa / Bedrock:** habilitar o acesso ao modelo Claude no Bedrock (`us-east-1`) e dar ao papel IAM da API `bedrock:InvokeModel` no
+  modelo/perfil de `CLOUD_LLM_MODEL_ID`; em produção o serviço de embeddings precisa de um host próprio (o compose é só dev).
 - **Assuntos (`conversations`), pendências:** notificações (mensagem nova, pedido de "sim", compartilhado: hoje só
   aparecem pelo feed); nuvem ativa e **executor na nuvem** (hoje o executor é sempre um Hub); API de integradores
   (o assunto como caixa de entrada de apps); WebSocket no lugar da sondagem longa do executor; reconcile do **contador**

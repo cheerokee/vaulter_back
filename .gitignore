@@ -51,6 +51,8 @@ CLAUDE.local.md
 # Docker (histórico do bash e dados do Postgres)
 .docker/bash/
 .docker/pgdata/
+.docker/ollama/models/
 
 # MySQL Workbench backup
 *.mwb.bak
+

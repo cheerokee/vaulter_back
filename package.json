@@ -33,6 +33,7 @@
     "conversations:retention": "node dist/conversations/infra/cli/conversation-retention.js"
   },
   "dependencies": {
+    "@aws-sdk/client-bedrock-runtime": "^3.1166.0",
     "@aws-sdk/client-kms": "^3.1166.0",
     "@aws-sdk/client-s3": "^3.1164.0",
     "@aws-sdk/s3-request-presigner": "^3.1164.0",

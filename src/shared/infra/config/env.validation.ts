@@ -258,6 +258,24 @@ export class EnvironmentVariables {
   @IsNotEmpty()
   CLOUD_KMS_KEY_ID!: string;
 
+  /** Embedding service (Ollama, service `embeddings` of the compose). */
+  @IsUrl({ require_tld: false, protocols: ['http', 'https'] })
+  EMBEDDINGS_URL: string = 'http://embeddings:11434';
+
+  /** Embedding model, pinned tag: recorded in every chunk; the service pulls this one. */
+  @IsString()
+  @IsNotEmpty()
+  EMBEDDING_MODEL: string = 'nomic-embed-text:v1.5';
+
+  /** `bedrock` (production) or `fake` (development without Bedrock access: answers are canned). */
+  @IsIn(['bedrock', 'fake'])
+  CLOUD_LLM_DRIVER: string = 'bedrock';
+
+  /** Bedrock model id or inference profile of Claude (region us-east-1); must have a price in `AiPricing`. */
+  @IsString()
+  @IsNotEmpty()
+  CLOUD_LLM_MODEL_ID: string = 'us.anthropic.claude-sonnet-5-5';
+
   /** Whether this process runs job workers (pg-boss fetch, maintenance, cron). `send` works either way. */
   @Transform(toBoolean)
   @IsBoolean()
