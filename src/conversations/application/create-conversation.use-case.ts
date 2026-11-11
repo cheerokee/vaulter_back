@@ -3,11 +3,14 @@ import type { Actor } from '../../identity/application/dto/actor.js';
 import { ConflictError } from '../../shared/domain/errors.js';
 import { UnitOfWork } from '../../shared/infra/db/unit-of-work.js';
 import { SpaceAccess } from '../../spaces/application/space-access.js';
+import { SpaceCloud } from '../../spaces/application/space-cloud.js';
 import { SpaceStorage } from '../../spaces/application/space-storage.js';
 import { SpaceStorageUsage } from '../../spaces/application/space-storage-usage.js';
 import type { ConversationScope } from '../domain/conversation-actor.js';
 import {
   assertSpaceFits,
+  cloudReserveCopyRequired,
+  cloudReserveUnavailable,
   conversationIdConflict,
   conversationMoveInvalid,
   conversationNotFound,
@@ -22,6 +25,7 @@ import { ConversationRepository } from '../domain/conversation.repository.js';
 import { Conversation } from '../domain/conversation.js';
 import { assertWrappedConversationKey } from '../domain/wrapped-conversation-key.js';
 import { ConversationAccess } from './conversation-access.js';
+import { ConversationCloudReserve } from './conversation-cloud-reserve.js';
 import { ConversationExecutors } from './conversation-executors.js';
 import { ConversationViews } from './conversation-views.js';
 import type { ConversationView } from './dto/conversation-view.js';
@@ -42,6 +46,13 @@ export type CreateConversationInput = {
    * `conversation-move-invalid`. The old one is tombstoned afterwards by `MoveConversationUseCase`.
    */
   movedFrom?: { spaceId: string; conversationId: string } | null;
+  /**
+   * Version 1 sealed for the server key (`GET /cloud/server-key`): required exactly when the space is in the active
+   * cloud (the conversation is born with the cloud as reserve executor, spec active-cloud §4.3): else 422
+   * `cloud-reserve-copy-required` / `cloud-reserve-unavailable`; a copy that does not open with the server key: 422
+   * `server-copy-invalid`.
+   */
+  serverWrappedKey?: string | null;
 };
 
 // Uma pessoa abre um assunto no espaço (spec §4.1): membro do espaço com `memory.read`, dona e única participante,
@@ -53,6 +64,10 @@ export type CreateConversationInput = {
 // destino ficam de fora, porque compartilhar exige membro do espaço; o executor é escolhido de novo, validado no destino)
 // e depois põe a lápide no antigo (`MoveConversationUseCase`). Aqui o backend confere que quem cria é o dono do antigo e
 // membro dos dois espaços (o antigo é só lido, sem trava: a lápide reconfere o dono sob a trava).
+// Nuvem ativa (spec active-cloud §4.3): num espaço em `active_cloud` (lido sob o lock do espaço) o assunto nasce com a
+// nuvem de reserva e a versão 1 trancada também para a chave do servidor (`serverWrappedKey`, conferida com a chave do
+// servidor); sem ela 422 `cloud-reserve-copy-required`; fora da nuvem ativa, mandar a cópia é 422
+// `cloud-reserve-unavailable`.
 // Locks: Hub -> vínculo -> hub_space (FOR SHARE, só com executor) -> espaço (FOR SHARE: uma saída do espaço
 // concorrente espera e então leva o assunto junto) -> o assunto novo -> contador de uso (o cabeçalho conta no uso do
 // espaço: conferido DEPOIS de gravar, 422 `space-storage-full`).
@@ -68,6 +83,8 @@ export class CreateConversationUseCase {
     private readonly uow: UnitOfWork,
     private readonly spaceStorage: SpaceStorage,
     private readonly usage: SpaceStorageUsage,
+    private readonly spaceCloud: SpaceCloud,
+    private readonly reserve: ConversationCloudReserve,
   ) {}
 
   execute(
@@ -78,6 +95,10 @@ export class CreateConversationUseCase {
     const { userId } = actor;
     assertWrappedConversationKey(input.wrappedKey);
     if (input.executor) assertWrappedConversationKey(input.executor.wrappedKey);
+    const serverWrappedKey = input.serverWrappedKey ?? null;
+    if (serverWrappedKey !== null) {
+      assertWrappedConversationKey(serverWrappedKey);
+    }
     return this.uow.run(async () => {
       await this.uow.setContext({ userId });
       const { space } = await this.spaces.requireSpacePermission(
@@ -123,7 +144,7 @@ export class CreateConversationUseCase {
         );
         source.assertOwner(userId);
       }
-      const conversation = Conversation.create({
+      const conversationInput = {
         id: input.id,
         organizationId: space.organizationId,
         spaceId,
@@ -134,7 +155,7 @@ export class CreateConversationUseCase {
         encryptedHeader: input.encryptedHeader,
         movedFromConversationId,
         now: new Date(),
-      });
+      };
       if (input.executor) {
         await this.executors.lockEligible({
           hubId: input.executor.hubId,
@@ -156,6 +177,24 @@ export class CreateConversationUseCase {
         spaceId,
       );
       if (quotaBytes === null) throw conversationNotFound();
+      // Read under the space lock (switching the cloud on/off takes it FOR UPDATE): a conversation of a space in the
+      // active cloud is born with the cloud reserve, so v1 must be sealed for the server key too.
+      const activeCloud =
+        (await this.spaceCloud.modeOf(space.organizationId, spaceId)) ===
+        'active_cloud';
+      if (activeCloud && serverWrappedKey === null) {
+        throw cloudReserveCopyRequired();
+      }
+      if (!activeCloud && serverWrappedKey !== null) {
+        throw cloudReserveUnavailable();
+      }
+      if (serverWrappedKey !== null) {
+        await this.reserve.assertServerCopies([serverWrappedKey]);
+      }
+      const conversation = Conversation.create({
+        ...conversationInput,
+        cloudReserve: activeCloud,
+      });
       try {
         await this.conversations.create(scope, conversation);
       } catch (e) {
@@ -180,6 +219,14 @@ export class CreateConversationUseCase {
           recipient: { kind: 'hub', hubId: input.executor.hubId },
           wrappedKey: input.executor.wrappedKey,
         });
+      }
+      if (serverWrappedKey !== null) {
+        await this.reserve.putServerCopy(
+          scope,
+          conversation.id,
+          1,
+          serverWrappedKey,
+        );
       }
       // The header counts in the space usage (trigger); checked AFTER writing, like a message.
       assertSpaceFits(

@@ -925,8 +925,10 @@ registra a fonte `conversations`), `hubs` (`HubDirectory`: `ownerOf`,
   (migration `ConversationsHardening`). Matriz completa no cabeçalho da migration `CreateConversations`.
 - **Ganchos:** o `conversations` **assina** `SpaceMemberLeftHooks`, `MemberRemovedHooks` (saída da organização) e
   `SpaceQuotaHooks`/`SpaceStorageUsage` (fonte `conversations`); **recebe** `HubExecutorLostHooks` do `hubs` e **registra**
-  `StorageReconcileHooks` (`conversations.attachments`, rodado pelo `storage:reconcile`); contratos em
-  `src/shared/application/`, nenhum módulo importa `conversations`.
+  `StorageReconcileHooks` (`conversations.attachments`, rodado pelo `storage:reconcile`); da nuvem ativa, **assina**
+  `SpaceCloudDeactivatedHooks` (do `cloud`), **emite** `CloudReservePendingHooks` e confere as cópias para o servidor
+  pela porta `ServerKeyCopyCheck` (que o `cloud` registra); contratos em `src/shared/application/`. Só o `cloud` importa
+  `conversations` (o `CloudConversationExecutor`, exportado); o `conversations` nunca importa o `cloud`.
 - **Rotas:** token de usuário em `/spaces/:spaceId/conversations` (`POST` cria; `/:id` lê; `/:id/participants` e
   `/:id/participants/space` compartilham; `DELETE /:id/participants/:userId` tira; `/:id/leave`; `PUT /:id/state`;
   `PUT /:id/executor`; `POST /:id/keys`; `PUT /:id/header`): a organização vem do espaço; não membro do espaço, assunto de outro espaço,
@@ -957,6 +959,26 @@ registra a fonte `conversations`), `hubs` (`HubDirectory`: `ownerOf`,
   mensagens `pending` continuam; escrito no contexto do **dono do assunto** (nunca no do Hub: 42501), auditado
   `conversation.executor_lost`. Auditoria também de `conversation.shared`, `conversation.participant_removed`,
   `conversation.executor_changed` (só ids).
+- **Nuvem de reserva** (spec active-cloud §4.3; migration `ConversationCloudReserve`): `conversations.cloud_reserve`
+  (+ `cloud_reserve_declined`, o dono desligou), cópias da chave para a chave do servidor em `conversation_key_grants`
+  (`server_recipient`; CHECK um destinatário: pessoa, Hub OU servidor; nunca num feed) e a nuvem como autora/quem
+  confirmou (`author_cloud`, `acked_by_cloud`). Criar num espaço `active_cloud` exige `serverWrappedKey` (422
+  `cloud-reserve-copy-required`; fora dele, 422 `cloud-reserve-unavailable`); `PUT .../:id/cloud-reserve`
+  (`SetCloudReserveUseCase`) liga com as cópias de todas as versões (qualquer participante, menos depois de o dono
+  desligar) e desliga (só o dono); com a reserva, a troca de chave exige `serverWrappedKey` (409 `key-rotation-mismatch`
+  com `missingServer`). Toda cópia para o servidor é conferida (abre com a chave dele, 422 `server-copy-invalid`). A
+  reserva cai (cópias do servidor **APAGADAS**, exceção documentada à lápide: GRANT DELETE só nessas linhas pela policy
+  `conversation_server_copy_delete`; troca pendente; o que a nuvem confirmou sem responder volta a `pending`) quando o
+  dono desliga, quando o assunto ganha lápide (último sai, mover) e quando o espaço sai da nuvem ativa (gancho
+  `conversations.cloud-deactivated`, escrito no contexto do DONO, como o executor perdido). **RLS:** contexto
+  `app.cloud_executor` = UM espaço (`UnitOfWorkContext.cloudExecutorSpaceId`, ator `{ kind: 'cloud', spaceId }`): só os
+  assuntos vivos daquele espaço com `cloud_reserve` (e os filhos deles); nele não se grava participação, cópia nem anexo
+  (`conversation_no_cloud_*`). Que o espaço está em `active_cloud` é conferido pelo `conversations` (`SpaceCloud`) a cada
+  operação. **Para o `cloud`:** `CloudConversationExecutor` (ids com reserva, `read` = assunto + cópias do servidor +
+  histórico do PRÓPRIO assunto, `lock`, `ack` atômico com o do Hub, `send` como autor nuvem) e o sinal
+  `CloudReservePendingHooks` (mensagem `pending` num assunto com reserva: enviada, devolvida à fila, reserva ligada,
+  troca de chave feita), emitido dentro do unit of work. O ack do Hub numa mensagem já pega pela nuvem: 404
+  `message-not-found`. O Hub lê a pública do servidor em `GET /hub/cloud/server-key`.
 - **Ordem de locks:** Hub -> vínculo -> hub_space (FOR SHARE, `lockExecutorCandidate`) -> espaço (FOR SHARE ao criar e
   compartilhar) -> assunto (FOR UPDATE) -> participações -> **advisory lock das versões, sempre o ÚLTIMO** (só no
   COMMIT, `trg_<tabela>_sync_commit`, depois de todas as travas de linha da transação: não fecha ciclo). Ele fica preso
@@ -1177,7 +1199,8 @@ registra a fonte `conversations`), `hubs` (`HubDirectory`: `ownerOf`,
   decide ou o Gestor, 204, idempotente) **apaga de verdade** as cópias (`cloud_space_key_grants`, DELETE físico),
   cancela as tarefas que esperam (`CloudSpaceJobs`: toda tarefa da nuvem sobre um espaço leva `spaceId` no payload e a
   fila é registrada ali; `cancelQueued(fila, { spaceId })`), encerra o ciclo (lápide em `cloud_space_activations`, com
-  quem desligou) e volta a `encrypted_backup`. `GET /spaces/:spaceId/cloud` (membro ou quem decide) -> `state`
+  quem desligou), volta a `encrypted_backup` e roda `SpaceCloudDeactivatedHooks` (os assuntos do espaço perdem a nuvem
+  de reserva: veja "Nuvem de reserva" no módulo `conversations`). `GET /spaces/:spaceId/cloud` (membro ou quem decide) -> `state`
   `off|authorized|active`. Auditoria: `organization.cloud_terms.accepted`, `space.cloud.authorized|activated|deactivated`
   (só ids, versões e contagens). Travas: espaço `FOR UPDATE` -> ciclo vivo `FOR UPDATE` -> cópias -> trechos -> arquivos.
 - **Indexação** (spec §4.2; contrato do manifesto `docs/hubs/space-manifest.md`, com o vetor do UUID v5;
@@ -1252,8 +1275,9 @@ registra a fonte `conversations`), `hubs` (`HubDirectory`: `ownerOf`,
   - **runtime** (`DB_APP_USERNAME`/`DB_APP_PASSWORD`, padrão `vaulter_app`): o que a API usa. Sem superusuário,
     sem `BYPASSRLS`, membro do papel de grupo `app_runtime`, que tem só `SELECT, INSERT, UPDATE` — **sem
     `DELETE`** (reforça o soft delete; a limpeza de lápides decide isso depois). Exceções documentadas: `rate_limit_hits`
-    (contador técnico) e as tabelas legíveis da nuvem ativa (`cloud_space_key_grants`, `cloud_files`, `cloud_chunks`;
-    desligar apaga de verdade). As permissões vêm das migrations;
+    (contador técnico), as tabelas legíveis da nuvem ativa (`cloud_space_key_grants`, `cloud_files`, `cloud_chunks`;
+    desligar apaga de verdade) e, em `conversation_key_grants`, só as cópias para o servidor (`server_recipient`, policy
+    restritiva `conversation_server_copy_delete`). As permissões vêm das migrations;
     o login é criado por `.docker/postgres/init/02-app-role.sh` (idempotente);
   - **dono** (`DB_USERNAME`): migrations, CLI, compose, pgAdmin e a preparação do banco de teste.
   - Em banco **já existente** (criado antes do script), rodar uma vez:
@@ -1464,7 +1488,7 @@ Os valores do `.env.example` para os segredos são **só de desenvolvimento**; p
   | `POST .../objects/:objectId/versions/:versionId/download` (URL de download, as mesmas duas formas) | 12 mil/h por Hub / por usuário (uma URL por versão: 50 mil objetos em ~4 h) |
   | `POST /spaces/:spaceId/conversations` e `POST /hub/conversations` (criar assunto) | 120/h por usuário (`userIdTracker`) / por Hub (`hubIdTracker`), contador próprio por rota |
   | `POST .../conversations/:id/keys` (troca da chave do assunto, as duas formas) | 30/h por usuário / por Hub |
-  | compartilhar, sair, tirar, estado, executor e mover o assunto (`/spaces/:spaceId/conversations/:id/...`, `PUT /hub/conversations/:id/state`) | 600/h por usuário / por Hub, contador próprio por rota |
+  | compartilhar, sair, tirar, estado, executor, nuvem de reserva e mover o assunto (`/spaces/:spaceId/conversations/:id/...`, `PUT /hub/conversations/:id/state`) | 600/h por usuário / por Hub, contador próprio por rota |
   | mandar e apagar mensagem do assunto (`POST .../:id/messages`, `DELETE .../:id/messages/:messageId`) | 60/min por usuário / 300/min por Hub, contador próprio por rota |
   | `POST /hub/conversations/:id/messages/:messageId/ack` | 600/min por Hub |
   | anexo do assunto: intenção, confirmação e apagar (`POST .../:id/attachments`, `POST .../:id/attachments/:attachmentId/confirm`, `DELETE .../:id/attachments/:attachmentId`; a URL de download fica no limite geral) | 120/h por usuário / 600/h por Hub, contador próprio por rota |

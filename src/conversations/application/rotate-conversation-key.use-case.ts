@@ -2,8 +2,12 @@ import { Injectable } from '@nestjs/common';
 import type { Actor } from '../../identity/application/dto/actor.js';
 import type { HubAuthContext } from '../../shared/application/hub-auth-context.js';
 import { UnitOfWork } from '../../shared/infra/db/unit-of-work.js';
-import { assertRecipientsMatch } from '../domain/conversation-keys.js';
+import {
+  assertRecipientsMatch,
+  assertServerCopyMatchesReserve,
+} from '../domain/conversation-keys.js';
 import { ConversationKeyGrantRepository } from '../domain/conversation-key-grant.repository.js';
+import { ConversationMessageRepository } from '../domain/conversation-message.repository.js';
 import { ConversationParticipantRepository } from '../domain/conversation-participant.repository.js';
 import { ConversationRepository } from '../domain/conversation.repository.js';
 import { assertKeyVersion } from '../domain/device-id.js';
@@ -12,6 +16,7 @@ import {
   ConversationAccess,
   type ScopedConversation,
 } from './conversation-access.js';
+import { ConversationCloudReserve } from './conversation-cloud-reserve.js';
 import { ConversationViews } from './conversation-views.js';
 import type { ConversationView } from './dto/conversation-view.js';
 
@@ -22,13 +27,20 @@ export type RotateConversationKeyInput = {
   grants: { userId: string; wrappedKey: string }[];
   /** And for the executor (empty without one). */
   hubGrants: { hubId: string; wrappedKey: string }[];
+  /**
+   * And for the server key exactly while the cloud reserve is on (else 409 `key-rotation-mismatch` with
+   * `missingServer` / `unexpectedServer`); it must open with the server key (422 `server-copy-invalid`).
+   */
+  serverWrappedKey?: string | null;
 };
 
 // Troca da chave do assunto (spec §4.2): versão nova (atual + 1) para EXATAMENTE o conjunto ativo, lido sob o lock do
 // assunto: os participantes vivos e o executor (409 `key-rotation-mismatch` com os ids faltando/sobrando, como na
 // troca da chave do espaço). Com troca pendente (alguém saiu, executor trocado/perdido), qualquer participante ou o
 // executor troca (o executor já tem a chave e conhece as chaves públicas pela sincronização: a fila não para); sem
-// ela, só o dono (409 `key-rotation-not-required`). Cada troca grava linhas novas de cópia por versão (as colunas de
+// ela, só o dono (409 `key-rotation-not-required`). Com a nuvem de reserva ligada (spec active-cloud §4.3), a versão
+// nova vai também para a chave do servidor (`serverWrappedKey`; sem ela 409 `key-rotation-mismatch` com
+// `missingServer: true`, e sobrando, `unexpectedServer: true`; nada gravado). Cada troca grava linhas novas de cópia por versão (as colunas de
 // identidade são imutáveis). Lock: só o assunto.
 @Injectable()
 export class RotateConversationKeyUseCase {
@@ -39,6 +51,8 @@ export class RotateConversationKeyUseCase {
     private readonly grants: ConversationKeyGrantRepository,
     private readonly views: ConversationViews,
     private readonly uow: UnitOfWork,
+    private readonly reserve: ConversationCloudReserve,
+    private readonly messages: ConversationMessageRepository,
   ) {}
 
   byUser(
@@ -77,6 +91,7 @@ export class RotateConversationKeyUseCase {
     input: RotateConversationKeyInput,
   ): Promise<ConversationView> {
     conversation.assertRotationAllowed(scope.actor);
+    const wasBlocked = conversation.keyRotationRequired;
     // Só em memória até aqui: 409 `conversation-key-version-stale` se a versão não for a seguinte.
     conversation.completeRotation(input.version);
     assertRecipientsMatch(
@@ -91,6 +106,15 @@ export class RotateConversationKeyUseCase {
         hubIds: conversation.executorHubId ? [conversation.executorHubId] : [],
       },
     );
+    // Read under the conversation lock (switching the reserve on/off and the space's cloud off lock it too).
+    const serverWrappedKey = input.serverWrappedKey ?? null;
+    assertServerCopyMatchesReserve(
+      serverWrappedKey !== null,
+      conversation.cloudReserve,
+    );
+    if (serverWrappedKey !== null) {
+      await this.reserve.assertServerCopies([serverWrappedKey]);
+    }
     for (const g of input.grants) {
       await this.grants.put(scope, conversation.id, {
         keyVersion: input.version,
@@ -105,7 +129,21 @@ export class RotateConversationKeyUseCase {
         wrappedKey: g.wrappedKey,
       });
     }
+    if (serverWrappedKey !== null) {
+      await this.reserve.putServerCopy(
+        scope,
+        conversation.id,
+        input.version,
+        serverWrappedKey,
+      );
+    }
     await this.conversations.save(scope, conversation);
+    // The cloud cannot write (nor rotate) while a rotation is pending: what waited is its to take again.
+    if (wasBlocked && conversation.isCloudExecutor()) {
+      for (const m of await this.messages.listPending(scope, conversation.id)) {
+        await this.reserve.signal(conversation, m.id, 'key_rotated');
+      }
+    }
     return this.views.reload(scope, conversation.id);
   }
 }
@@ -114,5 +152,8 @@ function validate(input: RotateConversationKeyInput): void {
   assertKeyVersion(input.version);
   for (const g of [...input.grants, ...input.hubGrants]) {
     assertWrappedConversationKey(g.wrappedKey);
+  }
+  if (input.serverWrappedKey) {
+    assertWrappedConversationKey(input.serverWrappedKey);
   }
 }

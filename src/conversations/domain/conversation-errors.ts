@@ -142,3 +142,17 @@ export const conversationMoveInvalid = () =>
     'conversation-move-invalid',
     'The move must go to a conversation of another space created from this one.',
   );
+
+/** A conversation of a space in the active cloud is born with the cloud reserve: v1 sealed for the server key. */
+export const cloudReserveCopyRequired = () =>
+  new DomainValidationError(
+    'cloud-reserve-copy-required',
+    'The space is in the active cloud: send the conversation key sealed for the server key too.',
+  );
+
+/** The cloud reserve exists only in a space in the active cloud. */
+export const cloudReserveUnavailable = () =>
+  new DomainValidationError(
+    'cloud-reserve-unavailable',
+    'The space is not in the active cloud: the conversation cannot have the cloud reserve.',
+  );

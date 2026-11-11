@@ -1,3 +1,5 @@
+import type { ConversationCloudReserve } from './conversation-cloud-reserve.js';
+import type { SpaceCloud } from '../../spaces/application/space-cloud.js';
 import type { HubAccess } from '../../hubs/application/hub-access.js';
 import type { HubDirectory } from '../../hubs/application/hub-directory.js';
 import { ConflictError } from '../../shared/domain/errors.js';
@@ -85,6 +87,8 @@ describe('create conversation: the same id racing', () => {
     as<UnitOfWork>(uow),
     as<SpaceStorage>(spaceStorage),
     as<SpaceStorageUsage>(usage),
+    as<SpaceCloud>({ modeOf: vi.fn(async () => 'encrypted_backup') }),
+    as<ConversationCloudReserve>({}),
   );
   const hub = new HubCreateConversationUseCase(
     as<HubDirectory>({

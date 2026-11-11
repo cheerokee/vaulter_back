@@ -267,3 +267,61 @@ describe('Conversation', () => {
     expect(c.headerKeyVersion).toBeNull();
   });
 });
+
+describe('Conversation: the cloud as reserve executor', () => {
+  const shared = (over: { cloudReserve?: boolean } = {}) => {
+    const c = make({ cloudReserve: over.cloudReserve ?? false });
+    return Conversation.restore(
+      { ...c.snapshot(), participantUserIds: [OWNER, OTHER] },
+      c.id,
+    );
+  };
+  const cloud = { kind: 'cloud', spaceId: 'space' } as const;
+
+  it('is born with or without the reserve; only a live conversation with it lets the cloud act', () => {
+    expect(make().cloudReserve).toBe(false);
+    const c = make({ cloudReserve: true });
+    expect(c.isCloudExecutor()).toBe(true);
+    c.changeState(cloud, 'trabalhando');
+    expect(c.state).toBe('trabalhando');
+    expect(() => c.changeState(cloud, 'arquivado')).toThrow(
+      PermissionDeniedError,
+    );
+    c.tombstone(now);
+    expect(c.cloudReserve).toBe(false);
+    expect(c.isCloudExecutor()).toBe(false);
+  });
+
+  it('the cloud never rotates the key (404) and cannot move work states without the reserve', () => {
+    const c = make();
+    c.markRotationRequired();
+    expect(() => c.assertRotationAllowed(cloud)).toThrow();
+    expect(() => c.changeState(cloud, 'trabalhando')).toThrow(
+      PermissionDeniedError,
+    );
+  });
+
+  it('any participant switches it on; after the owner declined, only the owner', () => {
+    const c = shared();
+    expect(c.enableCloudReserve(OTHER)).toBe(true);
+    expect(c.enableCloudReserve(OTHER)).toBe(false); // already on
+    expect(() => c.declineCloudReserve(OTHER)).toThrow(PermissionDeniedError);
+    expect(c.declineCloudReserve(OWNER)).toBe(true);
+    expect(c.cloudReserve).toBe(false);
+    expect(c.cloudReserveDeclined).toBe(true);
+    expect(c.keyRotationRequired).toBe(true);
+    expect(() => c.enableCloudReserve(OTHER)).toThrow(PermissionDeniedError);
+    expect(c.enableCloudReserve(OWNER)).toBe(true);
+    expect(c.cloudReserveDeclined).toBe(false);
+    expect(() => c.enableCloudReserve(newId())).toThrow();
+  });
+
+  it('losing it (space out of the active cloud) is not a decline, and asks for a rotation', () => {
+    const c = shared({ cloudReserve: true });
+    expect(c.loseCloudReserve()).toBe(true);
+    expect(c.cloudReserve).toBe(false);
+    expect(c.cloudReserveDeclined).toBe(false);
+    expect(c.keyRotationRequired).toBe(true);
+    expect(c.loseCloudReserve()).toBe(false);
+  });
+});

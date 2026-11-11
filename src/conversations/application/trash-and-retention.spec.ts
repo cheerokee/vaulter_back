@@ -46,6 +46,8 @@ const conversation = (owner = ANA) =>
       encryptedHeader: Buffer.alloc(60, 1).toString('base64url'),
       headerKeyVersion: 1,
       movedFromConversationId: null,
+      cloudReserve: false,
+      cloudReserveDeclined: false,
       participantUserIds: [ANA, BIA].sort(),
       createdAt: new Date(),
       deletedAt: null,

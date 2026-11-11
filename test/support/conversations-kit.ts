@@ -195,6 +195,8 @@ export function conversationsKit(getApp: () => INestApplication) {
         state?: string;
         /** Move: the old conversation (in another space) this one replaces. */
         movedFrom?: { spaceId: string; conversationId: string };
+        /** The server public key (`GET /cloud/server-key`): v1 sealed for it too (cloud reserve). */
+        serverPublicKey?: string;
       } = {},
     ) => {
       const id = opts.id ?? newId();
@@ -208,6 +210,14 @@ export function conversationsKit(getApp: () => INestApplication) {
           ...(opts.movedFrom ? { movedFrom: opts.movedFrom } : {}),
           encryptedHeader: await header(key, spaceId, id),
           wrappedKey: await sealConversationKey(key, user.account.publicKey),
+          ...(opts.serverPublicKey
+            ? {
+                serverWrappedKey: await sealConversationKey(
+                  key,
+                  opts.serverPublicKey,
+                ),
+              }
+            : {}),
           ...(opts.executor
             ? {
                 executor: {
@@ -375,13 +385,17 @@ export function conversationsKit(getApp: () => INestApplication) {
               }
             : { hubId: null, grants: [] },
         ),
-    /** Body of a rotation: the new version sealed for `recipients` and `hubs`. */
+    /** Body of a rotation: the new version sealed for `recipients`, `hubs` and, with the reserve, the server key. */
     rotationBody: async (
       version: number,
       key: Uint8Array,
       recipients: Recipient[],
       hubs: HubRecipient[],
+      serverPublicKey?: string,
     ) => ({
+      ...(serverPublicKey
+        ? { serverWrappedKey: await sealConversationKey(key, serverPublicKey) }
+        : {}),
       version,
       grants: await Promise.all(
         recipients.map(async (r) => ({
@@ -396,6 +410,25 @@ export function conversationsKit(getApp: () => INestApplication) {
         })),
       ),
     }),
+    /** The cloud reserve on (every version sealed for the server key) or off (`serverPublicKey` null). */
+    setCloudReserve: async (
+      user: KeyedUser,
+      spaceId: string,
+      id: string,
+      keys: ConversationKeys,
+      serverPublicKey: string | null,
+    ) =>
+      http()
+        .put(`${base(spaceId, id)}/cloud-reserve`)
+        .set(bearer(user.token))
+        .send(
+          serverPublicKey
+            ? {
+                enabled: true,
+                serverGrants: await allVersions(keys, serverPublicKey),
+              }
+            : { enabled: false },
+        ),
     rotate: (user: KeyedUser, spaceId: string, id: string, body: object) =>
       http()
         .post(`${base(spaceId, id)}/keys`)
@@ -501,12 +534,12 @@ export async function conversationRow(id: string) {
   );
 }
 
-/** Live key copies of a conversation: `[keyVersion, userId | hubId]`, sorted. */
+/** Live key copies of a conversation: `[keyVersion, userId | hubId | 'server']`, sorted. */
 export async function liveGrants(id: string): Promise<[number, string][]> {
   const rows: { key_version: number; who: string }[] = await (
     await adminDataSource()
   ).query(
-    `SELECT key_version, COALESCE(user_id, hub_id)::text AS who
+    `SELECT key_version, COALESCE(user_id::text, hub_id::text, CASE WHEN server_recipient THEN 'server' END) AS who
        FROM conversation_key_grants
       WHERE conversation_id = $1 AND deleted_at IS NULL
       ORDER BY key_version, who`,

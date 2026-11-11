@@ -49,7 +49,10 @@ export type AuditAction =
   | 'conversation.executor_changed'
   | 'conversation.executor_lost'
   | 'conversation.moved'
-  | 'conversation.trash_emptied';
+  | 'conversation.trash_emptied'
+  | 'conversation.cloud_reserve_enabled'
+  | 'conversation.cloud_reserve_disabled'
+  | 'conversation.cloud_reserve_lost';
 
 export type AuditRecord = {
   organizationId: string;

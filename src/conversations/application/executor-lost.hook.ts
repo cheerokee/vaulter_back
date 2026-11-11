@@ -13,6 +13,7 @@ import type { ConversationScope } from '../domain/conversation-actor.js';
 import { ConversationKeyGrantRepository } from '../domain/conversation-key-grant.repository.js';
 import { ConversationMessageRepository } from '../domain/conversation-message.repository.js';
 import { ConversationRepository } from '../domain/conversation.repository.js';
+import { ConversationCloudReserve } from './conversation-cloud-reserve.js';
 
 const HOOK_NAME = 'conversations.executor-lost';
 /** A concurrent owner change between the unlocked read and the lock: read again (bounded). */
@@ -38,6 +39,7 @@ export class ConversationsExecutorLostHook
     private readonly grants: ConversationKeyGrantRepository,
     private readonly audit: AuditLog,
     private readonly messages: ConversationMessageRepository,
+    private readonly reserve: ConversationCloudReserve,
   ) {}
 
   onModuleInit(): void {
@@ -95,7 +97,14 @@ export class ConversationsExecutorLostHook
       conversation.loseExecutor();
       await this.conversations.save(ownerScope, conversation);
       await this.grants.removeFor(ownerScope, id, { kind: 'hub', hubId });
-      await this.messages.requeueAckedBy(ownerScope, id, hubId);
+      // With the cloud reserve on, the requeued messages are the cloud's to take (signal in this same transaction).
+      await this.reserve.requeued(
+        conversation,
+        await this.messages.requeueAckedBy(ownerScope, id, {
+          kind: 'hub',
+          hubId,
+        }),
+      );
       await this.audit.record({
         organizationId,
         userId: ctx.actorId,

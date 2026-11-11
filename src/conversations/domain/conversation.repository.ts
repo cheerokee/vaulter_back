@@ -62,4 +62,9 @@ export abstract class ConversationRepository {
     hubId: string,
     spaceId?: string | null,
   ): Promise<string[]>;
+  /** Live conversations of the space with the cloud reserve on, by (space id, id). Any scope that sees them. */
+  abstract idsWithCloudReserve(
+    scope: ConversationScope,
+    spaceId: string,
+  ): Promise<string[]>;
 }

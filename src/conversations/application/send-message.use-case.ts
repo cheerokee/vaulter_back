@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 import type { Actor } from '../../identity/application/dto/actor.js';
 import type { HubAuthContext } from '../../shared/application/hub-auth-context.js';
 import { UnitOfWork } from '../../shared/infra/db/unit-of-work.js';
+import { SpaceCloud } from '../../spaces/application/space-cloud.js';
 import { SpaceStorage } from '../../spaces/application/space-storage.js';
 import { SpaceStorageUsage } from '../../spaces/application/space-storage-usage.js';
 import type { ConversationScope } from '../domain/conversation-actor.js';
@@ -20,6 +21,7 @@ import type { Conversation } from '../domain/conversation.js';
 import { assertDeviceId, assertKeyVersion } from '../domain/device-id.js';
 import { assertEncryptedBlob } from '../domain/encrypted-blob.js';
 import { ConversationAccess } from './conversation-access.js';
+import { ConversationCloudReserve } from './conversation-cloud-reserve.js';
 import { messageView, type MessageView } from './dto/message-view.js';
 
 export type SendMessageInput = {
@@ -58,6 +60,8 @@ export class SendMessageUseCase {
     private readonly conversations: ConversationRepository,
     private readonly messages: ConversationMessageRepository,
     private readonly uow: UnitOfWork,
+    private readonly spaceCloud: SpaceCloud,
+    private readonly reserve: ConversationCloudReserve,
   ) {}
 
   async byUser(
@@ -99,6 +103,42 @@ export class SendMessageUseCase {
         scope,
         conversationId,
         seen.spaceId,
+        'no-key-update',
+      );
+      return this.send(scope, conversation, quotaBytes, input);
+    });
+  }
+
+  /**
+   * The cloud as the reserve executor writes an answer (spec active-cloud §4.3): born acknowledged, `authorCloud`.
+   * Only in a conversation with the reserve on, of a space still in the active cloud (read under the space lock);
+   * anything else is the same 404 `conversation-not-found`. For the `cloud` jobs, through `CloudConversationExecutor`.
+   */
+  async byCloud(
+    organizationId: string,
+    spaceId: string,
+    conversationId: string,
+    input: SendMessageInput,
+  ): Promise<{ view: MessageView; created: boolean }> {
+    validate(input);
+    return this.uow.run(async () => {
+      await this.uow.setContext({ cloudExecutorSpaceId: spaceId });
+      const scope: ConversationScope = {
+        organizationId,
+        actor: { kind: 'cloud', spaceId },
+      };
+      const quotaBytes = await this.lockSpace(scope, spaceId);
+      // The space row is held FOR SHARE (lockQuota): switching the cloud off waits for this answer, or comes first.
+      if (
+        (await this.spaceCloud.modeOf(organizationId, spaceId)) !==
+        'active_cloud'
+      ) {
+        throw conversationNotFound();
+      }
+      const conversation = await this.access.lock(
+        scope,
+        conversationId,
+        spaceId,
         'no-key-update',
       );
       return this.send(scope, conversation, quotaBytes, input);
@@ -176,6 +216,10 @@ export class SendMessageUseCase {
     }
     conversation.recordMessage(now);
     await this.conversations.save(scope, conversation);
+    // A person's message waits for the executor: with the cloud reserve on, the cloud may take it (same transaction).
+    if (message.pending) {
+      await this.reserve.signal(conversation, message.id, 'sent');
+    }
 
     assertSpaceFits(
       quotaBytes,

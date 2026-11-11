@@ -3,6 +3,7 @@ import { newId } from '../../shared/domain/id.js';
 import { Conversation } from './conversation.js';
 import {
   assertRecipientsMatch,
+  assertServerCopyMatchesReserve,
   assertShareCoversSpace,
   assertVersionsCovered,
 } from './conversation-keys.js';
@@ -126,6 +127,8 @@ describe('Conversation.assertRotationAllowed', () => {
         encryptedHeader: blob(),
         headerKeyVersion: 1,
         movedFromConversationId: null,
+        cloudReserve: false,
+        cloudReserveDeclined: false,
         participantUserIds: [OWNER, OTHER],
         createdAt: now,
         deletedAt: null,
@@ -169,5 +172,25 @@ describe('Conversation.assertRotationAllowed', () => {
     expect(() =>
       c.assertRotationAllowed({ kind: 'hub', hubId: newId() }),
     ).toThrow(NotFoundError);
+  });
+});
+
+describe('assertServerCopyMatchesReserve', () => {
+  it('the server copy goes exactly with the cloud reserve (409 with missingServer / unexpectedServer)', () => {
+    expect(() => assertServerCopyMatchesReserve(true, true)).not.toThrow();
+    expect(() => assertServerCopyMatchesReserve(false, false)).not.toThrow();
+    for (const [sent, reserve, member] of [
+      [false, true, 'missingServer'],
+      [true, false, 'unexpectedServer'],
+    ] as const) {
+      try {
+        assertServerCopyMatchesReserve(sent, reserve);
+        throw new Error('expected a conflict');
+      } catch (e) {
+        expect(e).toBeInstanceOf(ConflictError);
+        expect((e as ConflictError).code).toBe('key-rotation-mismatch');
+        expect((e as ConflictError).details).toEqual({ [member]: true });
+      }
+    }
   });
 });

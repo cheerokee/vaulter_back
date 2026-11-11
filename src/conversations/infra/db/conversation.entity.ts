@@ -35,6 +35,19 @@ import { DeviceIdSyncableTypeormEntity } from './device-id.entity-base.js';
   `("encrypted_header" IS NOT NULL) OR ("deleted_at" IS NOT NULL)`,
 )
 @Check('ck_conversations_moved_from', `"moved_from_conversation_id" <> "id"`)
+// Nuvem de reserva (migration ConversationCloudReserve): nunca ligada e recusada pelo dono ao mesmo tempo, nunca num
+// assunto com lápide.
+@Check(
+  'ck_conversations_cloud_reserve',
+  `NOT ("cloud_reserve" AND "cloud_reserve_declined")`,
+)
+@Check(
+  'ck_conversations_cloud_reserve_live',
+  `(NOT "cloud_reserve") OR ("deleted_at" IS NULL)`,
+)
+@Index('ix_conversations_cloud_reserve', ['spaceId'], {
+  where: `"cloud_reserve"`,
+})
 @Index('ix_conversations_sync_version', ['syncVersion'])
 @Index('fk_conversations_organizations_idx', ['organizationId'])
 @Index('fk_conversations_spaces_idx', ['spaceId'])
@@ -122,6 +135,14 @@ export class ConversationTypeormEntity extends DeviceIdSyncableTypeormEntity {
   // Link por id (pode ser de outra organização): sem FK.
   @Column({ type: 'uuid', nullable: true })
   movedFromConversationId!: string | null;
+
+  // A nuvem é executor de reserva (espaço em nuvem ativa, cópias da chave para o servidor).
+  @Column({ type: 'boolean', default: false })
+  cloudReserve!: boolean;
+
+  // O dono desligou a reserva: só ele a liga de novo.
+  @Column({ type: 'boolean', default: false })
+  cloudReserveDeclined!: boolean;
 
   // Derivado das participações vivas pelo trigger (o RLS lê daqui); nunca gravado pela aplicação.
   @Column({ type: 'uuid', array: true, insert: false, update: false })

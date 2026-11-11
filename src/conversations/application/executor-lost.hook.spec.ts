@@ -1,3 +1,4 @@
+import type { ConversationCloudReserve } from './conversation-cloud-reserve.js';
 import type { AuditLog } from '../../organizations/application/audit-log.js';
 import type {
   HubExecutorLostContext,
@@ -40,6 +41,8 @@ const conv = (owner: string, executorHubId: string | null = HUB) =>
       encryptedHeader: blob(),
       headerKeyVersion: 1,
       movedFromConversationId: null,
+      cloudReserve: false,
+      cloudReserveDeclined: false,
       participantUserIds: [A, B].sort(),
       createdAt: new Date(),
       deletedAt: null,
@@ -72,9 +75,14 @@ describe('ConversationsExecutorLostHook', () => {
     as<ConversationKeyGrantRepository>(grants),
     as<AuditLog>(audit),
     as<ConversationMessageRepository>(messages),
+    as<ConversationCloudReserve>({ requeued: vi.fn() }),
   );
   const userOf = (s: ConversationScope) =>
-    s.actor.kind === 'user' ? s.actor.userId : `hub:${s.actor.hubId}`;
+    s.actor.kind === 'user'
+      ? s.actor.userId
+      : s.actor.kind === 'hub'
+        ? `hub:${s.actor.hubId}`
+        : `cloud:${s.actor.spaceId}`;
 
   beforeEach(() => {
     vi.resetAllMocks();
@@ -112,8 +120,12 @@ describe('ConversationsExecutorLostHook', () => {
     // In the owner's scope too: what the hub acknowledged and never answered goes back to pending.
     expect(messages.requeueAckedBy).toHaveBeenCalledTimes(1);
     const [requeueScope, requeueId, requeueHub] = messages.requeueAckedBy.mock
-      .calls[0]! as [ConversationScope, string, string];
-    expect([userOf(requeueScope), requeueId, requeueHub]).toEqual([B, ID, HUB]);
+      .calls[0]! as [ConversationScope, string, unknown];
+    expect([userOf(requeueScope), requeueId, requeueHub]).toEqual([
+      B,
+      ID,
+      { kind: 'hub', hubId: HUB },
+    ]);
     expect(audit.record).toHaveBeenCalledWith(
       expect.objectContaining({ action: 'conversation.executor_lost' }),
     );

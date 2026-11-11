@@ -60,6 +60,10 @@ import { SyncConversationsUseCase } from './application/sync-conversations.use-c
 import { ConversationChangesSqlReader } from './infra/db/conversation-changes.sql-reader.js';
 import { PgConversationChangeSignal } from './infra/db/pg-conversation-change-signal.js';
 import { SpaceConversationsController } from './infra/http/space-conversations.controller.js';
+import { CloudConversationExecutor } from './application/cloud-conversation-executor.js';
+import { ConversationsCloudDeactivatedHook } from './application/cloud-deactivated.hook.js';
+import { ConversationCloudReserve } from './application/conversation-cloud-reserve.js';
+import { SetCloudReserveUseCase } from './application/set-cloud-reserve.use-case.js';
 
 /**
  * Conversations ("assuntos") as space data (spec 2026-11-09-conversations): encrypted with their own key, private to
@@ -67,9 +71,10 @@ import { SpaceConversationsController } from './infra/http/space-conversations.c
  * trash), `spaces` (SpaceAccess, SpaceStorage, and the SpaceStorageUsage
  * port, where it registers the message and attachment bytes), `hubs` (HubDirectory, HubAccess), `organizations`
  * (AuditLog) and `storage` (the ObjectStore port and the shared upload/repair pieces of `application/object-uploads`)
- * through what they export; reacts to `SpaceMemberLeftHooks` and `HubExecutorLostHooks`, and joins the
- * `storage:reconcile` sweep through `StorageReconcileHooks`.
- * Exports nothing: no module imports `conversations`.
+ * through what they export; reacts to `SpaceMemberLeftHooks`, `HubExecutorLostHooks` and `SpaceCloudDeactivatedHooks`,
+ * joins the `storage:reconcile` sweep through `StorageReconcileHooks`, and emits `CloudReservePendingHooks`.
+ * Exports `CloudConversationExecutor` (the cloud as reserve executor, spec active-cloud §4.3) for the `cloud` module;
+ * `conversations` never imports `cloud` (the server copies are checked through `ServerKeyCopyCheck`).
  */
 @Module({
   imports: [
@@ -156,6 +161,11 @@ import { SpaceConversationsController } from './infra/http/space-conversations.c
     DeleteAttachmentUseCase,
     MoveConversationUseCase,
     EmptyConversationTrashUseCase,
+    ConversationCloudReserve,
+    ConversationsCloudDeactivatedHook,
+    SetCloudReserveUseCase,
+    CloudConversationExecutor,
   ],
+  exports: [CloudConversationExecutor],
 })
 export class ConversationsModule {}

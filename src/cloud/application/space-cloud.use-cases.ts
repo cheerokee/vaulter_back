@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 import type { Actor } from '../../identity/application/dto/actor.js';
 import { AuditLog } from '../../organizations/application/audit-log.js';
 import { OrganizationDirectory } from '../../organizations/application/organization-directory.js';
+import { SpaceCloudDeactivatedHooks } from '../../shared/application/space-cloud-deactivated-hooks.js';
 import { UnitOfWork } from '../../shared/infra/db/unit-of-work.js';
 import { SpaceCloud } from '../../spaces/application/space-cloud.js';
 import type { Space } from '../../spaces/domain/space.js';
@@ -192,7 +193,8 @@ export class ActivateSpaceCloudUseCase {
 }
 
 // Desligar (quem decide ou o Gestor): APAGA de verdade o que é legível (as cópias da chave do espaço para o servidor,
-// os trechos com os embeddings e os arquivos com nome/tipo, neste mesmo unit of work), cancela as tarefas da nuvem que
+// os trechos com os embeddings e os arquivos com nome/tipo, neste mesmo unit of work; e, pelo gancho
+// `SpaceCloudDeactivatedHooks`, as cópias da chave de cada assunto para o servidor, com a nuvem de reserva desligada), cancela as tarefas da nuvem que
 // ainda esperam (`CloudSpaceJobs`), encerra o ciclo (lápide com quem desligou) e volta o espaço a `encrypted_backup`.
 // Uma tarefa já RODANDO (com a chave aberta) não grava depois disto: ela confere o espaço FOR SHARE na transação em que
 // grava (`SpaceCloud.lockActiveForWrite`), e esta segura o espaço FOR UPDATE até o COMMIT.
@@ -211,6 +213,7 @@ export class DeactivateSpaceCloudUseCase {
     private readonly uow: UnitOfWork,
     private readonly files: CloudFileRepository,
     private readonly chunks: CloudChunkRepository,
+    private readonly deactivated: SpaceCloudDeactivatedHooks,
   ) {}
 
   async execute(actor: Actor, spaceId: string): Promise<void> {
@@ -235,8 +238,17 @@ export class DeactivateSpaceCloudUseCase {
     const chunksDeleted = await this.chunks.deleteForSpace(orgId, space.id);
     const filesDeleted = await this.files.deleteForSpace(orgId, space.id);
     const jobsCancelled = await this.jobs.cancelForSpace(space.id);
-    if (live) await this.activations.end(live, userId, new Date());
+    const now = new Date();
+    if (live) await this.activations.end(live, userId, now);
     if (wasActive) await this.spaceCloud.markEncryptedBackup(orgId, space.id);
+    // The cloud stops being the reserve executor of the space's conversations (`conversations` deletes their server
+    // copies and marks their key rotation), in this same unit of work, with the space still locked FOR UPDATE.
+    await this.deactivated.run({
+      organizationId: orgId,
+      spaceId: space.id,
+      actorUserId: userId,
+      now,
+    });
     await this.audit.record({
       organizationId: orgId,
       userId,

@@ -18,6 +18,13 @@ export type ConversationView = {
   encryptedHeader: string | null;
   headerKeyVersion: number | null;
   movedFromConversationId: string | null;
+  /**
+   * The cloud is a reserve executor (spec active-cloud §4.3): every key rotation must also seal the new version for the
+   * server key (`GET /cloud/server-key`), else 409 `key-rotation-mismatch` with `missingServer`.
+   */
+  cloudReserve: boolean;
+  /** The owner switched the reserve off: only the owner switches it on again. */
+  cloudReserveDeclined: boolean;
   createdAt: Date | null;
   updatedAt: Date | null;
   /** Live participants, oldest first (the owner succession order). */

@@ -37,6 +37,13 @@ export type ConversationProps = {
   /** Link by id to the conversation this one was moved from (another space); never a foreign key. */
   movedFromConversationId: string | null;
   /**
+   * The cloud is a reserve executor (spec active-cloud §4.3): the space is in the active cloud and the server key has
+   * a copy of every key version. Never on a tombstoned conversation.
+   */
+  cloudReserve: boolean;
+  /** The owner switched the reserve off: only the owner switches it on again. */
+  cloudReserveDeclined: boolean;
+  /**
    * Live participants, sorted. Read-only here: the database derives it from `conversation_participants` (trigger) and
    * row-level security uses it; the repository never writes it.
    */
@@ -68,6 +75,8 @@ export class Conversation extends Entity<ConversationProps> {
     state: ConversationState;
     encryptedHeader: string;
     movedFromConversationId?: string | null;
+    /** Born with the cloud reserve (a space in the active cloud; the server copy of v1 goes with it). */
+    cloudReserve?: boolean;
     now: Date;
   }): Conversation {
     const id = assertDeviceId(input.id, 'conversation-id-invalid');
@@ -93,6 +102,8 @@ export class Conversation extends Entity<ConversationProps> {
         encryptedHeader: input.encryptedHeader,
         headerKeyVersion: 1,
         movedFromConversationId: movedFrom,
+        cloudReserve: input.cloudReserve ?? false,
+        cloudReserveDeclined: false,
         participantUserIds: [input.ownerUserId],
         createdAt: input.now,
         deletedAt: null,
@@ -121,6 +132,63 @@ export class Conversation extends Entity<ConversationProps> {
     return this.props.participantUserIds.includes(userId);
   }
 
+  /** The cloud may act as the reserve executor of this live conversation (the space being active is the caller's). */
+  isCloudExecutor(): boolean {
+    return this.props.cloudReserve && this.props.deletedAt === null;
+  }
+
+  /**
+   * Switches the cloud reserve on (the caller checked the space is in the active cloud and stores the server copies of
+   * every version). Any live participant may (spec §4.3: the app sends the copy when a participant opens it), except
+   * after the owner switched it off: then only the owner (403 `not-conversation-owner`). Returns whether it changed.
+   */
+  enableCloudReserve(userId: string): boolean {
+    if (!this.isParticipant(userId) || this.props.deletedAt) {
+      throw conversationNotFound();
+    }
+    if (this.props.cloudReserve) return false;
+    if (this.props.cloudReserveDeclined && !this.isOwner(userId)) {
+      throw notConversationOwner();
+    }
+    this.props = {
+      ...this.props,
+      cloudReserve: true,
+      cloudReserveDeclined: false,
+    };
+    return true;
+  }
+
+  /**
+   * The owner switches the reserve off (403 for anyone else): the server copies go away (the caller deletes them) and
+   * the key must rotate (the server knew it). Remembered, so a participant does not switch it on again. Returns whether
+   * the reserve was on.
+   */
+  declineCloudReserve(userId: string): boolean {
+    this.assertOwner(userId);
+    const wasOn = this.props.cloudReserve;
+    this.props = {
+      ...this.props,
+      cloudReserve: false,
+      cloudReserveDeclined: true,
+      keyRotationRequired: this.props.keyRotationRequired || wasOn,
+    };
+    return wasOn;
+  }
+
+  /**
+   * The space left the active cloud: the reserve goes off (not the owner's choice: not remembered) and the key must
+   * rotate. Persist it in a PARTICIPANT's scope (the owner's), never the cloud's: the row would leave its view.
+   */
+  loseCloudReserve(): boolean {
+    if (!this.props.cloudReserve) return false;
+    this.props = {
+      ...this.props,
+      cloudReserve: false,
+      keyRotationRequired: true,
+    };
+    return true;
+  }
+
   /** 403 `not-conversation-owner` for anyone but the owner (remove people, change executor, move, archive). */
   assertOwner(userId: string): void {
     if (!this.isOwner(userId)) throw notConversationOwner();
@@ -137,7 +205,8 @@ export class Conversation extends Entity<ConversationProps> {
       state === ARCHIVED_STATE || this.props.state === ARCHIVED_STATE;
     const allowed = archiving
       ? actor.kind === 'user' && this.isOwner(actor.userId)
-      : actor.kind === 'hub' && this.isExecutor(actor.hubId);
+      : (actor.kind === 'hub' && this.isExecutor(actor.hubId)) ||
+        (actor.kind === 'cloud' && this.isCloudExecutor());
     if (!allowed) throw notConversationOwner();
     this.props = { ...this.props, state };
   }
@@ -182,13 +251,14 @@ export class Conversation extends Entity<ConversationProps> {
   /**
    * Who may rotate the key (spec §4.2): with a pending rotation, any live participant or the executor (the queue does
    * not stop); without one, only the owner (manual, e.g. a suspected leak), else 409 `key-rotation-not-required`
-   * (each rotation is a version for good). Neither participant nor executor: 404.
+   * (each rotation is a version for good). Neither participant nor executor: 404. The cloud never rotates (it would
+   * have to seal for every participant): 404 too.
    */
   assertRotationAllowed(actor: ConversationActor): void {
     const inside =
       actor.kind === 'user'
         ? this.isParticipant(actor.userId)
-        : this.isExecutor(actor.hubId);
+        : actor.kind === 'hub' && this.isExecutor(actor.hubId);
     if (!inside) throw conversationNotFound();
     if (this.props.keyRotationRequired) return;
     if (actor.kind === 'user' && this.isOwner(actor.userId)) return;
@@ -235,9 +305,10 @@ export class Conversation extends Entity<ConversationProps> {
     this.props = { ...this.props, ownerUserId: userId };
   }
 
+  /** A tombstoned conversation has no cloud reserve (the caller deletes the server copies). */
   tombstone(now: Date): void {
     if (this.props.deletedAt) return;
-    this.props = { ...this.props, deletedAt: now };
+    this.props = { ...this.props, deletedAt: now, cloudReserve: false };
   }
 
   /** Retention: the encrypted header goes away; the row (id, tombstone) stays for sync. */
@@ -287,6 +358,12 @@ export class Conversation extends Entity<ConversationProps> {
   }
   get movedFromConversationId(): string | null {
     return this.props.movedFromConversationId;
+  }
+  get cloudReserve(): boolean {
+    return this.props.cloudReserve;
+  }
+  get cloudReserveDeclined(): boolean {
+    return this.props.cloudReserveDeclined;
   }
   get participantUserIds(): readonly string[] {
     return this.props.participantUserIds;

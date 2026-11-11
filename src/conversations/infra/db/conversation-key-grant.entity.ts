@@ -2,12 +2,13 @@ import { Check, Column, Entity, Index, JoinColumn, ManyToOne } from 'typeorm';
 import { SyncableTypeormEntity } from '../../../shared/infra/db/base.entity.js';
 import type { ConversationTypeormEntity } from './conversation.entity.js';
 
-// Cópia trancada de uma versão da chave da conversa, para exatamente uma pessoa OU o Hub executor (nunca o kit da
-// organização: privado é privado). Tirar = lápide; quem volta tem a lápide limpa na mesma linha.
+// Cópia trancada de uma versão da chave da conversa, para exatamente uma pessoa, o Hub executor OU a chave do servidor
+// (nuvem de reserva; nunca o kit da organização: privado é privado). Tirar = lápide; quem volta tem a lápide limpa na
+// mesma linha. A cópia do servidor é apagada de verdade (migration ConversationCloudReserve).
 @Entity('conversation_key_grants')
 @Check(
   'ck_conversation_key_grants_recipient',
-  `num_nonnulls("user_id", "hub_id") = 1`,
+  `(num_nonnulls("user_id", "hub_id") + "server_recipient"::int) = 1`,
 )
 @Check('ck_conversation_key_grants_key_version', `"key_version" >= 1`)
 @Check(
@@ -31,6 +32,10 @@ import type { ConversationTypeormEntity } from './conversation.entity.js';
     where: '"hub_id" IS NOT NULL AND "deleted_at" IS NULL',
   },
 )
+@Index('uq_conversation_key_grants_server', ['conversationId', 'keyVersion'], {
+  unique: true,
+  where: '"server_recipient" AND "deleted_at" IS NULL',
+})
 @Index('fk_conversation_key_grants_organizations_idx', ['organizationId'])
 @Index('fk_conversation_key_grants_conversations_idx', ['conversationId'])
 @Index('fk_conversation_key_grants_users_idx', ['userId'])
@@ -96,6 +101,9 @@ export class ConversationKeyGrantTypeormEntity extends SyncableTypeormEntity {
     foreignKeyConstraintName: 'fk_conversation_key_grants_hubs',
   })
   hub?: { id: string };
+
+  @Column({ type: 'boolean', default: false })
+  serverRecipient!: boolean;
 
   @Column({ type: 'varchar', length: 108 })
   wrappedKey!: string;

@@ -6,6 +6,8 @@ export type MessageView = {
   conversationId: string;
   authorUserId: string | null;
   authorHubId: string | null;
+  /** Written by the cloud (reserve executor). */
+  authorCloud: boolean;
   keyVersion: number;
   bodyBytes: number;
   replacesMessageId: string | null;
@@ -21,6 +23,7 @@ export function messageView(m: ConversationMessage): MessageView {
     conversationId: m.conversationId,
     authorUserId: m.authorUserId,
     authorHubId: m.authorHubId,
+    authorCloud: m.authorCloud,
     keyVersion: m.keyVersion,
     bodyBytes: m.bodyBytes,
     replacesMessageId: m.replacesMessageId,

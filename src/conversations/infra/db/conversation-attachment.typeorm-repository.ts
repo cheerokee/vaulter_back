@@ -30,8 +30,12 @@ import {
 
 const uploaderColumns = (
   u: ConversationActor,
-): [string | null, string | null] =>
-  u.kind === 'user' ? [u.userId, null] : [null, u.hubId];
+): [string | null, string | null] => {
+  if (u.kind === 'cloud') {
+    throw new Error('The cloud (reserve executor) never uploads attachments.');
+  }
+  return u.kind === 'user' ? [u.userId, null] : [null, u.hubId];
+};
 
 @Injectable()
 export class ConversationAttachmentTypeormRepository extends ConversationAttachmentRepository {

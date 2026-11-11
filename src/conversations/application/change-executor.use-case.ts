@@ -9,6 +9,7 @@ import { ConversationMessageRepository } from '../domain/conversation-message.re
 import { ConversationRepository } from '../domain/conversation.repository.js';
 import { assertExecutorEligible } from '../domain/participation-rules.js';
 import { assertWrappedConversationKey } from '../domain/wrapped-conversation-key.js';
+import { ConversationCloudReserve } from './conversation-cloud-reserve.js';
 import { ConversationAccess } from './conversation-access.js';
 import { ConversationExecutors } from './conversation-executors.js';
 import { ConversationViews } from './conversation-views.js';
@@ -39,6 +40,7 @@ export class ChangeExecutorUseCase {
     private readonly views: ConversationViews,
     private readonly audit: AuditLog,
     private readonly uow: UnitOfWork,
+    private readonly reserve: ConversationCloudReserve,
   ) {}
 
   execute(
@@ -98,7 +100,13 @@ export class ChangeExecutorUseCase {
           hubId: previous,
         });
         // What the old Hub took and never answered goes back to the inbox of the new one.
-        await this.messages.requeueAckedBy(scope, conversation.id, previous);
+        await this.reserve.requeued(
+          conversation,
+          await this.messages.requeueAckedBy(scope, conversation.id, {
+            kind: 'hub',
+            hubId: previous,
+          }),
+        );
       }
       if (hubId) {
         for (const g of input.grants) {

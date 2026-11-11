@@ -21,6 +21,8 @@ export function conversationResponse(v: ConversationView) {
     encryptedHeader: v.encryptedHeader,
     headerKeyVersion: v.headerKeyVersion,
     movedFromConversationId: v.movedFromConversationId,
+    cloudReserve: v.cloudReserve,
+    cloudReserveDeclined: v.cloudReserveDeclined,
     createdAt: iso(v.createdAt),
     updatedAt: iso(v.updatedAt),
     participants: v.participants.map((p) => ({
@@ -41,6 +43,7 @@ export function messageResponse(v: MessageView) {
     conversationId: v.conversationId,
     authorUserId: v.authorUserId,
     authorHubId: v.authorHubId,
+    authorCloud: v.authorCloud,
     keyVersion: v.keyVersion,
     bodyBytes: v.bodyBytes,
     replacesMessageId: v.replacesMessageId,

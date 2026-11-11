@@ -45,6 +45,8 @@ const conversation = (over: { keyRotationRequired?: boolean } = {}) =>
       encryptedHeader: blob(),
       headerKeyVersion: 1,
       movedFromConversationId: null,
+      cloudReserve: false,
+      cloudReserveDeclined: false,
       participantUserIds: [ANA, BIA].sort(),
       createdAt: new Date(),
       deletedAt: null,

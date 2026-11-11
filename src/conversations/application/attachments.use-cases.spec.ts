@@ -1,3 +1,4 @@
+import type { AttachmentUploader } from '../domain/conversation-attachment.js';
 import { QueryFailedError } from 'typeorm';
 import type { HubAuthContext } from '../../shared/application/hub-auth-context.js';
 import {
@@ -48,6 +49,8 @@ const conversation = (over: { keyRotationRequired?: boolean } = {}) =>
       encryptedHeader: Buffer.alloc(60, 1).toString('base64url'),
       headerKeyVersion: 1,
       movedFromConversationId: null,
+      cloudReserve: false,
+      cloudReserveDeclined: false,
       participantUserIds: [ANA, BIA].sort(),
       createdAt: new Date(),
       deletedAt: null,
@@ -69,7 +72,7 @@ const ana = { userId: ANA, sessionId: newId() };
 const attachment = (
   over: {
     id?: string;
-    uploader?: ConversationScope['actor'];
+    uploader?: AttachmentUploader;
     sizeBytes?: number;
     expiresAt?: Date;
     committed?: string;

@@ -169,7 +169,8 @@ async function readOrganization(
     await batch(
       `SELECT cv.id, cv.organization_id, cv.space_id, cv.created_by_user_id, cv.owner_user_id, cv.executor_hub_id,
               cv.state, cv.last_message_at, cv.current_key_version, cv.key_rotation_required, cv.encrypted_header,
-              cv.header_key_version, cv.moved_from_conversation_id, cv.created_at, cv.updated_at,
+              cv.header_key_version, cv.moved_from_conversation_id, cv.cloud_reserve, cv.cloud_reserve_declined,
+              cv.created_at, cv.updated_at,
               cv.deleted_at IS NOT NULL AS deleted, ${VERSION('cv')}
          FROM conversations cv
         WHERE ${PAGE('cv')} AND ${IN_SCOPE(reader, 'cv')}
@@ -192,6 +193,9 @@ async function readOrganization(
             encryptedHeader: r.encrypted_header,
             headerKeyVersion: r.header_key_version,
             movedFromConversationId: r.moved_from_conversation_id,
+            // With the reserve on, every rotation also seals for the server key (the server's copies never come here).
+            cloudReserve: r.cloud_reserve,
+            cloudReserveDeclined: r.cloud_reserve_declined,
             createdAt: iso(r.created_at),
             updatedAt: iso(r.updated_at),
           },
@@ -222,7 +226,8 @@ async function readOrganization(
     ),
   );
 
-  // Only the reader's OWN copies (every version, tombstones included): never another person's or hub's.
+  // Only the reader's OWN copies (every version, tombstones included): never another person's or hub's, never the
+  // server's (`server_recipient`: neither column matches the reader).
   const ownCopy = reader.kind === 'user' ? 'g.user_id' : 'g.hub_id';
   out.push(
     await batch(
@@ -250,7 +255,7 @@ async function readOrganization(
 
   out.push(
     await batch(
-      `SELECT msg.id, msg.conversation_id, msg.author_user_id, msg.author_hub_id, msg.key_version,
+      `SELECT msg.id, msg.conversation_id, msg.author_user_id, msg.author_hub_id, msg.author_cloud, msg.key_version,
               msg.encrypted_body, msg.body_bytes, msg.replaces_message_id, msg.pending, msg.acked_at, msg.sent_at,
               msg.deleted_at IS NOT NULL AS deleted, ${VERSION('msg')}
          FROM conversation_messages msg
@@ -264,6 +269,7 @@ async function readOrganization(
           {
             authorUserId: r.author_user_id,
             authorHubId: r.author_hub_id,
+            authorCloud: r.author_cloud,
             keyVersion: r.key_version,
             encryptedBody: r.encrypted_body,
             bodyBytes: r.body_bytes,

@@ -21,7 +21,7 @@ import type { ConversationTypeormEntity } from './conversation.entity.js';
 ])
 @Check(
   'ck_conversation_messages_author',
-  `num_nonnulls("author_user_id", "author_hub_id") = 1`,
+  `(num_nonnulls("author_user_id", "author_hub_id") + "author_cloud"::int) = 1`,
 )
 @Check('ck_conversation_messages_key_version', `"key_version" >= 1`)
 @Check(
@@ -45,6 +45,15 @@ import type { ConversationTypeormEntity } from './conversation.entity.js';
 @Check(
   'ck_conversation_messages_acked_by',
   `("acked_by_hub_id" IS NULL) OR (NOT "pending")`,
+)
+// A nuvem (executor de reserva) como autora nasce confirmada; confirmada por no máximo um (Hub ou nuvem).
+@Check(
+  'ck_conversation_messages_cloud_acked',
+  `(NOT "author_cloud") OR (NOT "pending")`,
+)
+@Check(
+  'ck_conversation_messages_acked_by_cloud',
+  `(NOT "acked_by_cloud") OR ((NOT "pending") AND ("acked_by_hub_id" IS NULL))`,
 )
 @Index('ix_conversation_messages_sync_version', ['syncVersion'])
 @Index('fk_conversation_messages_organizations_idx', ['organizationId'])
@@ -105,6 +114,10 @@ export class ConversationMessageTypeormEntity extends DeviceIdSyncableTypeormEnt
   })
   authorHub?: { id: string };
 
+  /** The cloud (reserve executor) wrote it (migration ConversationCloudReserve). */
+  @Column({ type: 'boolean', default: false })
+  authorCloud!: boolean;
+
   @Column({ type: 'integer' })
   keyVersion!: number;
 
@@ -153,6 +166,10 @@ export class ConversationMessageTypeormEntity extends DeviceIdSyncableTypeormEnt
     foreignKeyConstraintName: 'fk_conversation_messages_acked_by_hubs',
   })
   ackedByHub?: { id: string };
+
+  /** The cloud (reserve executor) acknowledged it. */
+  @Column({ type: 'boolean', default: false })
+  ackedByCloud!: boolean;
 
   @Column({ type: 'timestamptz' })
   sentAt!: Date;

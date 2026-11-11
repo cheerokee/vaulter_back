@@ -153,6 +153,7 @@ describe('conversation messages (e2e)', () => {
         conversationId: conv.id,
         authorUserId: olivia.userId,
         authorHubId: null,
+        authorCloud: false,
         keyVersion: 1,
         bodyBytes: Buffer.from(sent.body.encryptedBody, 'base64url').length,
         replacesMessageId: null,

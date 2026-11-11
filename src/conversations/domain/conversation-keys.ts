@@ -104,3 +104,23 @@ export function assertShareCoversSpace(
     },
   );
 }
+
+/**
+ * Rotation of a conversation with the cloud reserve (spec active-cloud §4.3): the new version must also be sealed for
+ * the server key; without the reserve, a server copy is refused (nobody would keep it). Same code and extension members
+ * as the space key rotation in the active cloud: 409 `key-rotation-mismatch` with `missingServer: true` or
+ * `unexpectedServer: true`.
+ */
+export function assertServerCopyMatchesReserve(
+  serverCopySent: boolean,
+  cloudReserve: boolean,
+): void {
+  if (serverCopySent === cloudReserve) return;
+  throw new ConflictError(
+    'key-rotation-mismatch',
+    cloudReserve
+      ? 'The cloud is a reserve executor of the conversation: the new version must also be sealed for the server key.'
+      : 'The conversation has no cloud reserve: no copy for the server key is expected.',
+    cloudReserve ? { missingServer: true } : { unexpectedServer: true },
+  );
+}

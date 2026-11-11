@@ -35,6 +35,8 @@ export class ConversationViews {
       encryptedHeader: p.encryptedHeader,
       headerKeyVersion: p.headerKeyVersion,
       movedFromConversationId: p.movedFromConversationId,
+      cloudReserve: p.cloudReserve,
+      cloudReserveDeclined: p.cloudReserveDeclined,
       createdAt: p.createdAt ?? null,
       updatedAt: p.updatedAt ?? null,
       participants: await this.participants.listLive(scope, c.id),

@@ -35,6 +35,7 @@ import {
 import { SodiumBackupObjectOpener } from './infra/crypto/sodium-backup-object-opener.js';
 import { WorkerTextExtractor } from './infra/extraction/worker-text-extractor.js';
 import { CloudKeyRotatedHook } from './application/cloud-key-rotated.hook.js';
+import { CloudServerCopyCheck } from './application/cloud-server-copy-check.js';
 import { CloudSpaceAccess } from './application/cloud-space-access.js';
 import { CloudSpaceJobs } from './application/cloud-space-jobs.js';
 import {
@@ -76,7 +77,10 @@ import { KmsKeyEnvelope } from './infra/crypto/kms-key-envelope.js';
 import { KmsServerKeyring } from './infra/crypto/kms-server-keyring.js';
 import { CloudServerKeyTypeormEntity } from './infra/db/server-key.entity.js';
 import { ServerKeyTypeormStore } from './infra/db/server-key.store.js';
-import { CloudServerKeyController } from './infra/http/cloud-server-key.controller.js';
+import {
+  CloudServerKeyController,
+  HubCloudServerKeyController,
+} from './infra/http/cloud-server-key.controller.js';
 
 export function createLanguageModel(config: ConfigService): LanguageModel {
   if (config.get<string>('CLOUD_LLM_DRIVER') !== 'fake') {
@@ -118,6 +122,7 @@ export function createLanguageModel(config: ConfigService): LanguageModel {
   ],
   controllers: [
     CloudServerKeyController,
+    HubCloudServerKeyController,
     CloudTermsController,
     SpaceCloudController,
     AiUsageController,
@@ -139,6 +144,7 @@ export function createLanguageModel(config: ConfigService): LanguageModel {
     CloudSpaceAccess,
     CloudSpaceJobs,
     CloudKeyRotatedHook,
+    CloudServerCopyCheck,
     GetCloudTermsUseCase,
     AcceptCloudTermsUseCase,
     GetSpaceCloudUseCase,

@@ -9,6 +9,7 @@ import {
 import { ConversationMessageRepository } from '../domain/conversation-message.repository.js';
 import { ConversationRepository } from '../domain/conversation.repository.js';
 import { ConversationAccess, reachable } from './conversation-access.js';
+import { ConversationCloudReserve } from './conversation-cloud-reserve.js';
 
 export type MoveConversationInput = {
   /** The space of the conversation created with `movedFrom` = this one. */
@@ -32,6 +33,7 @@ export class MoveConversationUseCase {
     private readonly messages: ConversationMessageRepository,
     private readonly audit: AuditLog,
     private readonly uow: UnitOfWork,
+    private readonly reserve: ConversationCloudReserve,
   ) {}
 
   execute(
@@ -69,8 +71,11 @@ export class MoveConversationUseCase {
       }
       reachable(scope, source, spaceId);
       source.assertOwner(userId);
+      const hadCloudReserve = source.cloudReserve;
       source.tombstone(await this.messages.databaseNow());
       await this.conversations.save(scope, source);
+      // The tombstone takes the cloud reserve with it: the server copies of the old conversation go away.
+      if (hadCloudReserve) await this.reserve.dropServerSide(scope, source);
       await this.audit.record({
         organizationId: source.organizationId,
         userId,

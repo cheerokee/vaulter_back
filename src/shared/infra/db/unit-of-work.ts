@@ -58,6 +58,9 @@ export interface UnitOfWorkContext {
   // Também o reparo dos anexos dos assuntos (`ConversationAttachmentHealer`): lê e trava as linhas marcadas de
   // `conversation_attachments` sem participante (migration ConversationAttachmentStorage).
   storageReconcile?: string;
+  // A nuvem como executor de reserva dos assuntos (módulo `conversations`, migration ConversationCloudReserve): o id de
+  // UM espaço; abre só os assuntos vivos desse espaço com `cloud_reserve`. Nunca abre outro espaço nem outro assunto.
+  cloudExecutorSpaceId?: string;
 }
 
 const SETTINGS = {
@@ -67,6 +70,7 @@ const SETTINGS = {
   invitationTokenHash: 'app.invitation_token_hash',
   hubSigningPublicKey: 'app.hub_signing_public_key',
   storageReconcile: 'app.storage_reconcile',
+  cloudExecutorSpaceId: 'app.cloud_executor',
 } as const satisfies Record<keyof UnitOfWorkContext, string>;
 
 // `set_config(..., true)` vale até o fim da transação: não vaza para a próxima da mesma conexão.

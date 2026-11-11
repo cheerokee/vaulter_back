@@ -164,13 +164,16 @@ export class RequestAttachmentUploadUseCase {
     quotaBytes: number,
     input: AttachmentUploadInput,
   ): Promise<{ attachment: ConversationAttachment; created: boolean }> {
+    // Attachment routes are a person's or the executor Hub's; the cloud (reserve executor) never uploads.
+    const uploader = scope.actor;
+    if (uploader.kind === 'cloud') throw conversationNotFound();
     const now = await this.attachments.databaseNow();
     const candidate = ConversationAttachment.create({
       id: input.id,
       organizationId: scope.organizationId,
       spaceId: conversation.spaceId,
       conversationId: conversation.id,
-      uploader: scope.actor,
+      uploader,
       messageId: null,
       keyVersion: input.keyVersion,
       sizeBytes: input.sizeBytes,

@@ -3,6 +3,7 @@ import {
   ArrayMaxSize,
   ArrayMinSize,
   IsArray,
+  IsBoolean,
   IsIn,
   IsInt,
   IsOptional,
@@ -122,6 +123,29 @@ export class CreateConversationDto extends HeaderFields {
   @ValidateNested()
   @Type(() => MovedFromDto)
   movedFrom?: MovedFromDto | null;
+
+  /**
+   * Version 1 sealed for the server key (`GET /cloud/server-key`): required exactly when the space is in the active
+   * cloud (the cloud is born a reserve executor; 422 `cloud-reserve-copy-required` / `cloud-reserve-unavailable`).
+   */
+  @IsOptional()
+  @IsString()
+  @Matches(WRAPPED_CONVERSATION_KEY_PATTERN)
+  serverWrappedKey?: string;
+}
+
+/** Switch the cloud reserve of a conversation on (every version sealed for the server key) or off (owner only). */
+export class SetCloudReserveDto {
+  @IsBoolean()
+  enabled!: boolean;
+
+  /** With `enabled: true`: every version 1..current sealed for the server key (409 `key-versions-mismatch`). */
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(MAX_VERSION_GRANTS)
+  @ValidateNested({ each: true })
+  @Type(() => VersionGrantDto)
+  serverGrants?: VersionGrantDto[];
 }
 
 /** Completes a move: the conversation created in the destination with `movedFrom` = this one. */
@@ -219,6 +243,15 @@ export class RotateConversationKeyDto {
   @ValidateNested({ each: true })
   @Type(() => HubGrantDto)
   hubGrants!: HubGrantDto[];
+
+  /**
+   * The new version sealed for the server key: required exactly while `cloudReserve` is on (else 409
+   * `key-rotation-mismatch` with `missingServer` / `unexpectedServer`).
+   */
+  @IsOptional()
+  @IsString()
+  @Matches(WRAPPED_CONVERSATION_KEY_PATTERN)
+  serverWrappedKey?: string;
 }
 
 /** The use case input of a rotation (user and hub routes). */
@@ -233,6 +266,7 @@ export function rotationInput(dto: RotateConversationKeyDto) {
       hubId: g.hubId,
       wrappedKey: g.wrappedKey,
     })),
+    serverWrappedKey: dto.serverWrappedKey ?? null,
   };
 }
 

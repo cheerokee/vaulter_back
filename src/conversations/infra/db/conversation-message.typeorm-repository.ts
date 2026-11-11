@@ -3,7 +3,10 @@ import { DataSource, IsNull } from 'typeorm';
 import { currentManager } from '../../../shared/infra/db/unit-of-work.js';
 import type { ConversationScope } from '../../domain/conversation-actor.js';
 import { conversationNotFound } from '../../domain/conversation-errors.js';
-import { ConversationMessageRepository } from '../../domain/conversation-message.repository.js';
+import {
+  ConversationMessageRepository,
+  type AckedBy,
+} from '../../domain/conversation-message.repository.js';
 import type { ConversationMessage } from '../../domain/conversation-message.js';
 import { ConversationMessageTypeormEntity } from './conversation-message.entity.js';
 import { inScope, updatedRows } from './conversation-scope.js';
@@ -58,6 +61,7 @@ export class ConversationMessageTypeormRepository extends ConversationMessageRep
           pending: message.pending,
           ackedAt: message.ackedAt,
           ackedByHubId: message.ackedByHubId,
+          ackedByCloud: message.ackedByCloud,
           encryptedBody: message.encryptedBody,
           deletedAt: message.deletedAt,
         },
@@ -73,26 +77,54 @@ export class ConversationMessageTypeormRepository extends ConversationMessageRep
     return rows[0]!.now;
   }
 
+  // `by`: o Hub (acked_by_hub_id / author_hub_id = $3) ou a nuvem (acked_by_cloud / author_cloud; $3 nulo).
   async requeueAckedBy(
     scope: ConversationScope,
     conversationId: string,
-    hubId: string,
-  ): Promise<number> {
+    by: AckedBy,
+  ): Promise<string[]> {
+    const [acked, authored] =
+      by.kind === 'hub'
+        ? ['msg.acked_by_hub_id = $3', 'reply.author_hub_id = $3']
+        : ['msg.acked_by_cloud', 'reply.author_cloud'];
+    const params =
+      by.kind === 'hub'
+        ? [scope.organizationId, conversationId, by.hubId]
+        : [scope.organizationId, conversationId];
     const raw: unknown = await inScope(this.dataSource, scope, (m) =>
       m.query(
         `UPDATE conversation_messages msg
-            SET pending = true, acked_at = NULL, acked_by_hub_id = NULL, updated_at = now()
-          WHERE msg.organization_id = $1 AND msg.conversation_id = $2 AND msg.acked_by_hub_id = $3
+            SET pending = true, acked_at = NULL, acked_by_hub_id = NULL, acked_by_cloud = false, updated_at = now()
+          WHERE msg.organization_id = $1 AND msg.conversation_id = $2 AND ${acked}
             AND msg.deleted_at IS NULL
             AND NOT EXISTS (
               SELECT 1 FROM conversation_messages reply
                WHERE reply.organization_id = msg.organization_id AND reply.conversation_id = msg.conversation_id
-                 AND reply.author_hub_id = $3 AND reply.sent_at > msg.sent_at)
+                 AND ${authored} AND reply.sent_at > msg.sent_at)
         RETURNING msg.id`,
-        [scope.organizationId, conversationId, hubId],
+        params,
       ),
     );
-    return updatedRows<{ id: string }>(raw).length;
+    return updatedRows<{ id: string }>(raw).map((r) => r.id);
+  }
+
+  async listRecent(
+    scope: ConversationScope,
+    conversationId: string,
+    limit: number,
+  ): Promise<ConversationMessage[]> {
+    const rows = await inScope(this.dataSource, scope, (m) =>
+      m.getRepository(ConversationMessageTypeormEntity).find({
+        where: {
+          organizationId: scope.organizationId,
+          conversationId,
+          deletedAt: IsNull(),
+        },
+        order: { sentAt: 'DESC', id: 'DESC' },
+        take: limit,
+      }),
+    );
+    return rows.map(messageToDomain).reverse();
   }
 
   async listPending(

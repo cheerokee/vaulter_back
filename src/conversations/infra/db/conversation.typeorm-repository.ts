@@ -130,6 +130,21 @@ export class ConversationTypeormRepository extends ConversationRepository {
     return rows.map((r) => r.id);
   }
 
+  async idsWithCloudReserve(
+    scope: ConversationScope,
+    spaceId: string,
+  ): Promise<string[]> {
+    const rows: { id: string }[] = await inScope(this.dataSource, scope, (m) =>
+      m.query(
+        `SELECT id FROM conversations
+          WHERE organization_id = $1 AND space_id = $2 AND cloud_reserve AND deleted_at IS NULL
+          ORDER BY space_id, id`,
+        [scope.organizationId, spaceId],
+      ),
+    );
+    return rows.map((r) => r.id);
+  }
+
   async idsWithExecutor(
     scope: ConversationScope,
     hubId: string,

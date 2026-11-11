@@ -1,5 +1,5 @@
 import { Entity } from '../../shared/domain/entity.js';
-import { sameActor, type ConversationActor } from './conversation-actor.js';
+import { sameActor, type ActorRef } from './conversation-actor.js';
 import {
   messageReplacesInvalid,
   messageTooLarge,
@@ -12,9 +12,10 @@ import { assertEncryptedBlob } from './encrypted-blob.js';
 export type ConversationMessageProps = {
   organizationId: string;
   conversationId: string;
-  /** Exactly one author: a person or the executor Hub. */
+  /** Exactly one author: a person, the executor Hub or the cloud (reserve executor). */
   authorUserId: string | null;
   authorHubId: string | null;
+  authorCloud: boolean;
   keyVersion: number;
   /** Encrypted with the conversation key; null only after retention purged a tombstone. */
   encryptedBody: string | null;
@@ -27,6 +28,8 @@ export type ConversationMessageProps = {
   ackedAt: Date | null;
   /** The executor Hub that acknowledged it (a person's message); null while pending and for a Hub's own message. */
   ackedByHubId: string | null;
+  /** The cloud (reserve executor) acknowledged it; never together with `ackedByHubId`. */
+  ackedByCloud: boolean;
   sentAt: Date;
   createdAt?: Date;
   deletedAt: Date | null;
@@ -38,7 +41,7 @@ export class ConversationMessage extends Entity<ConversationMessageProps> {
     id: string;
     organizationId: string;
     conversationId: string;
-    author: ConversationActor;
+    author: ActorRef;
     keyVersion: number;
     encryptedBody: string;
     replacesMessageId: string | null;
@@ -52,21 +55,23 @@ export class ConversationMessage extends Entity<ConversationMessageProps> {
       MAX_MESSAGE_BYTES,
       () => messageTooLarge(MAX_MESSAGE_BYTES),
     );
-    const fromHub = input.author.kind === 'hub';
+    // The executor's (Hub or cloud) own message is born acknowledged.
+    const fromExecutor = input.author.kind !== 'user';
     return new ConversationMessage(
       {
         organizationId: input.organizationId,
         conversationId: input.conversationId,
         authorUserId: input.author.kind === 'user' ? input.author.userId : null,
         authorHubId: input.author.kind === 'hub' ? input.author.hubId : null,
+        authorCloud: input.author.kind === 'cloud',
         keyVersion: assertKeyVersion(input.keyVersion),
         encryptedBody: input.encryptedBody,
         bodyBytes,
         replacesMessageId: input.replacesMessageId,
-        // The executor's own message is born acknowledged.
-        pending: !fromHub,
-        ackedAt: fromHub ? input.now : null,
+        pending: !fromExecutor,
+        ackedAt: fromExecutor ? input.now : null,
         ackedByHubId: null,
+        ackedByCloud: false,
         sentAt: input.sentAt,
         createdAt: input.now,
         deletedAt: null,
@@ -86,7 +91,8 @@ export class ConversationMessage extends Entity<ConversationMessageProps> {
     return { ...this.props };
   }
 
-  get author(): ConversationActor {
+  get author(): ActorRef {
+    if (this.props.authorCloud) return { kind: 'cloud' };
     return this.props.authorHubId !== null
       ? { kind: 'hub', hubId: this.props.authorHubId }
       : { kind: 'user', userId: this.props.authorUserId! };
@@ -107,20 +113,27 @@ export class ConversationMessage extends Entity<ConversationMessageProps> {
     );
   }
 
-  /** The executor took it. The first ack wins; returns whether this call changed anything. */
-  ack(now: Date, hubId: string): boolean {
+  /**
+   * The executor took it: the Hub or the cloud (reserve executor). The first ack wins (never both); returns whether this
+   * call changed anything.
+   */
+  ack(
+    now: Date,
+    by: { kind: 'hub'; hubId: string } | { kind: 'cloud' },
+  ): boolean {
     if (!this.props.pending) return false;
     this.props = {
       ...this.props,
       pending: false,
       ackedAt: now,
-      ackedByHubId: hubId,
+      ackedByHubId: by.kind === 'hub' ? by.hubId : null,
+      ackedByCloud: by.kind === 'cloud',
     };
     return true;
   }
 
   /** Each one deletes only their own messages (the executor, its own): 403 otherwise. */
-  assertAuthor(actor: ConversationActor): void {
+  assertAuthor(actor: ActorRef): void {
     if (!sameActor(actor, this.author)) throw notConversationOwner();
   }
 
@@ -169,6 +182,12 @@ export class ConversationMessage extends Entity<ConversationMessageProps> {
   }
   get ackedByHubId(): string | null {
     return this.props.ackedByHubId;
+  }
+  get authorCloud(): boolean {
+    return this.props.authorCloud;
+  }
+  get ackedByCloud(): boolean {
+    return this.props.ackedByCloud;
   }
   get sentAt(): Date {
     return this.props.sentAt;

@@ -6,21 +6,20 @@ import {
 } from '../../../shared/infra/db/unit-of-work.js';
 import type { ConversationScope } from '../../domain/conversation-actor.js';
 
-// Contexto do RLS de uma chamada: a organização e exatamente um principal (o outro vai vazio, para um contexto de fora
-// não somar acesso). Dentro de um `UnitOfWork.run`, entra na transação ativa num savepoint e restaura o contexto
-// anterior ao sair; fora, abre a própria transação.
+// Contexto do RLS de uma chamada: a organização e exatamente um principal (os outros vão vazios, para um contexto de
+// fora não somar acesso). Dentro de um `UnitOfWork.run`, entra na transação ativa num savepoint e restaura o contexto
+// anterior ao sair; fora, abre a própria transação. A nuvem (`cloud`) entra com `app.cloud_executor` = o espaço.
 export function scopeContext(scope: ConversationScope): UnitOfWorkContext {
-  return scope.actor.kind === 'user'
-    ? {
-        organizationId: scope.organizationId,
-        userId: scope.actor.userId,
-        hubId: '',
-      }
-    : {
-        organizationId: scope.organizationId,
-        hubId: scope.actor.hubId,
-        userId: '',
-      };
+  const none = { userId: '', hubId: '', cloudExecutorSpaceId: '' };
+  const { organizationId, actor } = scope;
+  switch (actor.kind) {
+    case 'user':
+      return { ...none, organizationId, userId: actor.userId };
+    case 'hub':
+      return { ...none, organizationId, hubId: actor.hubId };
+    case 'cloud':
+      return { ...none, organizationId, cloudExecutorSpaceId: actor.spaceId };
+  }
 }
 
 export function inScope<T>(

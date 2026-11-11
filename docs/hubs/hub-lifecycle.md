@@ -482,10 +482,18 @@ organização está aprovado). Rotas com o token de Hub:
     executor troca ou se perde (troca pelo dono, desvínculo, desregistro, espaço tirado do Hub, dono do Hub saindo do
     assunto), o backend devolve a `pending` toda mensagem que o Hub antigo confirmou sem mandar nenhuma mensagem dele
     depois no assunto (ela chega de novo no feed com `pending: true`);
+  - **nuvem de reserva** (espaço em nuvem ativa; spec active-cloud §4.3): o item `conversation` traz `cloudReserve`.
+    Com ela ligada, a nuvem também pode pegar uma mensagem `pending` (quando o Hub não confirma a tempo, ou a pessoa
+    pede "responder pela nuvem"): **o primeiro ack vale**. Se a nuvem pegou antes, o ack do Hub dá **404**
+    `message-not-found` (descarte, nunca execute) e a mensagem chega no feed com `pending: false`. A resposta da nuvem é
+    uma `conversation_message` com `authorCloud: true` (nasce confirmada). Quando a reserva cai (o dono desliga, o
+    espaço sai da nuvem ativa), o que a nuvem confirmou sem responder volta a `pending` e é trabalho do Hub;
   - **troca de chave pelo executor:** quando o item `conversation` vier com `keyRotationRequired: true`, o Hub **não
     pode mandar mensagem nem anexo** (409 `conversation-key-rotation-required`); ele (ou qualquer participante) faz a
     troca com `POST /hub/conversations/:id/keys`, e o assunto volta a aceitar mensagens. Enquanto pendente, guarde o que
-    for enviar numa fila local.
+    for enviar numa fila local. Com `cloudReserve: true`, a troca leva também `serverWrappedKey` (a versão nova selada
+    para a chave pública do servidor, `GET /hub/cloud/server-key` com o token de Hub); sem ela 409
+    `key-rotation-mismatch` com `missingServer: true` (sem a reserva, mandar a cópia dá `unexpectedServer: true`).
 
 - `POST /hub/conversations` `{ id, spaceId, ownerUserId, state?, encryptedHeader, grants: [{ userId, wrappedKey }],
   hubWrappedKey }`: o Hub abre um assunto (o "aviso", `state` padrão `aviso`) em nome de uma pessoa com papel no Hub e
@@ -585,6 +593,7 @@ Assim nada do dono anterior chega a um dono novo.
 | `POST /hub/conversations/:id/messages/:messageId/ack` | 600/min | Hub |
 | `POST /hub/conversations/:id/attachments` e `.../attachments/:attachmentId/confirm` | 600/h (cada rota) | Hub |
 | `GET /hub/conversations/changes` (feed do executor, sondagem longa) | 1800/h | Hub |
+| `GET /hub/cloud/server-key` (pública do servidor, nuvem de reserva) | 300/min somando as demais | IP |
 | demais rotas | 300/min somando todas | IP |
 
 Estourou: 429 `too-many-requests` com `Retry-After` (segundos).

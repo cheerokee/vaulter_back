@@ -1,3 +1,4 @@
+import type { ConversationCloudReserve } from './conversation-cloud-reserve.js';
 import type { AuditLog } from '../../organizations/application/audit-log.js';
 import { newId } from '../../shared/domain/id.js';
 import type { ConversationScope } from '../domain/conversation-actor.js';
@@ -38,6 +39,8 @@ function conversation(participants: string[], executorHubId: string | null) {
       encryptedHeader: blob(),
       headerKeyVersion: 1,
       movedFromConversationId: null,
+      cloudReserve: false,
+      cloudReserveDeclined: false,
       participantUserIds: participants,
       createdAt: t0,
       deletedAt: null,
@@ -80,9 +83,15 @@ describe('ConversationDeparture', () => {
   const audit = { record: vi.fn() };
   const messages = {
     requeueAckedBy: vi.fn(
-      async (_s: ConversationScope, _id: string, hub: string) => {
-        calls.push(`requeueAckedBy:${hub === HUB ? 'HUB' : hub}`);
-        return 1;
+      async (
+        _s: ConversationScope,
+        _id: string,
+        by: { kind: 'hub'; hubId: string } | { kind: 'cloud' },
+      ) => {
+        calls.push(
+          `requeueAckedBy:${by.kind === 'hub' && by.hubId === HUB ? 'HUB' : by.kind}`,
+        );
+        return [] as string[];
       },
     ),
   };
@@ -93,6 +102,10 @@ describe('ConversationDeparture', () => {
     as<ConversationExecutors>(executors),
     as<AuditLog>(audit),
     as<ConversationMessageRepository>(messages),
+    as<ConversationCloudReserve>({
+      requeued: vi.fn(),
+      dropServerSide: vi.fn(),
+    }),
   );
   const scope: ConversationScope = {
     organizationId: ORG,

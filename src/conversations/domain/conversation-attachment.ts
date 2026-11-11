@@ -4,6 +4,9 @@ import {
 } from '../../shared/domain/errors.js';
 import { Entity } from '../../shared/domain/entity.js';
 import { sameActor, type ConversationActor } from './conversation-actor.js';
+
+/** A person or the executor Hub: the cloud (reserve executor) never uploads attachments. */
+export type AttachmentUploader = Exclude<ConversationActor, { kind: 'cloud' }>;
 import { attachmentTooLarge } from './conversation-errors.js';
 import { MAX_ATTACHMENT_BYTES } from './conversation-limits.js';
 import { assertDeviceId, assertKeyVersion } from './device-id.js';
@@ -17,7 +20,7 @@ export type ConversationAttachmentProps = {
   spaceId: string;
   conversationId: string;
   /** Who asked for the upload: only they confirm it (another one: 404 `attachment-not-found`). */
-  uploader: ConversationActor;
+  uploader: AttachmentUploader;
   messageId: string | null;
   keyVersion: number;
   sizeBytes: number;
@@ -71,7 +74,7 @@ export class ConversationAttachment extends Entity<ConversationAttachmentProps> 
     organizationId: string;
     spaceId: string;
     conversationId: string;
-    uploader: ConversationActor;
+    uploader: AttachmentUploader;
     messageId: string | null;
     keyVersion: number;
     sizeBytes: number;
@@ -178,7 +181,7 @@ export class ConversationAttachment extends Entity<ConversationAttachmentProps> 
   get conversationId(): string {
     return this.props.conversationId;
   }
-  get uploader(): ConversationActor {
+  get uploader(): AttachmentUploader {
     return this.props.uploader;
   }
   get messageId(): string | null {

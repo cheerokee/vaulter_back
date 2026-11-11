@@ -2,6 +2,7 @@ import type { AuditLog } from '../../organizations/application/audit-log.js';
 import type { OrganizationDirectory } from '../../organizations/application/organization-directory.js';
 import type { OrganizationAccess } from '../../organizations/application/organization-access.js';
 import type { JobQueue } from '../../shared/application/job-queue.js';
+import { SpaceCloudDeactivatedHooks } from '../../shared/application/space-cloud-deactivated-hooks.js';
 import type { SpaceKeyRotatedHooks } from '../../shared/application/space-key-rotated-hooks.js';
 import type { UnitOfWork } from '../../shared/infra/db/unit-of-work.js';
 import type { SpaceCloud } from '../../spaces/application/space-cloud.js';
@@ -452,6 +453,7 @@ describe('ActivateSpaceCloudUseCase', () => {
 });
 
 describe('DeactivateSpaceCloudUseCase', () => {
+  const deactivatedHooks = new SpaceCloudDeactivatedHooks();
   const uc = (k: ReturnType<typeof setup>) =>
     new DeactivateSpaceCloudUseCase(
       k.deps.access,
@@ -463,6 +465,7 @@ describe('DeactivateSpaceCloudUseCase', () => {
       k.deps.uow,
       k.deps.files,
       k.deps.chunks,
+      deactivatedHooks,
     );
 
   it('deletes the server copies, chunks and files for real, cancels waiting jobs, ends the cycle and goes back to encrypted_backup', async () => {
@@ -498,6 +501,33 @@ describe('DeactivateSpaceCloudUseCase', () => {
         jobsCancelled: 1,
       },
     });
+  });
+
+  it('runs the space-cloud-deactivated hooks (conversations drop their cloud reserve) after going back to encrypted_backup', async () => {
+    const k = setup();
+    const active = authorizedActivation();
+    active.activate(MANAGER, new Date());
+    k.liveOnce(active);
+    const seen = vi.fn(async () => {
+      k.trace.push('hook');
+    });
+    deactivatedHooks.register({ name: 'test', onSpaceCloudDeactivated: seen });
+    try {
+      await uc(k).execute(actor(ADMIN), SPACE);
+    } finally {
+      deactivatedHooks.unregister('test');
+    }
+    expect(k.trace.slice(-2)).toEqual([
+      'spaceCloud.markEncryptedBackup',
+      'hook',
+    ]);
+    expect(seen).toHaveBeenCalledWith(
+      expect.objectContaining({
+        organizationId: ORG,
+        spaceId: SPACE,
+        actorUserId: ADMIN,
+      }),
+    );
   });
 
   it('nothing on: idempotent, writes and audits nothing', async () => {

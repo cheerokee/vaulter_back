@@ -124,6 +124,22 @@ Visão geral: o assunto é dado do espaço, cifrado **no celular** com uma chave
   `POST /spaces/:spaceId/conversations/:id/trash/empty` `{ currentAuthProof }` -> `{ purgedMessages,
   purgedAttachments, purgedBytes, remainingAttachments }`; repetir enquanto `remainingAttachments > 0` (cada volta gasta
   o orçamento de reautenticação, 5 por 15 min). Sem esvaziar, a retenção tira o conteúdo apagado depois de 30 dias.
+- [ ] **Nuvem de reserva nos assuntos** (espaço com `cloud.mode = 'active_cloud'`; spec active-cloud §4.3):
+  - **Criar** um assunto num espaço em nuvem ativa exige também a versão 1 trancada para a chave do servidor
+    (`serverWrappedKey`, selada para `GET /cloud/server-key`); sem ela 422 `cloud-reserve-copy-required` (fora da nuvem
+    ativa, mandar a cópia é 422 `cloud-reserve-unavailable`). O assunto nasce com `cloudReserve: true`.
+  - **Assunto que já existia** quando o espaço passou a nuvem ativa (`cloudReserve: false` e `cloudReserveDeclined:
+    false`): ao abrir, o app liga a reserva com `PUT /spaces/:spaceId/conversations/:id/cloud-reserve`
+    `{ enabled: true, serverGrants: [{ keyVersion, wrappedKey }] }` (todas as versões; 409 `key-versions-mismatch`).
+    Qualquer participante liga, menos depois de o dono desligar (`cloudReserveDeclined: true`: só o dono; os outros 403).
+  - **O dono desliga** por assunto (`{ enabled: false }`): explicar que o servidor perde a cópia da chave e que a chave
+    do assunto precisa ser trocada (`keyRotationRequired` vira `true`).
+  - **Troca de chave** de assunto com `cloudReserve: true`: mandar também `serverWrappedKey` (a versão nova selada para
+    `GET /cloud/server-key`); sem ela 409 `key-rotation-mismatch` com `missingServer: true` (sobrando, `unexpectedServer`).
+  - Mensagem com `authorCloud: true` foi escrita pela nuvem (mostrar "respondido pela nuvem"). A cópia do servidor nunca
+    chega no feed (o feed só traz as cópias de quem lê); `cloudReserve`/`cloudReserveDeclined` vêm no item
+    `conversation` do feed e em `GET .../conversations/:id`.
+  - Espaço desligado da nuvem: todo assunto perde a reserva (`cloudReserve: false`, troca de chave pendente).
 - [ ] **Lixeira do espaço × assuntos:** `storage.trashBytes` de `GET /spaces/:id` **inclui** a lixeira dos assuntos
   (mensagens e anexos apagados nos últimos 30 dias), que o esvaziar do Gestor **não** alcança (só o dono de cada
   assunto, rota acima, ou a retenção em 30 dias). Ao avisar o Gestor de lixeira cheia, dizer que parte pode ser de

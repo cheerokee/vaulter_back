@@ -35,6 +35,7 @@ import { LeaveConversationUseCase } from '../../application/leave-conversation.u
 import { RotateConversationKeyUseCase } from '../../application/rotate-conversation-key.use-case.js';
 import { ReplaceConversationHeaderUseCase } from '../../application/replace-conversation-header.use-case.js';
 import { SendMessageUseCase } from '../../application/send-message.use-case.js';
+import { SetCloudReserveUseCase } from '../../application/set-cloud-reserve.use-case.js';
 import {
   ShareConversationUseCase,
   type ShareMode,
@@ -48,6 +49,7 @@ import {
   RequestAttachmentDto,
   RotateConversationKeyDto,
   SendMessageDto,
+  SetCloudReserveDto,
   ShareConversationDto,
   StateDto,
   messageInput,
@@ -87,6 +89,7 @@ export class SpaceConversationsController {
     private readonly moving: MoveConversationUseCase,
     private readonly emptyingTrash: EmptyConversationTrashUseCase,
     private readonly header: ReplaceConversationHeaderUseCase,
+    private readonly cloudReserve: SetCloudReserveUseCase,
   ) {}
 
   /** 201 when created; 200 with the same conversation when the same id is sent again (retry after a network error). */
@@ -113,6 +116,7 @@ export class SpaceConversationsController {
             conversationId: dto.movedFrom.conversationId,
           }
         : null,
+      serverWrappedKey: dto.serverWrappedKey ?? null,
     });
     res.status(created ? 201 : 200);
     return conversationResponse(view);
@@ -236,7 +240,32 @@ export class SpaceConversationsController {
     );
   }
 
-  /** New key version for exactly the live participants and the executor. */
+  /**
+   * The cloud as reserve executor (spec active-cloud §4.3): on with every version sealed for the server key (any
+   * participant, unless the owner switched it off; the space must be in the active cloud), off by the owner (the server
+   * copies are deleted and the key must rotate).
+   */
+  @perUser(RATE_LIMITS.conversationChange)
+  @ApiBearerAuth()
+  @Put(':id/cloud-reserve')
+  async doCloudReserve(
+    @CurrentAuth() auth: AuthContext,
+    @Param('spaceId', uuidPipe('spaceId')) spaceId: string,
+    @Param('id', uuidPipe('id')) id: string,
+    @Body() dto: SetCloudReserveDto,
+  ) {
+    return conversationResponse(
+      await this.cloudReserve.execute(auth, spaceId, id, {
+        enabled: dto.enabled,
+        serverGrants: (dto.serverGrants ?? []).map((g) => ({
+          keyVersion: g.keyVersion,
+          wrappedKey: g.wrappedKey,
+        })),
+      }),
+    );
+  }
+
+  /** New key version for exactly the live participants and the executor (and the server key, with the reserve). */
   @perUser(RATE_LIMITS.conversationKeyRotation)
   @ApiBearerAuth()
   @Post(':id/keys')

@@ -86,11 +86,13 @@ describe('ConversationMessage', () => {
     const m = make();
     const later = new Date(now.getTime() + 5000);
     expect(m.ackedByHubId).toBeNull();
-    expect(m.ack(later, 'hub-a')).toBe(true);
+    expect(m.ack(later, { kind: 'hub', hubId: 'hub-a' })).toBe(true);
     expect(m.pending).toBe(false);
     expect(m.ackedAt).toBe(later);
     expect(m.ackedByHubId).toBe('hub-a');
-    expect(m.ack(new Date(later.getTime() + 1), 'hub-b')).toBe(false);
+    expect(
+      m.ack(new Date(later.getTime() + 1), { kind: 'hub', hubId: 'hub-b' }),
+    ).toBe(false);
     expect(m.ackedAt).toBe(later);
     expect(m.ackedByHubId).toBe('hub-a');
   });
@@ -125,5 +127,39 @@ describe('ConversationMessage', () => {
     m.purgeBody();
     expect(m.encryptedBody).toBeNull();
     expect(m.bodyBytes).toBe(100);
+  });
+});
+
+describe('ConversationMessage: the cloud (reserve executor)', () => {
+  it('its own message is born acknowledged; it acks once, never together with a hub', () => {
+    const at = new Date('2026-11-10T12:00:00.000Z');
+    const base = {
+      id: newId(),
+      organizationId: 'org',
+      conversationId: 'c',
+      keyVersion: 1,
+      encryptedBody: Buffer.alloc(60, 1).toString('base64url'),
+      replacesMessageId: null,
+      sentAt: at,
+      now: at,
+    };
+    const answer = ConversationMessage.create({
+      ...base,
+      author: { kind: 'cloud' },
+    });
+    expect(answer.authorCloud).toBe(true);
+    expect(answer.pending).toBe(false);
+    expect(answer.author).toEqual({ kind: 'cloud' });
+
+    const asked = ConversationMessage.create({
+      ...base,
+      id: newId(),
+      author: { kind: 'user', userId: newId() },
+    });
+    expect(asked.ack(at, { kind: 'cloud' })).toBe(true);
+    expect(asked.ackedByCloud).toBe(true);
+    expect(asked.ackedByHubId).toBeNull();
+    expect(asked.ack(at, { kind: 'hub', hubId: newId() })).toBe(false);
+    expect(asked.ackedByHubId).toBeNull();
   });
 });

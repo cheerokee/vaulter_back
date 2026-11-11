@@ -7,6 +7,7 @@ import { ConversationParticipantRepository } from '../domain/conversation-partic
 import { ConversationRepository } from '../domain/conversation.repository.js';
 import type { Conversation } from '../domain/conversation.js';
 import { planDeparture } from '../domain/participation-rules.js';
+import { ConversationCloudReserve } from './conversation-cloud-reserve.js';
 import { ConversationExecutors } from './conversation-executors.js';
 
 export type DepartureResult = {
@@ -23,7 +24,9 @@ export type DepartureResult = {
 // - dono sai e há outros: o participante mais antigo vira dono;
 // - quem sai é o dono do Hub executor: o executor sai junto (lápide nas cópias do Hub; o que ele confirmou sem
 //   responder volta a `pending`);
-// - último participante sai: lápide no assunto (privado é privado);
+// - último participante sai: lápide no assunto (privado é privado) e a nuvem de reserva cai (cópias do servidor
+//   apagadas);
+// - o que o Hub que sai confirmou sem responder volta a `pending` e, com a reserva ligada, vira sinal para a nuvem;
 // - sempre: troca de chave pendente.
 @Injectable()
 export class ConversationDeparture {
@@ -34,6 +37,7 @@ export class ConversationDeparture {
     private readonly executors: ConversationExecutors,
     private readonly audit: AuditLog,
     private readonly messages: ConversationMessageRepository,
+    private readonly reserve: ConversationCloudReserve,
   ) {}
 
   async depart(
@@ -58,14 +62,25 @@ export class ConversationDeparture {
     if (plan.newOwnerUserId)
       conversation.transferOwnership(plan.newOwnerUserId);
     conversation.markRotationRequired();
+    // A tombstone takes the cloud reserve with it (its server copies go below, before the participation tombstone).
+    const hadCloudReserve = conversation.cloudReserve;
     if (plan.conversationEnds) conversation.tombstone(input.now);
     await this.conversations.save(scope, conversation);
+    if (hadCloudReserve && !conversation.cloudReserve) {
+      await this.reserve.dropServerSide(scope, conversation);
+    }
     if (lostExecutorHubId) {
       await this.grants.removeFor(scope, id, {
         kind: 'hub',
         hubId: lostExecutorHubId,
       });
-      await this.messages.requeueAckedBy(scope, id, lostExecutorHubId);
+      await this.reserve.requeued(
+        conversation,
+        await this.messages.requeueAckedBy(scope, id, {
+          kind: 'hub',
+          hubId: lostExecutorHubId,
+        }),
+      );
       await this.audit.record({
         organizationId: conversation.organizationId,
         userId: input.actorId,

@@ -1,3 +1,5 @@
+import type { ConversationCloudReserve } from './conversation-cloud-reserve.js';
+import type { SpaceCloud } from '../../spaces/application/space-cloud.js';
 import type { HubAuthContext } from '../../shared/application/hub-auth-context.js';
 import {
   ConflictError,
@@ -50,6 +52,8 @@ const conversation = (over: { keyRotationRequired?: boolean } = {}) =>
       encryptedHeader: blob(),
       headerKeyVersion: 1,
       movedFromConversationId: null,
+      cloudReserve: false,
+      cloudReserveDeclined: false,
       participantUserIds: [ANA, BIA].sort(),
       createdAt: new Date(),
       deletedAt: null,
@@ -166,6 +170,8 @@ describe('message use cases', () => {
     as<ConversationRepository>(conversations),
     as<ConversationMessageRepository>(messages),
     as<UnitOfWork>(uow),
+    as<SpaceCloud>({}),
+    as<ConversationCloudReserve>({ signal: vi.fn() }),
   );
   const ack = new AckMessageUseCase(
     as<ConversationAccess>(access),

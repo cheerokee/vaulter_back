@@ -632,7 +632,7 @@ describe('conversations: tables and row-level security (e2e, app role)', () => {
     ).toEqual([s.fromAna.id]);
     const m = (await messages.findById(asHub, s.fromAna.id))!;
     expect(m.isSameSubmission(s.fromAna)).toBe(true);
-    m.ack(later(50), s.hub);
+    m.ack(later(50), { kind: 'hub', hubId: s.hub });
     await messages.save(asHub, m);
     expect(await messages.listPending(asHub, s.conversationId)).toEqual([]);
     expect((await messages.findById(asAna, s.fromAna.id))?.ackedAt).toEqual(
