@@ -1,4 +1,4 @@
-import { Injectable, type OnModuleDestroy } from '@nestjs/common';
+import { Injectable, type OnApplicationShutdown } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { DecryptCommand, EncryptCommand, KMSClient } from '@aws-sdk/client-kms';
 
@@ -15,7 +15,7 @@ export interface EnvelopedSecret {
  * key). Plaintext never leaves this class except as the returned buffer.
  */
 @Injectable()
-export class KmsKeyEnvelope implements OnModuleDestroy {
+export class KmsKeyEnvelope implements OnApplicationShutdown {
   private readonly client: KMSClient;
   private readonly keyId: string;
 
@@ -34,7 +34,8 @@ export class KmsKeyEnvelope implements OnModuleDestroy {
     });
   }
 
-  onModuleDestroy(): void {
+  // Last phase of the shutdown: job handlers (drained in the destroy phase) may still open keys until then.
+  onApplicationShutdown(): void {
     this.client.destroy();
   }
 

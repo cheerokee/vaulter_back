@@ -6,6 +6,7 @@ import { KmsKeyEnvelope } from './kms-key-envelope.js';
 import {
   KmsServerKeyring,
   SERVER_KEY_CONTEXT_PURPOSE,
+  SERVER_KEY_CURRENT_TTL_MS,
 } from './kms-server-keyring.js';
 
 // Fake KMS: "ciphertext" = base64(xor(plaintext, 0x5a) ‖ context json), so the test can see what was sealed.
@@ -46,6 +47,31 @@ function memoryStore(retired: StoredServerKey[] = []) {
       return current;
     },
   } as unknown as ServerKeyTypeormStore & { stored: StoredServerKey | null };
+}
+
+/** The table shared by several instances: rows with `retired`, like cloud_server_keys. */
+function sharedTable() {
+  const rows: (StoredServerKey & { retired: boolean })[] = [];
+  const store = () =>
+    ({
+      currentOrCreate: vi.fn(
+        async (generate: () => Promise<StoredServerKey>) => {
+          const live = rows.find((r) => !r.retired);
+          if (live) return live;
+          const created = { ...(await generate()), retired: false };
+          rows.push(created);
+          return created;
+        },
+      ),
+      retired: vi.fn(async () => rows.filter((r) => r.retired).reverse()),
+    }) as unknown as ServerKeyTypeormStore;
+  return {
+    store,
+    retireCurrent: () => {
+      for (const r of rows) r.retired = true;
+    },
+    rows,
+  };
 }
 
 const seal = (key: Uint8Array, publicKey: Uint8Array) =>
@@ -179,7 +205,60 @@ describe('KmsServerKeyring', () => {
     const keyring = new KmsServerKeyring(memoryStore(), envelope);
     await keyring.publicKey();
     expect(opened!.some((b) => b !== 0)).toBe(true);
-    await keyring.onModuleDestroy();
+    await keyring.onApplicationShutdown();
     expect(opened!.every((b) => b === 0)).toBe(true);
+  });
+
+  describe('rotation with several running instances', () => {
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it('every instance moves to the new key within the TTL and opens copies sealed to it at once', async () => {
+      vi.useFakeTimers({ toFake: ['Date'] });
+      const table = sharedTable();
+      const envelope = fakeEnvelope();
+      const a = new KmsServerKeyring(table.store(), envelope);
+      const b = new KmsServerKeyring(table.store(), envelope);
+      const k1 = await a.publicKey();
+      expect(await b.publicKey()).toBe(k1);
+      const oldCopyKey = sodium.randombytes_buf(32);
+      const oldCopy = seal(oldCopyKey, Buffer.from(k1, 'base64url'));
+
+      table.retireCurrent();
+      // Inside the TTL both still hand out K1 (bounded staleness).
+      expect(await a.publicKey()).toBe(k1);
+      vi.advanceTimersByTime(SERVER_KEY_CURRENT_TTL_MS);
+      // B's TTL expired: it creates K2 (the only current row).
+      const k2 = await b.publicKey();
+      expect(k2).not.toBe(k1);
+      expect(table.rows.filter((r) => !r.retired)).toHaveLength(1);
+
+      // A has not refreshed yet, but a copy sealed to K2 opens on it right away (miss -> reload).
+      const newKey = sodium.randombytes_buf(32);
+      const newCopy = seal(newKey, Buffer.from(k2, 'base64url'));
+      expect(Buffer.from(await a.openSealed(newCopy))).toEqual(
+        Buffer.from(newKey),
+      );
+      // And A now hands out K2; copies sealed to the retired K1 keep opening everywhere.
+      expect(await a.publicKey()).toBe(k2);
+      for (const keyring of [a, b]) {
+        expect(Buffer.from(await keyring.openSealed(oldCopy))).toEqual(
+          Buffer.from(oldCopyKey),
+        );
+      }
+      // Each private key was opened by KMS at most once per instance.
+      expect(envelope.open).toHaveBeenCalledTimes(4);
+    });
+
+    it('a copy for an unknown key still fails with server-copy-invalid after the reload', async () => {
+      const table = sharedTable();
+      const keyring = new KmsServerKeyring(table.store(), fakeEnvelope());
+      await keyring.publicKey();
+      const other = sodium.crypto_box_keypair();
+      await expect(
+        keyring.openSealed(seal(sodium.randombytes_buf(32), other.publicKey)),
+      ).rejects.toMatchObject({ code: 'server-copy-invalid' });
+    });
   });
 });

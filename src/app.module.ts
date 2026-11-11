@@ -15,6 +15,7 @@ import { StorageModule } from './storage/storage.module.js';
 import { ConversationsModule } from './conversations/conversations.module.js';
 import { CloudModule } from './cloud/cloud.module.js';
 import { JobsModule } from './shared/infra/jobs/jobs.module.js';
+import { JobQueueDrain } from './shared/infra/jobs/job-queue-drain.js';
 import { pinoHttpOptions } from './shared/infra/observability/logger.config.js';
 import { ThrottlingModule } from './shared/infra/http/throttling.module.js';
 import { validateEnv } from './shared/infra/config/env.validation.js';
@@ -46,6 +47,7 @@ import { validateEnv } from './shared/infra/config/env.validation.js';
     ThrottlingModule,
   ],
   controllers: [AppController],
-  providers: [AppService],
+  // JobQueueDrain: first destroy hook of the app (root module), stops the job workers before anything else is released.
+  providers: [AppService, JobQueueDrain],
 })
 export class AppModule {}

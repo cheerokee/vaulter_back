@@ -167,10 +167,17 @@ couber (spec de contas, §12).
   resto) e falha de tarefa guardada/logada só pelo tipo do erro (nunca a mensagem). Dentro de um `uow.run`, `send` e
   `cancelQueued` entram na transação (a tarefa só existe se ela confirmar). Pelo menos uma vez: handler idempotente, que
   reconfere sob trava. `send` com `startAfterSeconds` (atraso) e `singletonKey` (uma tarefa à espera por chave; enviar
-  de novo substitui a que espera); `cancelQueued(nome, { spaceId })` apaga as que ainda esperam. Workers (busca,
+  de novo substitui a que espera); `cancelQueued(nome, { spaceId })` apaga as que ainda esperam, num DELETE só guardado
+  pelo estado (nunca uma em execução). Workers (busca,
   manutenção, cron) só com `JOB_WORKERS_ENABLED` (padrão `true`); **os e2e rodam com `false`** (enfileirar funciona,
   nada roda sozinho) e o teste que precisa liga com `createTestApp({ env: { JOB_WORKERS_ENABLED: 'true' } })`;
-  `resetDatabase` apaga `pgboss.job`. Para no `onApplicationShutdown` (gracioso, 20 s). e2e em `test/shared/jobs.e2e-spec.ts`.
+  `resetDatabase` apaga `pgboss.job`. **Desligamento:** os workers param (e as tarefas em execução terminam, gracioso,
+  20 s) **antes** de qualquer outro gancho de destruição: `JobQueueDrain`, provider do `AppModule` (módulo raiz, o
+  primeiro na fase `onModuleDestroy`; módulos globais vêm por último dentro de cada fase). O que uma tarefa usa e
+  precisa liberar recursos libera em `onApplicationShutdown` quando possível (chave do servidor, cliente KMS). O pool do
+  pg-boss é separado do TypeORM: `send` dentro de um `uow.run` usa a conexão da transação, mas a criação da fila (uma vez
+  por processo) usa o pool do pg-boss (exceção aceita à regra de segunda conexão: pools diferentes). Versão do pg-boss
+  fixada exata no `package.json` (a migration gera o SQL do pacote instalado). e2e em `test/shared/jobs.e2e-spec.ts`.
 - **AWS:** região **`us-east-1` (Virgínia)** — o backend fica perto dos serviços externos (Anthropic, OpenRouter,
   Sentry), então só a ida app → backend cruza o continente; mais barata e com todos os serviços. LGPD permite
   transferência internacional com salvaguardas (o backup é cifrado e ilegível para nós). Região é
@@ -1100,11 +1107,14 @@ registra a fonte `conversations`), `hubs` (`HubDirectory`: `ownerOf`,
   par X25519 numa linha de `cloud_server_keys` (dado do servidor: sem organização nem RLS), privada **só cifrada pelo
   KMS** (`CLOUD_KMS_KEY_ID`, contexto `{ purpose: 'server-x25519-private-key-v1', publicKey }`), gerada no primeiro uso
   (advisory lock entre instâncias), aberta em memória num campo privado, conferida contra a pública e apagada
-  (`memzero`) no desligamento. KMS que recusa = erro, **nunca** um par novo. O runtime só pode mudar `retired_at`.
+  (`memzero`) no `onApplicationShutdown`. KMS que recusa = erro, **nunca** um par novo. O runtime só pode mudar `retired_at`.
   `openSealed(copy)` abre `0x01 ‖ crypto_box_seal` (108 chars; atual, depois as aposentadas) e devolve os 32 bytes (quem
-  chama apaga); malformada ou que não abre: o mesmo 422 `server-copy-invalid`. **Rotação:** material da chave KMS =
-  rotação automática do KMS (transparente); par novo = `retired_at` na atual (o próximo uso cria outro), as cópias
-  antigas continuam abrindo até a nuvem reselar para a pública nova. `GET /cloud/server-key` -> `{ publicKey }` (qualquer
+  chama apaga); malformada ou que não abre: o mesmo 422 `server-copy-invalid`. **Rotação** (vale com várias instâncias rodando): material
+  da chave KMS = rotação automática do KMS (transparente); par novo = `retired_at` na linha atual. Cada instância relê qual
+  é a atual a cada `SERVER_KEY_CURRENT_TTL_MS` (60 s; a primeira a reler cria o par novo, sob o advisory lock), então em
+  até 60 s todas entregam a pública nova; uma cópia que não abre com as chaves em memória relê as linhas e abre as que
+  faltam, então a cópia selada para o par novo abre na hora em qualquer instância. As cópias do par aposentado continuam
+  abrindo até a nuvem reselar para a pública nova. `GET /cloud/server-key` -> `{ publicKey }` (qualquer
   usuário autenticado). e2e em `test/cloud/` (KMS do LocalStack).
 
 ## Banco de dados (TypeORM + migrations)

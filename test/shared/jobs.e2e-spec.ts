@@ -7,6 +7,9 @@ import {
 import { DomainValidationError } from '../../src/shared/domain/errors.js';
 import { newId } from '../../src/shared/domain/id.js';
 import { UnitOfWork } from '../../src/shared/infra/db/unit-of-work.js';
+import sodium from 'libsodium-wrappers-sumo';
+import { ServerKeyring } from '../../src/cloud/application/ports/server-keyring.js';
+import { ObjectStore } from '../../src/storage/application/ports/object-store.js';
 import {
   adminDataSource,
   createTestApp,
@@ -157,5 +160,80 @@ describe('job queue (e2e, pg-boss)', () => {
     const stored = JSON.stringify(row!.output);
     expect(stored).toContain('job failed: extraction-failed');
     expect(stored).not.toContain('salário');
+  }, 30_000);
+
+  it('cancelQueued never deletes a running job, and is undone with its unit of work', async () => {
+    app = await createTestApp();
+    const queue = app.get(JobQueue);
+    const uow = app.get(UnitOfWork);
+    const spaceId = newId();
+    for (let i = 0; i < 3; i++) {
+      await queue.send('test.cancel', { spaceId, objectId: newId() });
+    }
+    // One of them is running (as a worker's fetch leaves it).
+    const admin = await adminDataSource();
+    const [running] = await jobsOf('test.cancel');
+    await admin.query(
+      `UPDATE pgboss.job SET state = 'active', started_on = now() WHERE id = $1`,
+      [running!.id],
+    );
+
+    await expect(
+      uow.run(async () => {
+        expect(await queue.cancelQueued('test.cancel', { spaceId })).toBe(2);
+        throw new Error('rollback');
+      }),
+    ).rejects.toThrow('rollback');
+    expect(await jobsOf('test.cancel')).toHaveLength(3);
+
+    expect(
+      await uow.run(() => queue.cancelQueued('test.cancel', { spaceId })),
+    ).toBe(2);
+    const left = await jobsOf('test.cancel');
+    expect(left.map((r) => [r.id, r.state])).toEqual([[running!.id, 'active']]);
+  });
+
+  it('shutdown drains running jobs before anything they use is released', async () => {
+    await sodium.ready;
+    app = await createTestApp(withWorkers);
+    const queue = app.get(JobQueue);
+    const keyring = app.get(ServerKeyring);
+    const objectStore = app.get(ObjectStore) as ObjectStore & {
+      onModuleDestroy: () => void;
+    };
+    const s3Released = vi.spyOn(objectStore, 'onModuleDestroy');
+    const spaceKey = sodium.randombytes_buf(32);
+    const copy = Buffer.concat([
+      Buffer.from([0x01]),
+      sodium.crypto_box_seal(
+        spaceKey,
+        Buffer.from(await keyring.publicKey(), 'base64url'),
+      ),
+    ]).toString('base64url');
+
+    let started!: () => void;
+    const handlerStarted = new Promise<void>((r) => (started = r));
+    let closing!: () => void;
+    const closeStarted = new Promise<void>((r) => (closing = r));
+    const result: { opened?: boolean; s3ReleasedFirst?: boolean } = {};
+    await queue.work('test.drain', async () => {
+      started();
+      await closeStarted;
+      // The application is closing: keep working a little, then use the key and look at the S3 client.
+      await new Promise((r) => setTimeout(r, 300));
+      const key = await keyring.openSealed(copy);
+      result.opened = Buffer.from(key).equals(Buffer.from(spaceKey));
+      result.s3ReleasedFirst = s3Released.mock.calls.length > 0;
+    });
+    await queue.send('test.drain', { spaceId: newId() });
+    await handlerStarted;
+
+    const closed = app.close();
+    closing();
+    await closed;
+    app = undefined;
+    expect(result).toEqual({ opened: true, s3ReleasedFirst: false });
+    expect(s3Released).toHaveBeenCalledTimes(1);
+    expect((await jobsOf('test.drain'))[0]?.state).toBe('completed');
   }, 30_000);
 });

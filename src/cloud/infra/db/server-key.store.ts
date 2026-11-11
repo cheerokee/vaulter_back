@@ -24,6 +24,9 @@ export class ServerKeyTypeormStore {
   /**
    * The current key, or the one `generate` produces when there is none (in a transaction holding the generation
    * lock; the check is repeated under it). `generate` runs at most once per database lifetime in normal operation.
+   * `generate` calls KMS inside the transaction, holding the lock and a connection: a documented exception to
+   * "external calls after the run", because the row must be created under the lock that keeps a single current key;
+   * it happens once per key (first boot, rotation) and KMS answers in milliseconds.
    */
   async currentOrCreate(
     generate: () => Promise<StoredServerKey>,

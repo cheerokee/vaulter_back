@@ -109,4 +109,38 @@ describe('cloud server key (e2e, KMS on LocalStack)', () => {
     )) as [{ retire: boolean }];
     expect(retire).toBe(true);
   });
+
+  it('rotation: after retiring the key, a new instance hands out a new one that the running instance opens', async () => {
+    const running = app.get(ServerKeyring);
+    const k1 = await running.publicKey();
+    const old = sodium.randombytes_buf(32);
+    const oldCopy = sealForServer(old, k1);
+    const admin = await adminDataSource();
+    await admin.query(
+      `UPDATE cloud_server_keys SET retired_at = now() WHERE retired_at IS NULL`,
+    );
+
+    const other = await createTestApp();
+    try {
+      const k2 = await other.get(ServerKeyring).publicKey();
+      expect(k2).not.toBe(k1);
+      const fresh = sodium.randombytes_buf(32);
+      // The running instance has K1 cached as current, yet opens a copy sealed to K2 (reload on miss)...
+      expect(
+        Buffer.from(await running.openSealed(sealForServer(fresh, k2))),
+      ).toEqual(Buffer.from(fresh));
+      // ...and both still open copies sealed to the retired K1.
+      for (const keyring of [running, other.get(ServerKeyring)]) {
+        expect(Buffer.from(await keyring.openSealed(oldCopy))).toEqual(
+          Buffer.from(old),
+        );
+      }
+      const rows: { n: number }[] = await admin.query(
+        `SELECT count(*)::int AS n FROM cloud_server_keys WHERE retired_at IS NULL`,
+      );
+      expect(rows[0]!.n).toBe(1);
+    } finally {
+      await other.close();
+    }
+  }, 60_000);
 });

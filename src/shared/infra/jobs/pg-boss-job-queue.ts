@@ -1,7 +1,7 @@
 import {
   Injectable,
   Logger,
-  type OnApplicationShutdown,
+  type OnModuleDestroy,
   type OnModuleInit,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
@@ -49,13 +49,19 @@ const STOP_TIMEOUT_MS = 20_000;
  * migrations (owner login), so pg-boss starts with `migrate: false` and refuses to start against a schema of another
  * version. Workers (`work` fetching, maintenance and cron) run only with `JOB_WORKERS_ENABLED` (default true; the
  * e2e set it to false and a spec opts in with `createTestApp({ env: { JOB_WORKERS_ENABLED: 'true' } })`). `send`
- * works either way. Started in `onModuleInit` (a wrong schema fails the boot), stopped in `onApplicationShutdown`
- * (after HTTP stops accepting: `enableShutdownHooks`).
+ * works either way. Started in `onModuleInit` (a wrong schema fails the boot).
+ *
+ * **Shutdown:** workers must stop (and running handlers drain, graceful, 20 s) before ANY provider a handler may use
+ * releases anything. Nest runs destroy -> beforeShutdown -> shutdown, and inside a phase the global modules (this one)
+ * come LAST; so `JobQueueDrain`, a provider of the ROOT module (`AppModule`, first in the destroy phase), calls `stop`
+ * in its `onModuleDestroy`, before every other `onModuleDestroy`. `onModuleDestroy` here is only the fallback for a
+ * context without `JobQueueDrain`. Providers handlers use still release in `onApplicationShutdown` where possible
+ * (server key wipe, KMS and S3 clients). Fixed by test/shared/jobs.e2e-spec.ts ("shutdown drains ...").
  */
 @Injectable()
 export class PgBossJobQueue
   extends JobQueue
-  implements OnModuleInit, OnApplicationShutdown
+  implements OnModuleInit, OnModuleDestroy
 {
   private readonly logger = new Logger(PgBossJobQueue.name);
   private readonly queues = new Map<string, Promise<void>>();
@@ -64,6 +70,7 @@ export class PgBossJobQueue
   private resolveReady!: (boss: PgBoss) => void;
   private boss: PgBoss | undefined;
   private workersEnabled = false;
+  private stopped: Promise<void> | undefined;
 
   constructor(
     private readonly config: ConfigService,
@@ -118,11 +125,20 @@ export class PgBossJobQueue
     }
   }
 
-  async onApplicationShutdown(): Promise<void> {
-    const boss = this.boss;
-    if (!boss) return;
-    this.boss = undefined;
-    await boss.stop({ graceful: true, close: true, timeout: STOP_TIMEOUT_MS });
+  async onModuleDestroy(): Promise<void> {
+    await this.stop();
+  }
+
+  /** Stops fetching and waits for running handlers (idempotent). After it, `send` and `work` are not available. */
+  stop(): Promise<void> {
+    if (!this.stopped) {
+      const boss = this.boss;
+      this.boss = undefined;
+      this.stopped = boss
+        ? boss.stop({ graceful: true, close: true, timeout: STOP_TIMEOUT_MS })
+        : Promise.resolve();
+    }
+    return this.stopped;
   }
 
   async send<P extends JobPayload>(
@@ -169,28 +185,21 @@ export class PgBossJobQueue
     assertQueueName(name);
     const data = { ...assertIdsOnlyPayload(match) };
     const boss = await this.ready;
-    await this.ensureQueue(boss, name);
-    const db = this.transactionDb();
-    let deleted = 0;
-    // Pages until nothing waiting matches; a page of ids deleted per call.
-    for (;;) {
-      const jobs = await boss.findJobs(name, {
-        data,
-        queued: true,
-        limit: 1000,
-        db,
-      });
-      if (jobs.length === 0) return deleted;
-      const res = await boss.deleteJob(
-        name,
-        jobs.map((j) => j.id),
-        { db },
-      );
-      // Typed as `{}` by pg-boss; the runtime value carries the count (mapCommandResponse).
-      const affected = (res as { affected?: number }).affected ?? 0;
-      deleted += affected;
-      if (affected === 0) return deleted;
-    }
+    const db = this.transactionDb() ?? boss.getDb();
+    // One statement guarded by the state, not pg-boss findJobs + deleteJob (delete by id, without a state check): a
+    // job a worker fetched between the two would be deleted while running. A row the fetch is turning `active` is
+    // locked; this DELETE waits for it and re-checks the predicate on the new row (READ COMMITTED), so it skips it.
+    // Only `created`/`retry` rows go, which pg-boss's retained counters never include.
+    const { rows } = await db.executeSql(
+      `WITH deleted AS (
+         DELETE FROM ${JOB_QUEUE_SCHEMA}.job
+         WHERE name = $1 AND state < 'active' AND data @> $2::jsonb
+         RETURNING 1
+       )
+       SELECT count(*)::int AS count FROM deleted`,
+      [name, JSON.stringify(data)],
+    );
+    return (rows[0] as { count: number }).count;
   }
 
   /** Runs one job; a failure reaches pg-boss (stored in the job row) and the log only as its error type. */
