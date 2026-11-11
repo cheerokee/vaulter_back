@@ -45,11 +45,17 @@ export class CloudIndexingWorkers implements OnModuleInit, OnModuleDestroy {
       name: BACKUP_CHANGED_HOOK,
       onBackupObjectsChanged: (ctx) => this.onBackupChanged(ctx),
     });
-    await this.jobs.work<IndexSpacePayload>(INDEX_SPACE_QUEUE, (payload) =>
-      this.indexSpace.run(payload),
+    // Keyed queues (Task 7 fix round): one waiting and at most one running job per key across instances, so a file is
+    // never embedded (and paid) twice at once and `sendMany` really deduplicates the file jobs.
+    await this.jobs.work<IndexSpacePayload>(
+      INDEX_SPACE_QUEUE,
+      (payload) => this.indexSpace.run(payload),
+      { oneJobPerKey: true },
     );
-    await this.jobs.work<IndexFilePayload>(INDEX_FILE_QUEUE, (payload, job) =>
-      this.indexFile.run(payload, job.signal),
+    await this.jobs.work<IndexFilePayload>(
+      INDEX_FILE_QUEUE,
+      (payload, job) => this.indexFile.run(payload, job.signal),
+      { oneJobPerKey: true },
     );
   }
 

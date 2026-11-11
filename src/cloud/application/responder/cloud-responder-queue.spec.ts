@@ -33,10 +33,18 @@ describe('CloudResponderQueue', () => {
     expect(jobs.send).not.toHaveBeenCalled();
   });
 
+  it('a message back in the queue (requeued) gives the new executor Hub its own 30 s', async () => {
+    await queue.onPending({ ...ctx, reason: 'requeued', immediate: false });
+    expect(jobs.sendMany).toHaveBeenCalledTimes(1);
+    expect(jobs.send).not.toHaveBeenCalled();
+    await queue.onPending({ ...ctx, reason: 'requeued', immediate: true });
+    expect(jobs.send).toHaveBeenCalledTimes(1);
+  });
+
   it('"responder pela nuvem" (or any other reason) starts now, moving a waiting job', async () => {
     for (const c of [
       { reason: 'sent' as const, immediate: true },
-      { reason: 'requeued' as const, immediate: false },
+      { reason: 'reserve_enabled' as const, immediate: false },
       { reason: 'cloud_answer' as const, immediate: false },
     ]) {
       await queue.onPending({ ...ctx, ...c });

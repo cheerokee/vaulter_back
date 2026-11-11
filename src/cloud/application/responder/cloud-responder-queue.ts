@@ -15,7 +15,8 @@ export type AnswerConversationPayload = {
 const singletonKey = (conversationId: string) =>
   `conversation:${conversationId}`;
 
-// A fila das respostas da nuvem: UMA tarefa à espera por assunto (`singletonKey`), que responde as mensagens em ordem.
+// A fila das respostas da nuvem: fila com chave (`oneJobPerKey`, política `stately`): por assunto, UMA tarefa à espera e
+// no máximo UMA rodando, entre instâncias (duas execuções do mesmo assunto nunca se sobrepõem); responde em ordem.
 // Payload só com ids (`organizationId`, `spaceId`: a convenção de `CloudSpaceJobs`, desligar o espaço cancela o que
 // espera). Chamadas dentro de um unit of work entram na transação dele (o sinal do `conversations` roda na transação
 // que deixou a mensagem pendente: a tarefa só existe se ela confirmar).
@@ -24,10 +25,11 @@ export class CloudResponderQueue {
   constructor(private readonly jobs: JobQueue) {}
 
   /**
-   * A pending message in a conversation with the reserve: a person's new message waits `CLOUD_FALLBACK_AFTER_MS` for
-   * the Hub (a job already waiting keeps its earlier start); "responder pela nuvem", no executor Hub, or any other
-   * reason (requeued, reserve switched on, key rotated) looks now (moving a waiting job to now: it re-reads everything,
-   * an early look only reschedules).
+   * A pending message in a conversation with the reserve: a person's new message, or one that went back to the queue
+   * (`requeued`: a new executor Hub gets its own window), waits `CLOUD_FALLBACK_AFTER_MS` for the Hub (a job already
+   * waiting keeps the earlier start); "responder pela nuvem", no executor Hub, or another reason (reserve switched on,
+   * key rotated, cloud answer switched on) looks now (moving a waiting job to now: it re-reads everything and an early
+   * look only reschedules for when the message is due, counted from `sentAt`/`requeuedAt`).
    */
   async onPending(ctx: CloudReservePendingContext): Promise<void> {
     const payload: AnswerConversationPayload = {
@@ -35,7 +37,10 @@ export class CloudResponderQueue {
       spaceId: ctx.spaceId,
       conversationId: ctx.conversationId,
     };
-    if (ctx.reason === 'sent' && !ctx.immediate) {
+    if (
+      (ctx.reason === 'sent' || ctx.reason === 'requeued') &&
+      !ctx.immediate
+    ) {
       await this.later(payload, Math.ceil(CLOUD_FALLBACK_AFTER_MS / 1000));
       return;
     }
@@ -50,7 +55,10 @@ export class CloudResponderQueue {
     });
   }
 
-  /** Starts in `seconds`, unless a job of the conversation is already waiting (it keeps its own start). */
+  /**
+   * Starts in `seconds`. The queue is keyed (`oneJobPerKey`): a job of the conversation already waiting is not doubled,
+   * it moves to the earlier of the two starts.
+   */
   async later(
     payload: AnswerConversationPayload,
     seconds: number,

@@ -152,17 +152,18 @@ export class AnswerConversationJob {
     );
     // Out of reach (reserve off, space off, gone) or a rotation pending (the `key_rotated` signal brings it back).
     if (!read || read.conversation.keyRotationRequired) return 'stop';
+    const now = await this.clock.now();
     const step = nextResponderStep({
       messages: read.messages,
       conversationCloudAnswer: read.conversation.cloudAnswer,
       hasExecutorHub: read.conversation.executorHubId !== null,
-      now: this.clock.now(),
+      now,
     });
     if (step.kind === 'idle') return 'stop';
     if (step.kind === 'wait') {
       await this.queue.later(
         p,
-        Math.ceil((step.at.getTime() - this.clock.now().getTime()) / 1000),
+        Math.ceil((step.at.getTime() - now.getTime()) / 1000),
       );
       return 'stop';
     }
@@ -176,12 +177,12 @@ export class AnswerConversationJob {
     });
     if ('refusal' in reserved) {
       if (step.resume) {
-        // Already the cloud's (a crashed run): the notice IS its answer, so the person is not left waiting.
-        await this.sendFixed(p, read, answerIdFor(target.id), target.id, {
+        // Already the cloud's (a crashed run): the notice IS its answer, so the person is not left waiting. Not
+        // delivered (space full, no server copy...) = stop: the next signal tries once more, never a loop.
+        return this.sendFixed(p, read, answerIdFor(target.id), target.id, {
           text: BUDGET_NOTICE_TEXT,
           notice: 'ai-budget-exceeded',
         });
-        return 'continue';
       }
       // Not taken: it stays pending for the Hub. One notice per backlog (derived from the oldest pending message).
       const noticeId = budgetNoticeIdFor(target.id);
@@ -275,9 +276,18 @@ export class AnswerConversationJob {
     const out: HistoryMessage[] = [];
     let unreadable = 0;
     for (const m of slice) {
+      const author = m.authorCloud ? 'cloud' : m.authorHubId ? 'hub' : 'person';
+      // An unreadable message keeps its place (the confirmation gate's "immediately before" never skips over it).
+      const unreadableEntry = (): HistoryMessage => ({
+        id: m.id,
+        author,
+        authorUserId: m.authorUserId,
+        content: { text: '[mensagem ilegível]' },
+      });
       const key = keys.get(m.keyVersion);
       if (!key) {
         unreadable += 1;
+        out.push(unreadableEntry());
         continue;
       }
       let plaintext: Uint8Array | undefined;
@@ -294,13 +304,14 @@ export class AnswerConversationJob {
         );
         out.push({
           id: m.id,
-          author: m.authorCloud ? 'cloud' : m.authorHubId ? 'hub' : 'person',
+          author,
           authorUserId: m.authorUserId,
           content: decodeMessage(plaintext),
         });
       } catch (error) {
         if (!(error instanceof ConversationBlobOpenError)) throw error;
         unreadable += 1;
+        out.push(unreadableEntry());
       } finally {
         plaintext?.fill(0);
       }
@@ -328,7 +339,7 @@ export class AnswerConversationJob {
     const system = antaresCloudSystemPrompt({
       audience: await this.spaceCloud.audience(p.organizationId, p.spaceId),
       chunks: hits,
-      now: this.clock.now(),
+      now: await this.clock.now(),
     });
     const messages = toLlmMessages(history);
     let proposal: DocumentProposal | undefined;
@@ -375,8 +386,14 @@ export class AnswerConversationJob {
       }
       messages.push({ role: 'user', content: results });
     }
+    // A last turn with tool calls only (dropped: no more turns) still says what the tools did.
+    const fallback = recorded
+      ? `Gravei o documento "${recorded.title}" no espaço.`
+      : proposal
+        ? `Posso gravar o documento "${proposal.title}" no espaço?`
+        : ANSWER_FAILED_TEXT;
     const content: MessageContent = {
-      text: cutUtf8(text.trim() || ANSWER_FAILED_TEXT, ANSWER_TEXT_MAX_BYTES),
+      text: cutUtf8(text.trim() || fallback, ANSWER_TEXT_MAX_BYTES),
     };
     if (recorded) content.documentRecorded = recorded;
     else if (proposal) content.documentProposal = proposal;
@@ -480,7 +497,7 @@ export class AnswerConversationJob {
             title: gate.proposal.title,
             content: gate.proposal.content,
           },
-          now: this.clock.now(),
+          now: await this.clock.now(),
         });
       } catch (error) {
         if (error instanceof DomainError) {
@@ -518,22 +535,22 @@ export class AnswerConversationJob {
     );
   }
 
-  /** A fixed message of the cloud (budget notice): opens only the current key. */
+  /** A fixed message of the cloud (budget notice): opens only the current key. `continue` only when delivered. */
   private async sendFixed(
     p: AnswerConversationPayload,
     read: CloudConversationRead,
     id: string,
     answering: string | undefined,
     content: MessageContent,
-  ): Promise<void> {
+  ): Promise<StepOutcome> {
     const keys: Keys = new Map();
     try {
       const copy = read.serverKeyCopies.find(
         (c) => c.keyVersion === read.conversation.currentKeyVersion,
       );
-      if (!copy) return;
+      if (!copy) return 'stop';
       keys.set(copy.keyVersion, await this.keyring.openSealed(copy.wrappedKey));
-      await this.sendWithKeys(p, read, keys, id, answering, content);
+      return await this.sendWithKeys(p, read, keys, id, answering, content);
     } finally {
       for (const k of keys.values()) k.fill(0);
     }

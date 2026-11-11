@@ -9,6 +9,7 @@ import { ServerBackupWriter } from '../../../storage/application/server-backup-w
 import { MANIFEST_MAX_BYTES } from '../../domain/indexing-limits.js';
 import { documentObjectIdFor } from '../../domain/responder.js';
 import {
+  ManifestFormatError,
   parseSpaceManifest,
   serializeSpaceManifest,
   type ManifestFile,
@@ -17,6 +18,7 @@ import {
 import { BackupPlaintextReader } from '../indexing/backup-plaintext-reader.js';
 import { CloudIndexingQueue } from '../indexing/cloud-indexing-queue.js';
 import { SpaceKeyOpener, type SpaceKeys } from '../indexing/space-keys.js';
+import { BackupObjectOpenError } from '../ports/backup-object-opener.js';
 import { CloudCipher } from '../ports/cloud-cipher.js';
 
 /** A document the cloud records (spec active-cloud §4.3): legible, never logged. */
@@ -54,8 +56,11 @@ export function documentName(title: string): string {
 // manifesto da nuvem saem as entradas que o Hub já incorporou ao manifesto dele (passo 4 da incorporação). Depois, a
 // indexação do espaço é enfileirada para JÁ (sem a espera de 2 s): o documento entra no índice na hora.
 // Idempotente: o `fileId` já listado (no da nuvem ou no do Hub) não grava de novo. Concorrência no manifesto: a
-// gravação substitui a versão lida (`replacesVersionId`); outra gravação no meio = 409 `object-version-conflict` e o
-// job tenta de novo. A chave aberta e os textos em claro são apagados no fim.
+// gravação substitui a versão lida (`replacesVersionId`); outra gravação no meio = 409 `object-version-conflict`, que a
+// ferramenta devolve ao modelo como falha (a pessoa é avisada e pode pedir de novo; as respostas de um assunto nunca
+// rodam juntas, então isso só acontece com duas conversas gravando ao mesmo tempo). Um manifesto que não abre ou não
+// segue o contrato conta como inválido; erro de rede/S3/KMS sobe (a tarefa tenta de novo). A chave aberta e os textos em
+// claro são apagados no fim.
 @Injectable()
 export class CloudDocumentWriter {
   private readonly logger = new Logger(CloudDocumentWriter.name);
@@ -204,8 +209,14 @@ export class CloudDocumentWriter {
         MANIFEST_MAX_BYTES,
       );
       return parseSpaceManifest(plaintext, { spaceId, writer }).files;
-    } catch {
-      return 'invalid';
+    } catch (error) {
+      if (
+        error instanceof ManifestFormatError ||
+        error instanceof BackupObjectOpenError
+      ) {
+        return 'invalid';
+      }
+      throw error;
     } finally {
       plaintext?.fill(0);
     }

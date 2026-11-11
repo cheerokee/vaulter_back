@@ -35,6 +35,8 @@ export type ConversationMessageProps = {
    * away instead of waiting for the Hub (spec active-cloud §4.3). Set when sent, never changed.
    */
   cloudAnswerRequested: boolean;
+  /** When it last went back to the queue (an executor that acked it stopped being the executor); null if never. */
+  requeuedAt?: Date | null;
   sentAt: Date;
   createdAt?: Date;
   deletedAt: Date | null;
@@ -200,6 +202,9 @@ export class ConversationMessage extends Entity<ConversationMessageProps> {
   }
   get cloudAnswerRequested(): boolean {
     return this.props.cloudAnswerRequested;
+  }
+  get requeuedAt(): Date | null {
+    return this.props.requeuedAt ?? null;
   }
   get sentAt(): Date {
     return this.props.sentAt;

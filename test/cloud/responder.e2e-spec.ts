@@ -22,7 +22,10 @@ import {
   createTestApp,
   resetDatabase,
 } from '../setup/test-app.js';
-import { openMessage } from '../support/conversation-crypto.js';
+import {
+  newConversationKey,
+  openMessage,
+} from '../support/conversation-crypto.js';
 import {
   conversationsKit,
   hubRecipientOf,
@@ -45,11 +48,14 @@ import {
   simulatedHub,
 } from '../support/space-manifest.js';
 
-/** The responder's clock, moved by the spec instead of sleeping 30 s. */
-class TestClock extends ResponderClock {
+/** The responder's clock (the database's), moved by the spec instead of sleeping 30 s. */
+class TestClock {
   offsetMs = 0;
-  now(): Date {
-    return new Date(Date.now() + this.offsetMs);
+  async now(): Promise<Date> {
+    const [row] = (await (
+      await adminDataSource()
+    ).query(`SELECT clock_timestamp() AS now`)) as { now: Date }[];
+    return new Date(row!.now.getTime() + this.offsetMs);
   }
 }
 
@@ -364,6 +370,81 @@ describe(
         // Running again does nothing (answered: idempotent by the derived answer id).
         await runJob(conv.id);
         expect((await cloudMessages(olivia, conv)).length).toBe(1);
+      });
+
+      it('one waiting job per conversation: two messages and an early run never add a second job (keyed queue)', async () => {
+        const conv = await conversation(olivia, { executor: true });
+        await send(olivia, conv, 'primeira');
+        const [first] = await waitingJobs(conv.id);
+        await send(olivia, conv, 'segunda');
+        await runJob(conv.id); // early: reschedules (still the Hub's)
+        const jobs = await waitingJobs(conv.id);
+        expect(jobs).toHaveLength(1);
+        // Never postponed by the later message: still the first message's 30 s.
+        expect(jobs[0]!.delay).toBeLessThanOrEqual(first!.delay + 1);
+        const [queue] = await db<{ policy: string }>(
+          `SELECT policy FROM pgboss.queue WHERE name = 'cloud.answer-conversation'`,
+        );
+        expect(queue!.policy).toBe('stately');
+      });
+
+      it('a message requeued to a new executor Hub gets the new Hub its own 30 s (counted from the requeue, database clock)', async () => {
+        const escritorio = await h.onboard(olivia.token, 'Escritorio');
+        await hubs.link(olivia, escritorio.hubId, orgId);
+        await hubs.addSpace(olivia, escritorio.hubId, active);
+        const conv = await conversation(olivia, { executor: true });
+        const question = await send(olivia, conv, 'o Hub da casa pegou esta');
+        await expectStatus(k.hubAck(casaToken, conv.id, question), 200);
+        await new Promise((r) => setTimeout(r, 3_000));
+        // The owner moves the conversation to the other Hub: the message goes back to the queue (and the key rotates).
+        await expectStatus(
+          k.changeExecutor(
+            olivia,
+            active,
+            conv.id,
+            hubRecipientOf(escritorio),
+            conv.keys,
+          ),
+          200,
+        );
+        const key2 = await newConversationKey();
+        await expectStatus(
+          k.rotate(
+            olivia,
+            active,
+            conv.id,
+            await k.rotationBody(
+              2,
+              key2,
+              [recipientOf(olivia)],
+              [hubRecipientOf(escritorio)],
+              serverPk,
+            ),
+          ),
+          200,
+        );
+        const keys = [...conv.keys, key2];
+        const [row] = await db<{ sent_at: Date; requeued_at: Date; now: Date }>(
+          `SELECT sent_at, requeued_at, clock_timestamp() AS now FROM conversation_messages WHERE id = $1`,
+          [question],
+        );
+        expect(row!.requeued_at.getTime()).toBeGreaterThan(
+          row!.sent_at.getTime() + 2_500,
+        );
+        // 29 s after the requeue (already > 30 s after sentAt): still the new Hub's.
+        clock.offsetMs =
+          row!.requeued_at.getTime() + 29_000 - row!.now.getTime();
+        await runJob(conv.id);
+        expect(await cloudMessages(olivia, { id: conv.id, keys })).toEqual([]);
+        expect(
+          (await messageRows(conv.id)).find((m) => m.id === question)!.pending,
+        ).toBe(true);
+        // 31 s after the requeue: the cloud's.
+        clock.offsetMs =
+          row!.requeued_at.getTime() + 31_000 - row!.now.getTime();
+        await runJob(conv.id);
+        const answers = await cloudMessages(olivia, { id: conv.id, keys });
+        expect(answers.map((m) => m.id)).toEqual([answerIdFor(question)]);
       });
 
       it('the Hub acks first: the cloud does not answer (no model call, no budget reserved)', async () => {

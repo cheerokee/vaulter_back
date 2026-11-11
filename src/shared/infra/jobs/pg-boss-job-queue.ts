@@ -14,6 +14,7 @@ import {
   type JobHandler,
   type JobPayload,
   type JobSendOptions,
+  type JobWorkOptions,
   JobQueue,
 } from '../../application/job-queue.js';
 import { DomainError } from '../../domain/errors.js';
@@ -66,6 +67,8 @@ export class PgBossJobQueue
   private readonly logger = new Logger(PgBossJobQueue.name);
   private readonly queues = new Map<string, Promise<void>>();
   private readonly handlers = new Map<string, JobHandler<JobPayload>>();
+  /** Keyed queues (`oneJobPerKey`): created with the pg-boss `stately` policy. */
+  private readonly keyed = new Set<string>();
   private readonly ready: Promise<PgBoss>;
   private resolveReady!: (boss: PgBoss) => void;
   private boss: PgBoss | undefined;
@@ -149,6 +152,7 @@ export class PgBossJobQueue
     assertQueueName(name);
     const data = { ...assertIdsOnlyPayload(payload) };
     const { startAfterSeconds, singletonKey } = assertSendOptions(options);
+    this.assertKeyedUse(name, singletonKey !== undefined);
     const boss = await this.ready;
     await this.ensureQueue(boss, name);
     const db = this.transactionDb();
@@ -176,6 +180,10 @@ export class PgBossJobQueue
   ): Promise<number> {
     assertQueueName(name);
     if (jobs.length === 0) return 0;
+    for (const j of jobs) {
+      this.assertKeyedUse(name, j.singletonKey !== undefined);
+      this.assertSendManyKey(name, j.singletonKey !== undefined);
+    }
     const rows = jobs.map((j) => {
       const data = { ...assertIdsOnlyPayload(j.payload) };
       assertSendOptions({
@@ -192,22 +200,39 @@ export class PgBossJobQueue
     });
     const boss = await this.ready;
     await this.ensureQueue(boss, name);
-    // One INSERT ... SELECT FROM json_to_recordset (ON CONFLICT DO NOTHING: a waiting singleton is kept).
-    const ids = await boss.insert(name, rows, {
-      db: this.transactionDb(),
-      returnId: true,
-    });
+    const db = this.transactionDb() ?? boss.getDb();
+    // One INSERT ... SELECT FROM json_to_recordset. On a keyed (`stately`) queue its ON CONFLICT DO NOTHING keeps the
+    // job already waiting for a key (the policy's unique index: one `created` row per key); a standard queue has no
+    // such index, which is why `singletonKey` is refused there (`assertKeyedUse`).
+    const ids = await boss.insert(name, rows, { db, returnId: true });
+    // A key that already had a waiting job: that job moves to the EARLIER start (never postponed by a later one).
+    // Raw SQL on pg-boss's table (version pinned, like `cancelQueued`): only `start_after` of jobs not yet active.
+    const keyedStarts = jobs
+      .filter((j) => j.singletonKey !== undefined)
+      .map((j) => ({ key: j.singletonKey!, secs: j.startAfterSeconds ?? 0 }));
+    if (keyedStarts.length > 0) {
+      await db.executeSql(
+        `UPDATE ${JOB_QUEUE_SCHEMA}.job j
+            SET start_after = ${JOB_QUEUE_SCHEMA}.job_now() + make_interval(secs => x.secs)
+           FROM json_to_recordset($2::json) AS x (key text, secs int)
+          WHERE j.name = $1 AND j.singleton_key = x.key AND j.state < 'active'
+            AND j.start_after > ${JOB_QUEUE_SCHEMA}.job_now() + make_interval(secs => x.secs)`,
+        [name, JSON.stringify(keyedStarts)],
+      );
+    }
     return ids?.length ?? 0;
   }
 
   async work<P extends JobPayload>(
     name: string,
     handler: JobHandler<P>,
+    options: JobWorkOptions = {},
   ): Promise<void> {
     assertQueueName(name);
     if (this.handlers.has(name)) {
       throw new Error(`job queue ${name} already has a handler`);
     }
+    if (options.oneJobPerKey) this.keyed.add(name);
     this.handlers.set(name, handler as JobHandler<JobPayload>);
     // Before the start, onModuleInit subscribes it.
     if (this.boss) {
@@ -285,12 +310,41 @@ export class PgBossJobQueue
   private ensureQueue(boss: PgBoss, name: string): Promise<void> {
     let created = this.queues.get(name);
     if (!created) {
-      // Idempotent (ON CONFLICT DO NOTHING); autocommit on the pg-boss pool, outside any unit of work.
-      created = boss.createQueue(name, JOB_QUEUE_DEFAULTS);
+      const policy = this.keyed.has(name) ? 'stately' : 'standard';
+      // Idempotent (ON CONFLICT DO NOTHING); autocommit on the pg-boss pool, outside any unit of work. The policy is
+      // fixed at creation (pg-boss refuses to change it): a queue created with another one fails loudly (a migration
+      // moves existing queues, e.g. ConversationCloudAnswer for the cloud's keyed queues).
+      created = (async () => {
+        await boss.createQueue(name, { ...JOB_QUEUE_DEFAULTS, policy });
+        const queue = await boss.getQueue(name);
+        if (queue && queue.policy !== policy) {
+          throw new Error(
+            `job queue ${name} has policy ${queue.policy}, expected ${policy}`,
+          );
+        }
+      })();
       created.catch(() => this.queues.delete(name));
       this.queues.set(name, created);
     }
     return created;
+  }
+
+  /** Keyed queues need a key on every job; other queues get no `sendMany` key (standard inserts never dedupe). */
+  private assertKeyedUse(name: string, hasKey: boolean): void {
+    const keyed = this.keyed.has(name);
+    if (keyed && !hasKey) {
+      throw new Error(
+        `job queue ${name} is keyed: every job needs a singletonKey`,
+      );
+    }
+  }
+
+  private assertSendManyKey(name: string, hasKey: boolean): void {
+    if (hasKey && !this.keyed.has(name)) {
+      throw new Error(
+        `job queue ${name} is not keyed (oneJobPerKey): sendMany cannot deduplicate a singletonKey there`,
+      );
+    }
   }
 
   /** The connection of the active unit of work, if any, so the job commits (or rolls back) with it. */

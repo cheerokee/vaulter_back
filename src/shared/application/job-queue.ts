@@ -21,9 +21,19 @@ export interface JobSendOptions {
   /**
    * Deduplication: while a job of this queue with this key is waiting (not started), sending again with the same
    * key does not add a second job; it replaces the waiting job's payload and start time instead (debounce). A job
-   * already running does not block a new one.
+   * already running does not block a new one (on a keyed queue the new one waits until it ends).
    */
   singletonKey?: string;
+}
+
+export interface JobWorkOptions {
+  /**
+   * A KEYED queue: every job carries a `singletonKey`, and per key there is at most ONE waiting job and at most ONE
+   * running job, across every instance (a waiting job of a key is not fetched while another job of that key runs).
+   * `send` / `sendMany` without a key on it are a programming error. pg-boss `stately` policy (fixed when the queue is
+   * created: a queue that already exists with another policy fails the boot, and a migration changes it).
+   */
+  oneJobPerKey?: boolean;
 }
 
 export interface JobContext {
@@ -48,9 +58,10 @@ export abstract class JobQueue {
   ): Promise<string | null>;
 
   /**
-   * Enqueues many jobs of one queue in ONE statement (in the unit of work, like `send`). A job whose `singletonKey`
-   * already has a waiting job is skipped (not replaced: the waiting one keeps its start time). Returns how many were
-   * added.
+   * Enqueues many jobs of one queue (in the unit of work, like `send`). Keyed queues (`oneJobPerKey`) only: a key that
+   * already has a waiting job gets no second one; the waiting job keeps its payload and moves to the EARLIER of its
+   * start and this one's (so a later message never postpones an earlier one). Returns how many were added. On a queue
+   * that is not keyed, `singletonKey` is refused (pg-boss's standard queues do not deduplicate inserts).
    */
   abstract sendMany<P extends JobPayload>(
     name: string,
@@ -62,12 +73,14 @@ export abstract class JobQueue {
   ): Promise<number>;
 
   /**
-   * Registers the handler of a queue. Without workers in this process (`JOB_WORKERS_ENABLED=false`, the e2e
-   * default) the registration is kept but nothing is fetched. One handler per queue per process.
+   * Registers the handler of a queue (and how the queue is created: `options.oneJobPerKey`). Without workers in this
+   * process (`JOB_WORKERS_ENABLED=false`, the e2e default) the registration is kept but nothing is fetched. One handler
+   * per queue per process; call it in `onModuleInit`, before anything sends to the queue.
    */
   abstract work<P extends JobPayload>(
     name: string,
     handler: JobHandler<P>,
+    options?: JobWorkOptions,
   ): Promise<void>;
 
   /**

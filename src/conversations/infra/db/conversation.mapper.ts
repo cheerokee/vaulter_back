@@ -89,6 +89,7 @@ export function messageToDomain(
       ackedByHubId: e.ackedByHubId,
       ackedByCloud: e.ackedByCloud,
       cloudAnswerRequested: e.cloudAnswerRequested,
+      requeuedAt: e.requeuedAt,
       sentAt: e.sentAt,
       createdAt: e.createdAt,
       deletedAt: e.deletedAt,

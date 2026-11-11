@@ -46,6 +46,8 @@ export type CloudMessageView = {
   ackedByCloud: boolean;
   /** "Responder pela nuvem" for this message. */
   cloudAnswerRequested: boolean;
+  /** When it last went back to the queue (database clock): the Hub window restarts there. */
+  requeuedAt: Date | null;
   sentAt: Date;
 };
 
@@ -279,6 +281,7 @@ function messageOf(m: ConversationMessage): CloudMessageView {
     pending: m.pending,
     ackedByCloud: m.ackedByCloud,
     cloudAnswerRequested: m.cloudAnswerRequested,
+    requeuedAt: m.requeuedAt,
     sentAt: m.sentAt,
   };
 }

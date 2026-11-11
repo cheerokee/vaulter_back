@@ -162,6 +162,82 @@ describe('job queue (e2e, pg-boss)', () => {
     expect(stored).not.toContain('salário');
   }, 30_000);
 
+  it('a keyed queue keeps ONE waiting job per key (earliest start wins) and never runs two jobs of a key at once, across instances', async () => {
+    const key = `conversation:${newId()}`;
+    const payload = { spaceId: newId() };
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const started: string[] = [];
+    const handler = async (_p: JobPayload, job: { id: string }) => {
+      started.push(job.id);
+      if (started.length === 1) await gate;
+    };
+    app = await createTestApp(withWorkers);
+    const other = await createTestApp(withWorkers);
+    try {
+      await app
+        .get(JobQueue)
+        .work('test.keyed', handler, { oneJobPerKey: true });
+      await other.get(JobQueue).work('test.keyed', handler, {
+        oneJobPerKey: true,
+      });
+      const queue = app.get(JobQueue);
+      // Keys are mandatory on a keyed queue; sendMany refuses keys on a standard one (it could not deduplicate).
+      await expect(queue.send('test.keyed', payload)).rejects.toThrow(/keyed/);
+      await expect(
+        queue.sendMany('test.fallback', [{ payload, singletonKey: key }]),
+      ).rejects.toThrow(/not keyed/);
+
+      // Two inserts for one key: one waiting job, at the EARLIER start.
+      expect(
+        await queue.sendMany('test.keyed', [
+          { payload, singletonKey: key, startAfterSeconds: 600 },
+        ]),
+      ).toBe(1);
+      expect(
+        await queue.sendMany('test.keyed', [
+          { payload, singletonKey: key, startAfterSeconds: 300 },
+        ]),
+      ).toBe(0);
+      expect(
+        await queue.sendMany('test.keyed', [
+          { payload, singletonKey: key, startAfterSeconds: 900 },
+        ]),
+      ).toBe(0);
+      let rows = await jobsOf('test.keyed');
+      expect(rows).toHaveLength(1);
+      const delay = rows[0]!.start_after.getTime() - Date.now();
+      expect(delay).toBeGreaterThan(250_000);
+      expect(delay).toBeLessThan(310_000);
+
+      // Now: it runs (held at the gate) in one of the two instances.
+      await queue.send('test.keyed', payload, {
+        singletonKey: key,
+        startAfterSeconds: 0,
+      });
+      await vi.waitFor(() => expect(started).toHaveLength(1), {
+        timeout: 15_000,
+        interval: 200,
+      });
+      // A second job of the same key, due now: neither instance takes it while the first one runs.
+      await other
+        .get(JobQueue)
+        .sendMany('test.keyed', [{ payload, singletonKey: key }]);
+      await new Promise((r) => setTimeout(r, 6_000));
+      expect(started).toHaveLength(1);
+      rows = await jobsOf('test.keyed');
+      expect(rows.map((r) => r.state).sort()).toEqual(['active', 'created']);
+      release();
+      await vi.waitFor(() => expect(started).toHaveLength(2), {
+        timeout: 15_000,
+        interval: 200,
+      });
+    } finally {
+      release();
+      await other.close();
+    }
+  }, 60_000);
+
   it('cancelQueued never deletes a running job, and is undone with its unit of work', async () => {
     app = await createTestApp();
     const queue = app.get(JobQueue);

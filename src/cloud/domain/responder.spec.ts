@@ -61,6 +61,12 @@ describe('responder rules', () => {
     });
   });
 
+  it('a message back in the queue: the Hub window restarts at requeuedAt', () => {
+    const m = person(0, { requeuedAt: at(120_000) });
+    expect(plan([m], 140_000)).toEqual({ kind: 'wait', at: at(150_000) });
+    expect(plan([m], 150_000).kind).toBe('answer');
+  });
+
   it('"responder pela nuvem" (conversation, message, or a later message) and no executor Hub: at once', () => {
     const first = person(0);
     expect(plan([first], 1, { cloudAnswer: true }).kind).toBe('answer');

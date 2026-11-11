@@ -176,6 +176,10 @@ export class ConversationMessageTypeormEntity extends DeviceIdSyncableTypeormEnt
   @Column({ type: 'boolean', default: false })
   ackedByCloud!: boolean;
 
+  /** When it went back to the queue (`requeueAckedBy`), database clock (migration ConversationMessageRequeuedAt). */
+  @Column({ type: 'timestamptz', nullable: true })
+  requeuedAt!: Date | null;
+
   /** "Responder pela nuvem" for this person's message (migration ConversationCloudAnswer). */
   @Column({ type: 'boolean', default: false })
   cloudAnswerRequested!: boolean;

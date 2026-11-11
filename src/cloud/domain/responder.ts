@@ -74,6 +74,8 @@ export type PlannedMessage = {
   pending: boolean;
   ackedByCloud: boolean;
   cloudAnswerRequested: boolean;
+  /** When it went back to the queue (an executor that had it stopped being the executor): its Hub window restarts. */
+  requeuedAt?: Date | null;
   sentAt: Date;
 };
 
@@ -91,7 +93,9 @@ export type ResponderStep =
  *    first (a run that crashed between its ack and its answer).
  * 2. Else the oldest PENDING person message: due when "responder pela nuvem" (the conversation's, its own, or a later
  *    pending message's: answering in order means taking the ones before it too), when there is no executor Hub, or
- *    `CLOUD_FALLBACK_AFTER_MS` after its `sentAt` without a Hub ack; not due yet = wait until then.
+ *    `CLOUD_FALLBACK_AFTER_MS` after it became pending (its `sentAt`, or `requeuedAt` when it went back to the queue: a
+ *    new executor Hub gets its own 30 s) without a Hub ack; not due yet = wait until then.
+ * `now` is the DATABASE clock (`sentAt`/`requeuedAt` are), so the window does not move with the app's clock.
  */
 export function nextResponderStep(input: {
   messages: readonly PlannedMessage[];
@@ -112,7 +116,11 @@ export function nextResponderStep(input: {
     input.conversationCloudAnswer ||
     !input.hasExecutorHub ||
     pending.some((m) => m.cloudAnswerRequested);
-  const dueAt = new Date(first.sentAt.getTime() + CLOUD_FALLBACK_AFTER_MS);
+  const pendingSince = Math.max(
+    first.sentAt.getTime(),
+    first.requeuedAt?.getTime() ?? 0,
+  );
+  const dueAt = new Date(pendingSince + CLOUD_FALLBACK_AFTER_MS);
   if (askedNow || dueAt.getTime() <= input.now.getTime()) {
     return { kind: 'answer', message: first, resume: false };
   }

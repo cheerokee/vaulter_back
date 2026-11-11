@@ -564,7 +564,8 @@ active-cloud §4.3). O Hub continua sendo o executor principal; a nuvem só cobr
 1. **Hub primeiro, 30 s.** Uma mensagem de pessoa `pending` é do Hub durante **30 s** contados do `sentAt` dela
    (`CLOUD_FALLBACK_AFTER_MS = 30_000`). Um Hub ligado acompanha o feed com sondagem longa e confirma em segundos; se
    não confirmar em 30 s, a nuvem tenta pegá-la. **O `ack` decide quem pegou, nunca os dois:** o Hub e a nuvem travam o
-   assunto do mesmo jeito e o primeiro ack vale.
+   assunto do mesmo jeito e o primeiro ack vale. Uma mensagem que **voltou à fila** (o executor que a confirmou deixou de
+   ser executor; um Hub novo foi escolhido) ganha **30 s novos** a partir dessa volta, para o Hub novo pegá-la.
 2. **A nuvem não espera** (pega na hora) quando a pessoa pede **"responder pela nuvem"**: na mensagem
    (`cloudAnswerRequested: true` no item `conversation_message`) ou no assunto inteiro (`cloudAnswer: true` no item
    `conversation`), e quando o assunto não tem Hub executor. **O Hub deve deixar essas mensagens para a nuvem** (não

@@ -169,8 +169,13 @@ couber (spec de contas, §12).
   `cancelQueued` entram na transação (a tarefa só existe se ela confirmar). Pelo menos uma vez: handler idempotente, que
   reconfere sob trava. `send` com `startAfterSeconds` (atraso) e `singletonKey` (uma tarefa à espera por chave; enviar
   de novo substitui a que espera); `cancelQueued(nome, { spaceId })` apaga as que ainda esperam, num DELETE só guardado
-  pelo estado (nunca uma em execução); `sendMany(nome, [{ payload, singletonKey, startAfterSeconds? }])` enfileira muitas num INSERT só (uma
-  que já espera com a mesma chave é mantida, com a hora dela). As filas com handler são criadas na subida (mesmo sem workers). Workers (busca,
+  pelo estado (nunca uma em execução); `sendMany(nome, [{ payload, singletonKey, startAfterSeconds? }])` enfileira muitas num INSERT só. **Filas com
+  chave** (`work(nome, handler, { oneJobPerKey: true })`, política `stately` do pg-boss, fixada quando a fila nasce;
+  migration `CloudKeyedJobQueues` para as que já existiam): toda tarefa leva `singletonKey`, e por chave há no máximo UMA
+  à espera e UMA rodando, entre instâncias (uma à espera não é buscada enquanto outra da mesma chave roda); `sendMany`
+  só aceita chave nelas (a fila `standard` não deduplica inserts) e, numa chave que já espera, não cria outra: move a que
+  espera para o começo MAIS CEDO dos dois. As filas da nuvem (`cloud.index-space`, `cloud.index-file`,
+  `cloud.answer-conversation`) são com chave. As filas com handler são criadas na subida (mesmo sem workers). Workers (busca,
   manutenção, cron) só com `JOB_WORKERS_ENABLED` (padrão `true`); **os e2e rodam com `false`** (enfileirar funciona,
   nada roda sozinho) e o teste que precisa liga com `createTestApp({ env: { JOB_WORKERS_ENABLED: 'true' } })`;
   `resetDatabase` apaga `pgboss.job`. **Desligamento:** os workers param (e as tarefas em execução terminam, gracioso,
@@ -988,6 +993,8 @@ registra a fonte `conversations`), `hubs` (`HubDirectory`: `ownerOf`,
   `GET /hub/cloud/server-key`. "Respondida pela nuvem" = mensagem da nuvem depois do **ack da nuvem** (`acked_at`; a nuvem
   responde uma de cada vez), não depois do `sent_at` (como no Hub): vale para o ack idempotente e para o `requeueAckedBy`.
   `send(..., answering)` reconfere sob a trava do assunto que a pergunta ainda é da nuvem (409 `cloud-answer-not-owned`).
+  `requeueAckedBy` grava `conversation_messages.requeued_at` (relógio do banco, migration
+  `ConversationMessageRequeuedAt`): a janela de 30 s do Hub recomeça ali para um Hub executor novo.
 - **Responder pela nuvem** (migration `ConversationCloudAnswer`): `conversations.cloud_answer` (o assunto inteiro; CHECK
   só com a reserva; qualquer participante, `PUT .../:id/cloud-answer` `{ enabled }`, `SetCloudAnswerUseCase`, 422
   `cloud-reserve-unavailable` sem a reserva; a reserva caindo desliga junto) e `conversation_messages.cloud_answer_requested`
@@ -1269,9 +1276,11 @@ registra a fonte `conversations`), `hubs` (`HubDirectory`: `ownerOf`,
   warningLevel }` (0/75/90/100; orçamento 0 = `budgetConfigured: false` e 100) para **todo membro**, sem valores (porta
   `OrganizationAiSpend` do `organizations`, fonte registrada pelo `cloud`). e2e em `test/cloud/ai-budget.e2e-spec.ts`;
   nos outros e2e, `cloudSwitch.switchOn` põe US$ 100 numa organização sem orçamento (`setAiBudgetInDb`).
-- **Responder e documentar** (spec §4.3; `application/responder/`): fila `cloud.answer-conversation` (registrada em
-  `CloudSpaceJobs`), UMA tarefa à espera por assunto (`singletonKey`), agendada pelo sinal `CloudReservePendingHooks`
-  (mensagem nova: 30 s, `CLOUD_FALLBACK_AFTER_MS`; "responder pela nuvem", sem Hub executor ou outro motivo: na hora).
+- **Responder e documentar** (spec §4.3; `application/responder/`): fila com chave `cloud.answer-conversation`
+  (registrada em `CloudSpaceJobs`; por assunto UMA tarefa à espera e no máximo UMA rodando, entre instâncias), agendada
+  pelo sinal `CloudReservePendingHooks` (mensagem nova ou devolvida à fila: 30 s, `CLOUD_FALLBACK_AFTER_MS`, contados do
+  `sentAt` ou do `requeuedAt`, no relógio do BANCO; "responder pela nuvem", sem Hub executor ou outro motivo: olha na
+  hora). Aviso ou resposta que não sai (espaço cheio...) = a execução para (nunca laço; o próximo sinal tenta uma vez).
   `AnswerConversationJob` responde **em ordem** (`nextResponderStep`: termina antes a que a própria nuvem pegou; uma
   mensagem ainda do Hub = reagenda para a hora certa): leitura curta (`CloudConversationExecutor.read`) -> orçamento
   (`AiBudget.tryReserve`; recusado = a mensagem fica `pending` para o Hub e o assunto recebe UM aviso fixo por fila,
