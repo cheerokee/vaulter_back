@@ -13,6 +13,10 @@ export type MessageView = {
   replacesMessageId: string | null;
   pending: boolean;
   ackedAt: Date | null;
+  /** The cloud (reserve executor) took it. */
+  ackedByCloud: boolean;
+  /** "Responder pela nuvem" asked for this message. */
+  cloudAnswerRequested: boolean;
   sentAt: Date;
   deletedAt: Date | null;
 };
@@ -29,6 +33,8 @@ export function messageView(m: ConversationMessage): MessageView {
     replacesMessageId: m.replacesMessageId,
     pending: m.pending,
     ackedAt: m.ackedAt,
+    ackedByCloud: m.ackedByCloud,
+    cloudAnswerRequested: m.cloudAnswerRequested,
     sentAt: m.sentAt,
     deletedAt: m.deletedAt,
   };

@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
+import { ConversationsModule } from '../conversations/conversations.module.js';
 import { OrganizationsModule } from '../organizations/organizations.module.js';
 import { SpacesModule } from '../spaces/spaces.module.js';
 import { StorageModule } from '../storage/storage.module.js';
@@ -22,6 +23,13 @@ import { AiUsageTypeormEntity } from './infra/db/ai-usage.entity.js';
 import { AiUsageSqlLedger } from './infra/db/ai-usage.sql-repository.js';
 import { AiUsageController } from './infra/http/ai-usage.controller.js';
 import { TextExtractor } from './application/ports/text-extractor.js';
+import { CloudCipher } from './application/ports/cloud-cipher.js';
+import { SodiumCloudCipher } from './infra/crypto/sodium-cloud-cipher.js';
+import { AnswerConversationJob } from './application/responder/answer-conversation.job.js';
+import { CloudDocumentWriter } from './application/responder/cloud-document-writer.js';
+import { CloudResponderQueue } from './application/responder/cloud-responder-queue.js';
+import { CloudResponderWorkers } from './application/responder/cloud-responder.workers.js';
+import { ResponderClock } from './application/responder/responder-clock.js';
 import {
   CloudChunkRepository,
   CloudFileRepository,
@@ -100,7 +108,9 @@ export function createLanguageModel(config: ConfigService): LanguageModel {
  * and its acceptance, authorizing / switching on / switching off a space, and the server copy on key rotations
  * (`SpaceKeyRotatedHooks`). Task 4: indexing from the encrypted backup (manifests, extraction, chunks + pgvector),
  * through `storage`'s `BackupContentReader` and `BackupObjectsChangedHooks`. Task 5: the monthly AI budget (`AiBudget`:
- * reserve -> call -> settle/release; usage ledger; `GET /organizations/:id/ai-usage`; indexing pauses/resumes).
+ * reserve -> call -> settle/release; usage ledger; `GET /organizations/:id/ai-usage`; indexing pauses/resumes). Task 7:
+ * the cloud answers conversations as the reserve executor (`AnswerConversationJob`, through `conversations`'
+ * `CloudConversationExecutor`) and records documents (`CloudDocumentWriter`, through `storage`'s `ServerBackupWriter`).
  */
 @Module({
   imports: [
@@ -108,6 +118,7 @@ export function createLanguageModel(config: ConfigService): LanguageModel {
     OrganizationsModule,
     SpacesModule,
     StorageModule,
+    ConversationsModule,
     TypeOrmModule.forFeature([
       CloudServerKeyTypeormEntity,
       CloudTermTypeormEntity,
@@ -167,6 +178,13 @@ export function createLanguageModel(config: ConfigService): LanguageModel {
     IndexSpaceJob,
     IndexFileJob,
     CloudIndexingWorkers,
+    // Responder pela nuvem (Task 7): o executor de reserva dos assuntos e os documentos gravados pela nuvem.
+    { provide: CloudCipher, useClass: SodiumCloudCipher },
+    ResponderClock,
+    CloudResponderQueue,
+    CloudDocumentWriter,
+    AnswerConversationJob,
+    CloudResponderWorkers,
     KmsKeyEnvelope,
     ServerKeyTypeormStore,
     { provide: ServerKeyring, useClass: KmsServerKeyring },

@@ -168,16 +168,27 @@ export class PgBossJobQueue
 
   async sendMany<P extends JobPayload>(
     name: string,
-    jobs: readonly { payload: P; singletonKey?: string }[],
+    jobs: readonly {
+      payload: P;
+      singletonKey?: string;
+      startAfterSeconds?: number;
+    }[],
   ): Promise<number> {
     assertQueueName(name);
     if (jobs.length === 0) return 0;
     const rows = jobs.map((j) => {
       const data = { ...assertIdsOnlyPayload(j.payload) };
-      if (j.singletonKey !== undefined) {
-        assertSendOptions({ singletonKey: j.singletonKey });
-      }
-      return { data, singletonKey: j.singletonKey };
+      assertSendOptions({
+        singletonKey: j.singletonKey,
+        startAfterSeconds: j.startAfterSeconds,
+      });
+      return {
+        data,
+        singletonKey: j.singletonKey,
+        ...(j.startAfterSeconds !== undefined
+          ? { startAfter: j.startAfterSeconds }
+          : {}),
+      };
     });
     const boss = await this.ready;
     await this.ensureQueue(boss, name);

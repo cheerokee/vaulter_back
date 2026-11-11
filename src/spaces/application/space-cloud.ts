@@ -1,8 +1,21 @@
 import { Injectable } from '@nestjs/common';
 import { SpaceKeyRepository } from '../domain/space-key.repository.js';
+import type { SpaceRoleKey } from '../domain/space-membership.js';
+import { SpaceRoleRepository } from '../domain/space-role.repository.js';
+import { SpaceRoomRepository } from '../domain/space-room.repository.js';
 import { SpaceRepository } from '../domain/space.repository.js';
 
 export type SpaceKeyVersionRef = { id: string; version: number };
+
+/**
+ * Who can read the space (spec active-cloud §4.3, confidentiality alert): how many people, by role, and how many Hubs
+ * hold it in their Room. Counts only (no names, no ids): it goes into the prompt of the cloud's executor.
+ */
+export type SpaceAudience = {
+  people: number;
+  roles: { roleKey: SpaceRoleKey; count: number }[];
+  roomHubs: number;
+};
 
 // O modo de nuvem do espaço, para o módulo `cloud` (spec active-cloud §4.1): o `spaces` guarda `cloud_mode` e
 // `cloud_activated_at` (todo membro os vê em `GET /spaces/:id`), mas só o fluxo de ligar/desligar do `cloud` os muda,
@@ -13,7 +26,22 @@ export class SpaceCloud {
   constructor(
     private readonly spaces: SpaceRepository,
     private readonly keys: SpaceKeyRepository,
+    private readonly roles: SpaceRoleRepository,
+    private readonly room: SpaceRoomRepository,
   ) {}
+
+  /** The space's audience (counts only), for the cloud executor's confidentiality alert. Trusted read, no lock. */
+  async audience(
+    organizationId: string,
+    spaceId: string,
+  ): Promise<SpaceAudience> {
+    const roles = await this.roles.roleCounts(organizationId, spaceId);
+    return {
+      people: roles.reduce((sum, r) => sum + r.count, 0),
+      roles,
+      roomHubs: (await this.room.roomHubIds(organizationId, spaceId)).length,
+    };
+  }
 
   /** Every key version of the space (ascending), to require the server copy of each one. Trusted read. */
   async keyVersions(

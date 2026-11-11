@@ -140,6 +140,25 @@ Visão geral: o assunto é dado do espaço, cifrado **no celular** com uma chave
     chega no feed (o feed só traz as cópias de quem lê); `cloudReserve`/`cloudReserveDeclined` vêm no item
     `conversation` do feed e em `GET .../conversations/:id`.
   - Espaço desligado da nuvem: todo assunto perde a reserva (`cloudReserve: false`, troca de chave pendente).
+- [ ] **Responder pela nuvem** (spec active-cloud §4.3; a nuvem só responde num assunto com `cloudReserve: true`):
+  - **Na mensagem:** um botão/opção "responder pela nuvem" manda `cloudAnswer: true` no `POST .../messages` (a nuvem pega
+    na hora, sem esperar os 30 s do Hub; o feed mostra `cloudAnswerRequested`).
+  - **No assunto:** `PUT /spaces/:spaceId/conversations/:id/cloud-answer` `{ enabled }` (qualquer participante; ligar sem a
+    reserva = 422 `cloud-reserve-unavailable`); o assunto traz `cloudAnswer`. A reserva caindo desliga junto.
+  - Sem isso, a nuvem só responde quando o Hub não confirma uma mensagem em 30 s (Hub desligado, longe, roubado). Mostrar
+    "respondido pela nuvem" em `authorCloud: true`; a pergunta que a nuvem pegou vem com `ackedByCloud: true`.
+  - **Texto em claro das mensagens:** a convenção v1 de `docs/crypto/conversations.md` ("Texto em claro das mensagens"):
+    o app manda `{"text": "..."}` (texto puro também é aceito) e lê os campos da nuvem abaixo.
+  - **Proposta de documento** (`documentProposal` numa mensagem da nuvem: `proposalId`, `title`, `content` em Markdown,
+    `confidential`): mostrar o documento e botões **Gravar** / **Não gravar** (e "gravar em outro espaço", que a pessoa faz
+    por conta própria no espaço escolhido). Os botões mandam a resposta seguinte com `documentDecision: { proposalId,
+    decision: 'record' | 'decline' }` (e um `text` legível); texto livre também vale (o Antares julga). Com
+    `confidential: true`, destacar o **alerta de confidencialidade** (o texto já cita quantas pessoas leem o espaço). A
+    nuvem só grava se a resposta vier **logo depois** da proposta e quem confirmou puder gravar no espaço (Editor ou
+    Gestor). Documento gravado: a mensagem traz `documentRecorded: { fileId, title }` (ele aparece no espaço como
+    `<título>.md`).
+  - **Orçamento esgotado:** a nuvem manda UM aviso fixo por fila de pendentes (`notice: 'ai-budget-exceeded'`); as
+    mensagens continuam `pending` para o Hub. Mostrar o aviso com destaque (e o caminho para um admin pedir aumento).
 - [ ] **Lixeira do espaço × assuntos:** `storage.trashBytes` de `GET /spaces/:id` **inclui** a lixeira dos assuntos
   (mensagens e anexos apagados nos últimos 30 dias), que o esvaziar do Gestor **não** alcança (só o dono de cada
   assunto, rota acima, ou a retenção em 30 dias). Ao avisar o Gestor de lixeira cheia, dizer que parte pode ser de

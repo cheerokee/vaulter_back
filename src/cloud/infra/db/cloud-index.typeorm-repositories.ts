@@ -4,6 +4,7 @@ import { runInOrganizationScope } from '../../../shared/infra/db/organization-sc
 import { currentManager } from '../../../shared/infra/db/unit-of-work.js';
 import type { CloudFile } from '../../domain/cloud-file.js';
 import {
+  type ChunkHit,
   CloudChunkRepository,
   CloudFileRepository,
   type NewChunk,
@@ -314,5 +315,41 @@ export class CloudChunkSqlRepository extends CloudChunkRepository {
       );
       return row!.count;
     });
+  }
+
+  async search(
+    orgId: string,
+    spaceId: string,
+    embedding: readonly number[],
+    model: string,
+    limit: number,
+  ): Promise<ChunkHit[]> {
+    const rows: {
+      file_id: string;
+      name: string;
+      path: string | null;
+      position: number;
+      text: string;
+      distance: number;
+    }[] = await runInOrganizationScope(this.dataSource, orgId, (m) =>
+      m.query(
+        `SELECT c.file_id, f.name, f.path, c.position, c.text,
+                (c.embedding <=> $3::vector)::float8 AS distance
+           FROM cloud_chunks c
+           JOIN cloud_files f ON f.id = c.cloud_file_id AND f.organization_id = c.organization_id
+          WHERE c.organization_id = $1 AND c.space_id = $2 AND c.embedding_model = $4
+          ORDER BY c.embedding <=> $3::vector
+          LIMIT $5`,
+        [orgId, spaceId, `[${embedding.join(',')}]`, model, limit],
+      ),
+    );
+    return rows.map((r) => ({
+      fileId: r.file_id,
+      name: r.name,
+      path: r.path,
+      position: r.position,
+      text: r.text,
+      distance: Number(r.distance),
+    }));
   }
 }

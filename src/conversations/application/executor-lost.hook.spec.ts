@@ -43,6 +43,7 @@ const conv = (owner: string, executorHubId: string | null = HUB) =>
       movedFromConversationId: null,
       cloudReserve: false,
       cloudReserveDeclined: false,
+      cloudAnswer: false,
       participantUserIds: [A, B].sort(),
       createdAt: new Date(),
       deletedAt: null,

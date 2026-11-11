@@ -121,6 +121,23 @@ export class SpaceRoleTypeormRepository extends SpaceRoleRepository {
     return rows.map((r) => r.user_id);
   }
 
+  async roleCounts(
+    orgId: string,
+    spaceId: string,
+  ): Promise<{ roleKey: SpaceRoleKey; count: number }[]> {
+    const rows: { role_key: SpaceRoleKey; count: number }[] =
+      await runInOrganizationScope(this.dataSource, orgId, (m) =>
+        m.query(
+          `SELECT r.key AS role_key, count(*)::int AS count
+             FROM role_assignments ra JOIN roles r ON r.id = ra.role_id
+            WHERE ${ACTIVE}
+            GROUP BY r.key ORDER BY r.key`,
+          [orgId, spaceId],
+        ),
+      );
+    return rows.map((r) => ({ roleKey: r.role_key, count: r.count }));
+  }
+
   // Ordem por user_id (v7); o cursor é o último user_id. joinedAt = created_at da linha (numa reentrada, a
   // linha é a mesma: fica a data da primeira entrada).
   async listMembers(

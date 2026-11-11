@@ -23,6 +23,7 @@ export function conversationResponse(v: ConversationView) {
     movedFromConversationId: v.movedFromConversationId,
     cloudReserve: v.cloudReserve,
     cloudReserveDeclined: v.cloudReserveDeclined,
+    cloudAnswer: v.cloudAnswer,
     createdAt: iso(v.createdAt),
     updatedAt: iso(v.updatedAt),
     participants: v.participants.map((p) => ({
@@ -49,6 +50,8 @@ export function messageResponse(v: MessageView) {
     replacesMessageId: v.replacesMessageId,
     pending: v.pending,
     ackedAt: iso(v.ackedAt),
+    ackedByCloud: v.ackedByCloud,
+    cloudAnswerRequested: v.cloudAnswerRequested,
     sentAt: v.sentAt.toISOString(),
     deletedAt: iso(v.deletedAt),
   };

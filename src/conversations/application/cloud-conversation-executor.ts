@@ -25,6 +25,8 @@ export type CloudConversationView = {
   currentKeyVersion: number;
   keyRotationRequired: boolean;
   participantUserIds: readonly string[];
+  /** "Responder pela nuvem" in the whole conversation. */
+  cloudAnswer: boolean;
   encryptedHeader: string | null;
   headerKeyVersion: number | null;
   lastMessageAt: Date | null;
@@ -40,6 +42,10 @@ export type CloudMessageView = {
   encryptedBody: string;
   replacesMessageId: string | null;
   pending: boolean;
+  /** The cloud acknowledged it (its own work: answer it, even after a crash). */
+  ackedByCloud: boolean;
+  /** "Responder pela nuvem" for this message. */
+  cloudAnswerRequested: boolean;
   sentAt: Date;
 };
 
@@ -167,13 +173,16 @@ export class CloudConversationExecutor {
       });
       if (!m || m.conversationId !== c.id || m.deletedAt) return 'taken';
       if (!m.pending) {
+        // Answered = a cloud message after the cloud's OWN ack of it (the cloud acks one message at a time and answers
+        // it before taking the next: an answer to an earlier message never counts for this one).
         const mineUnanswered =
           m.ackedByCloud &&
+          m.ackedAt !== null &&
           !(await this.messages.answeredAfter(
             scope,
             c.id,
             { kind: 'cloud' },
-            m.sentAt,
+            m.ackedAt,
           ));
         return mineUnanswered ? 'acked' : 'taken';
       }
@@ -187,15 +196,23 @@ export class CloudConversationExecutor {
    * The cloud's answer, encrypted with the CURRENT conversation key (the job seals it with the key opened from the
    * server copy): born acknowledged, `authorCloud`. Same rules and errors as any executor message (409
    * `conversation-key-version-stale` / `conversation-key-rotation-required`, 422 `space-storage-full`, idempotent by id);
-   * out of the cloud's reach: 404 `conversation-not-found`.
+   * out of the cloud's reach: 404 `conversation-not-found`. `answering` = the person's message this answers: rechecked
+   * under the conversation lock (still acknowledged by the cloud, else 409 `cloud-answer-not-owned`, nothing written).
    */
   send(
     organizationId: string,
     spaceId: string,
     conversationId: string,
     input: SendMessageInput,
+    answering?: string,
   ): Promise<{ view: MessageView; created: boolean }> {
-    return this.sending.byCloud(organizationId, spaceId, conversationId, input);
+    return this.sending.byCloud(
+      organizationId,
+      spaceId,
+      conversationId,
+      input,
+      answering,
+    );
   }
 
   private async lockConversation(
@@ -243,6 +260,7 @@ function view(c: Conversation): CloudConversationView {
     currentKeyVersion: c.currentKeyVersion,
     keyRotationRequired: c.keyRotationRequired,
     participantUserIds: c.participantUserIds,
+    cloudAnswer: c.cloudAnswer,
     encryptedHeader: c.encryptedHeader,
     headerKeyVersion: c.headerKeyVersion,
     lastMessageAt: c.lastMessageAt,
@@ -259,6 +277,8 @@ function messageOf(m: ConversationMessage): CloudMessageView {
     encryptedBody: m.encryptedBody!,
     replacesMessageId: m.replacesMessageId,
     pending: m.pending,
+    ackedByCloud: m.ackedByCloud,
+    cloudAnswerRequested: m.cloudAnswerRequested,
     sentAt: m.sentAt,
   };
 }

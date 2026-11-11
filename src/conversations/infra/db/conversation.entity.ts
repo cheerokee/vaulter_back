@@ -45,6 +45,10 @@ import { DeviceIdSyncableTypeormEntity } from './device-id.entity-base.js';
   'ck_conversations_cloud_reserve_live',
   `(NOT "cloud_reserve") OR ("deleted_at" IS NULL)`,
 )
+@Check(
+  'ck_conversations_cloud_answer',
+  `(NOT "cloud_answer") OR "cloud_reserve"`,
+)
 @Index('ix_conversations_cloud_reserve', ['spaceId'], {
   where: `"cloud_reserve"`,
 })
@@ -143,6 +147,10 @@ export class ConversationTypeormEntity extends DeviceIdSyncableTypeormEntity {
   // O dono desligou a reserva: só ele a liga de novo.
   @Column({ type: 'boolean', default: false })
   cloudReserveDeclined!: boolean;
+
+  // "Responder pela nuvem" no assunto inteiro (só com a reserva; migration ConversationCloudAnswer).
+  @Column({ type: 'boolean', default: false })
+  cloudAnswer!: boolean;
 
   // Derivado das participações vivas pelo trigger (o RLS lê daqui); nunca gravado pela aplicação.
   @Column({ type: 'uuid', array: true, insert: false, update: false })

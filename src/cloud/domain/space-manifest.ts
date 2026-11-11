@@ -164,3 +164,34 @@ export function parseSpaceManifest(
   }
   return { writer: expected.writer, files, skippedEntries };
 }
+
+/**
+ * The plaintext of a manifest (`0x01 ‖ UTF-8 JSON`, docs/hubs/space-manifest.md) — what the server writes for the
+ * cloud manifest. Legible: the caller encrypts it with the space key and wipes the bytes.
+ */
+export function serializeSpaceManifest(
+  spaceId: string,
+  writer: ManifestWriter,
+  files: readonly ManifestFile[],
+  updatedAt: Date,
+): Uint8Array {
+  const json = JSON.stringify({
+    spaceId,
+    writer,
+    updatedAt: updatedAt.toISOString(),
+    files: files.map((f) => ({
+      fileId: f.fileId,
+      name: f.name,
+      path: f.path,
+      mediaType: f.mediaType,
+      source: f.source,
+      modifiedAt: f.modifiedAt ? f.modifiedAt.toISOString() : null,
+      parts: f.parts,
+    })),
+  });
+  const body = new TextEncoder().encode(json);
+  const out = new Uint8Array(1 + body.length);
+  out[0] = MANIFEST_FORMAT_VERSION;
+  out.set(body, 1);
+  return out;
+}

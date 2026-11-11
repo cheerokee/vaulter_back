@@ -7,6 +7,7 @@ import { SpacesModule } from '../spaces/spaces.module.js';
 import { BackupContentReader } from './application/backup-content-reader.js';
 import { BackupObjectHealer } from './application/backup-object-healer.js';
 import { BackupTrash } from './application/backup-trash.js';
+import { ServerBackupWriter } from './application/server-backup-writer.js';
 import { ConfirmUploadsUseCase } from './application/confirm-uploads.use-case.js';
 import { DeleteObjectsUseCase } from './application/delete-objects.use-case.js';
 import { EmptyTrashUseCase } from './application/empty-trash.use-case.js';
@@ -72,7 +73,8 @@ import { S3ObjectStore } from './infra/s3/s3-object-store.js';
     EmptyTrashUseCase,
     ListObjectsUseCase,
     GetDownloadUrlUseCase,
+    ServerBackupWriter,
   ],
-  exports: [ObjectStore, BackupContentReader],
+  exports: [ObjectStore, BackupContentReader, ServerBackupWriter],
 })
 export class StorageModule {}

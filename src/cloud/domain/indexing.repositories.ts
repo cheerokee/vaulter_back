@@ -43,6 +43,17 @@ export abstract class CloudFileRepository {
   abstract spacesWithPending(orgId: string): Promise<string[]>;
 }
 
+/** A chunk found by similarity (legible: never logged). */
+export type ChunkHit = {
+  fileId: string;
+  name: string;
+  path: string | null;
+  position: number;
+  text: string;
+  /** Cosine distance (0 = same direction). */
+  distance: number;
+};
+
 /** The chunks (`cloud_chunks`, legible text + `vector(768)`), by file. Physical DELETE only. */
 export abstract class CloudChunkRepository {
   /** Deletes the file's chunks and inserts these (positions 0..n-1), recording the embedding model in each one. */
@@ -59,4 +70,15 @@ export abstract class CloudChunkRepository {
   ): Promise<void>;
   /** Physical DELETE of every chunk of the space; returns how many. */
   abstract deleteForSpace(orgId: string, spaceId: string): Promise<number>;
+  /**
+   * The `limit` chunks of THIS space closest to `embedding` (cosine, HNSW), only those embedded with `model` (vectors
+   * of another model do not compare). Never another space: the answer's context is the space's index only.
+   */
+  abstract search(
+    orgId: string,
+    spaceId: string,
+    embedding: readonly number[],
+    model: string,
+    limit: number,
+  ): Promise<ChunkHit[]>;
 }

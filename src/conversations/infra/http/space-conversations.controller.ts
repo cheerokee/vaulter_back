@@ -35,6 +35,7 @@ import { LeaveConversationUseCase } from '../../application/leave-conversation.u
 import { RotateConversationKeyUseCase } from '../../application/rotate-conversation-key.use-case.js';
 import { ReplaceConversationHeaderUseCase } from '../../application/replace-conversation-header.use-case.js';
 import { SendMessageUseCase } from '../../application/send-message.use-case.js';
+import { SetCloudAnswerUseCase } from '../../application/set-cloud-answer.use-case.js';
 import { SetCloudReserveUseCase } from '../../application/set-cloud-reserve.use-case.js';
 import {
   ShareConversationUseCase,
@@ -48,7 +49,8 @@ import {
   ReplaceHeaderDto,
   RequestAttachmentDto,
   RotateConversationKeyDto,
-  SendMessageDto,
+  SendUserMessageDto,
+  SetCloudAnswerDto,
   SetCloudReserveDto,
   ShareConversationDto,
   StateDto,
@@ -90,6 +92,7 @@ export class SpaceConversationsController {
     private readonly emptyingTrash: EmptyConversationTrashUseCase,
     private readonly header: ReplaceConversationHeaderUseCase,
     private readonly cloudReserve: SetCloudReserveUseCase,
+    private readonly cloudAnswer: SetCloudAnswerUseCase,
   ) {}
 
   /** 201 when created; 200 with the same conversation when the same id is sent again (retry after a network error). */
@@ -265,6 +268,24 @@ export class SpaceConversationsController {
     );
   }
 
+  /**
+   * "Responder pela nuvem" for the whole conversation (spec active-cloud §4.3): any participant; on needs the cloud
+   * reserve (422 `cloud-reserve-unavailable`). The messages already waiting go to the cloud at once.
+   */
+  @perUser(RATE_LIMITS.conversationChange)
+  @ApiBearerAuth()
+  @Put(':id/cloud-answer')
+  async doCloudAnswer(
+    @CurrentAuth() auth: AuthContext,
+    @Param('spaceId', uuidPipe('spaceId')) spaceId: string,
+    @Param('id', uuidPipe('id')) id: string,
+    @Body() dto: SetCloudAnswerDto,
+  ) {
+    return conversationResponse(
+      await this.cloudAnswer.execute(auth, spaceId, id, dto.enabled),
+    );
+  }
+
   /** New key version for exactly the live participants and the executor (and the server key, with the reserve). */
   @perUser(RATE_LIMITS.conversationKeyRotation)
   @ApiBearerAuth()
@@ -292,7 +313,7 @@ export class SpaceConversationsController {
     @CurrentAuth() auth: AuthContext,
     @Param('spaceId', uuidPipe('spaceId')) spaceId: string,
     @Param('id', uuidPipe('id')) id: string,
-    @Body() dto: SendMessageDto,
+    @Body() dto: SendUserMessageDto,
     @Res({ passthrough: true }) res: Response,
   ) {
     const { view, created } = await this.sending.byUser(

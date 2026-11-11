@@ -45,6 +45,13 @@ export abstract class ObjectStore {
     input: PresignPutInput,
   ): Promise<PresignedPut>;
 
+  /**
+   * The SERVER uploads bytes itself to a provisional key (same checksum and `stage=upload` tag as a presigned PUT): for
+   * what the server writes to the backup (active cloud documents and the cloud manifest, `ServerBackupWriter`). The
+   * confirmation then copies it like any client upload.
+   */
+  abstract put(key: string, body: Uint8Array, sha256Hex: string): Promise<void>;
+
   /** Presigned GET of one specific version. */
   abstract presignGet(
     key: string,

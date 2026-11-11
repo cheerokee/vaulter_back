@@ -54,6 +54,7 @@ const conversation = (over: { keyRotationRequired?: boolean } = {}) =>
       movedFromConversationId: null,
       cloudReserve: false,
       cloudReserveDeclined: false,
+      cloudAnswer: false,
       participantUserIds: [ANA, BIA].sort(),
       createdAt: new Date(),
       deletedAt: null,

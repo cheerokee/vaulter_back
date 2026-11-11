@@ -99,6 +99,22 @@ export const BackupRules = {
     );
   },
 
+  /**
+   * The server's own writes (`ServerBackupWriter`: active cloud documents and the cloud manifest): a UUID v7 or the
+   * cloud manifest's id of this space (never the Hub's manifest: the Hub owns it).
+   */
+  assertObjectIdServerWritable(spaceId: string, objectId: string): void {
+    if (validate(objectId) && version(objectId) === 7) return;
+    if (validate(spaceId) && objectId === cloudManifestObjectId(spaceId)) {
+      return;
+    }
+    throw new DomainValidationError(
+      'object-id-invalid',
+      'The server writes UUID v7 objects or the cloud manifest only.',
+      { objectId },
+    );
+  },
+
   /** Deleting: only the cloud manifest is refused (422 `object-id-reserved`). */
   assertObjectIdDeletable(spaceId: string, objectId: string): void {
     if (validate(spaceId) && objectId === cloudManifestObjectId(spaceId)) {

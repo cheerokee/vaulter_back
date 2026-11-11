@@ -170,7 +170,7 @@ async function readOrganization(
       `SELECT cv.id, cv.organization_id, cv.space_id, cv.created_by_user_id, cv.owner_user_id, cv.executor_hub_id,
               cv.state, cv.last_message_at, cv.current_key_version, cv.key_rotation_required, cv.encrypted_header,
               cv.header_key_version, cv.moved_from_conversation_id, cv.cloud_reserve, cv.cloud_reserve_declined,
-              cv.created_at, cv.updated_at,
+              cv.cloud_answer, cv.created_at, cv.updated_at,
               cv.deleted_at IS NOT NULL AS deleted, ${VERSION('cv')}
          FROM conversations cv
         WHERE ${PAGE('cv')} AND ${IN_SCOPE(reader, 'cv')}
@@ -196,6 +196,8 @@ async function readOrganization(
             // With the reserve on, every rotation also seals for the server key (the server's copies never come here).
             cloudReserve: r.cloud_reserve,
             cloudReserveDeclined: r.cloud_reserve_declined,
+            // "Responder pela nuvem" in the whole conversation: the Hub leaves its pending messages to the cloud.
+            cloudAnswer: r.cloud_answer,
             createdAt: iso(r.created_at),
             updatedAt: iso(r.updated_at),
           },
@@ -257,6 +259,7 @@ async function readOrganization(
     await batch(
       `SELECT msg.id, msg.conversation_id, msg.author_user_id, msg.author_hub_id, msg.author_cloud, msg.key_version,
               msg.encrypted_body, msg.body_bytes, msg.replaces_message_id, msg.pending, msg.acked_at, msg.sent_at,
+              msg.acked_by_cloud, msg.cloud_answer_requested,
               msg.deleted_at IS NOT NULL AS deleted, ${VERSION('msg')}
          FROM conversation_messages msg
         WHERE ${PAGE('msg')} AND ${CONVERSATION_OF(reader, 'msg')}
@@ -276,6 +279,9 @@ async function readOrganization(
             replacesMessageId: r.replaces_message_id,
             pending: r.pending,
             ackedAt: iso(r.acked_at),
+            // The cloud took it (the Hub does not execute it); "responder pela nuvem" asked for this message.
+            ackedByCloud: r.acked_by_cloud,
+            cloudAnswerRequested: r.cloud_answer_requested,
             sentAt: iso(r.sent_at),
           },
         ),

@@ -60,6 +60,26 @@ ad   = 0x01 ‖ ASCII rótulo ‖ spaceId(16) ‖ conversationId(16) ‖ recordI
   inteiro em hex minúsculo, que o backend guarda e confere), mas cifrado com a chave da **conversa** e o rótulo
   `conversation-attachment`.
 
+## Texto em claro das mensagens (convenção v1)
+
+O backend não lê o texto em claro (só a nuvem ativa, com a cópia do servidor, num assunto com a reserva ligada). A
+convenção vale para app, Hub e nuvem (decisão da Task 7 da nuvem ativa):
+
+```
+plaintext = UTF-8(JSON)   { "text": "...", ...campos opcionais }
+```
+
+- `text` (obrigatório): o texto da mensagem (Markdown simples).
+- Quem lê **ignora campos que não conhece** e aceita também **texto puro**: um texto em claro que não é esse JSON (ou
+  não tem `text` string) é a mensagem inteira como texto. Mensagens antigas e clientes simples continuam valendo.
+- Campos usados hoje:
+  - `documentProposal` (mensagem da nuvem ou do Hub): `{ proposalId (UUID v7), title, content (Markdown, até 24 KiB
+    UTF-8), confidential }` — o executor propõe um documento e **pergunta** antes de gravar;
+  - `documentDecision` (mensagem de pessoa, botões do app): `{ proposalId, decision: "record" | "decline" }`;
+  - `documentRecorded` (executor): `{ fileId, title }` — o documento foi gravado no espaço;
+  - `notice` (nuvem): `"ai-budget-exceeded"` — aviso fixo, sem modelo envolvido.
+- O corpo cifrado inteiro continua limitado a 64 KiB (`message-too-large`).
+
 ## Nada em claro
 
 Título, plano, texto, nome e tipo de arquivo e qualquer metadado de conteúdo vivem **dentro** de blobs cifrados.

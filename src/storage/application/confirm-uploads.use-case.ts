@@ -20,6 +20,10 @@ import {
 import { ObjectStore } from './ports/object-store.js';
 import { assertStillMarked } from './journal.js';
 import {
+  type BackupWriteGuard,
+  ServerWriteRefusedError,
+} from './server-write-guard.js';
+import {
   lockTimeoutAsBusy,
   objectVersionConflict,
   uploadNotFound,
@@ -87,6 +91,7 @@ export class ConfirmUploadsUseCase {
     spaceId: string,
     uploadIds: readonly string[],
     now: Date = new Date(),
+    server: { guard: BackupWriteGuard } | null = null,
   ): Promise<CommittedVersionView[]> {
     const writing: ObjectRef[] = [];
     let purged: { orgId: string; spaceId: string; versions: PurgedVersion[] } =
@@ -118,6 +123,10 @@ export class ConfirmUploadsUseCase {
           'share',
         );
         const orgId = space.organizationId;
+        // The server's own write: its precondition, under the space lock (e.g. still in the active cloud).
+        if (server && !(await server.guard(space))) {
+          throw new ServerWriteRefusedError();
+        }
         const found = new Map(
           (await this.versions.findByIds(orgId, space.spaceId, uploadIds)).map(
             (v) => [v.id, v],

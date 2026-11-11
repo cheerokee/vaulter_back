@@ -5,6 +5,7 @@ import {
 import { Entity } from '../../shared/domain/entity.js';
 import type { ConversationActor } from './conversation-actor.js';
 import {
+  cloudReserveUnavailable,
   conversationKeyRotationRequired,
   conversationKeyVersionStale,
   conversationNotFound,
@@ -43,6 +44,11 @@ export type ConversationProps = {
   cloudReserve: boolean;
   /** The owner switched the reserve off: only the owner switches it on again. */
   cloudReserveDeclined: boolean;
+  /**
+   * "Responder pela nuvem" (spec active-cloud §4.3): a participant asked the cloud to answer this conversation's
+   * messages right away, without waiting for the Hub. Only with the reserve on (cleared when it goes off).
+   */
+  cloudAnswer: boolean;
   /**
    * Live participants, sorted. Read-only here: the database derives it from `conversation_participants` (trigger) and
    * row-level security uses it; the repository never writes it.
@@ -104,6 +110,7 @@ export class Conversation extends Entity<ConversationProps> {
         movedFromConversationId: movedFrom,
         cloudReserve: input.cloudReserve ?? false,
         cloudReserveDeclined: false,
+        cloudAnswer: false,
         participantUserIds: [input.ownerUserId],
         createdAt: input.now,
         deletedAt: null,
@@ -170,6 +177,7 @@ export class Conversation extends Entity<ConversationProps> {
       ...this.props,
       cloudReserve: false,
       cloudReserveDeclined: true,
+      cloudAnswer: false,
       keyRotationRequired: this.props.keyRotationRequired || wasOn,
     };
     return wasOn;
@@ -184,8 +192,24 @@ export class Conversation extends Entity<ConversationProps> {
     this.props = {
       ...this.props,
       cloudReserve: false,
+      cloudAnswer: false,
       keyRotationRequired: true,
     };
+    return true;
+  }
+
+  /**
+   * "Responder pela nuvem" on or off for the whole conversation. Any live participant (404 otherwise): it only changes
+   * who answers first, never who reads (the cloud already holds the key through the reserve). Switching it on needs the
+   * reserve (422 `cloud-reserve-unavailable`). Returns whether it changed.
+   */
+  setCloudAnswer(userId: string, enabled: boolean): boolean {
+    if (!this.isParticipant(userId) || this.props.deletedAt) {
+      throw conversationNotFound();
+    }
+    if (enabled && !this.isCloudExecutor()) throw cloudReserveUnavailable();
+    if (this.props.cloudAnswer === enabled) return false;
+    this.props = { ...this.props, cloudAnswer: enabled };
     return true;
   }
 
@@ -308,7 +332,12 @@ export class Conversation extends Entity<ConversationProps> {
   /** A tombstoned conversation has no cloud reserve (the caller deletes the server copies). */
   tombstone(now: Date): void {
     if (this.props.deletedAt) return;
-    this.props = { ...this.props, deletedAt: now, cloudReserve: false };
+    this.props = {
+      ...this.props,
+      deletedAt: now,
+      cloudReserve: false,
+      cloudAnswer: false,
+    };
   }
 
   /** Retention: the encrypted header goes away; the row (id, tombstone) stays for sync. */
@@ -364,6 +393,9 @@ export class Conversation extends Entity<ConversationProps> {
   }
   get cloudReserveDeclined(): boolean {
     return this.props.cloudReserveDeclined;
+  }
+  get cloudAnswer(): boolean {
+    return this.props.cloudAnswer;
   }
   get participantUserIds(): readonly string[] {
     return this.props.participantUserIds;

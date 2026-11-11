@@ -302,13 +302,29 @@ export class SendMessageDto {
   replacesMessageId?: string | null;
 }
 
+/** A person's message: may ask the cloud to answer it right away ("responder pela nuvem", spec active-cloud §4.3). */
+export class SendUserMessageDto extends SendMessageDto {
+  /** With the cloud reserve on, the cloud takes it at once instead of waiting for the Hub; ignored without it. */
+  @IsOptional()
+  @IsBoolean()
+  cloudAnswer?: boolean;
+}
+
+/** "Responder pela nuvem" for the whole conversation (any participant; needs the cloud reserve). */
+export class SetCloudAnswerDto {
+  @IsBoolean()
+  enabled!: boolean;
+}
+
 /** The use case input of a message (user and hub routes). */
-export function messageInput(dto: SendMessageDto) {
+export function messageInput(dto: SendMessageDto | SendUserMessageDto) {
   return {
     id: dto.id,
     keyVersion: dto.keyVersion,
     encryptedBody: dto.encryptedBody,
     replacesMessageId: dto.replacesMessageId ?? null,
+    cloudAnswerRequested:
+      'cloudAnswer' in dto ? (dto.cloudAnswer ?? false) : false,
   };
 }
 

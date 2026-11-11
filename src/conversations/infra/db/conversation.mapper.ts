@@ -25,6 +25,7 @@ export function conversationToDomain(
       movedFromConversationId: e.movedFromConversationId,
       cloudReserve: e.cloudReserve,
       cloudReserveDeclined: e.cloudReserveDeclined,
+      cloudAnswer: e.cloudAnswer,
       participantUserIds: e.participantUserIds,
       createdAt: e.createdAt,
       updatedAt: e.updatedAt,
@@ -64,6 +65,7 @@ export function conversationMutable(
     headerKeyVersion: c.headerKeyVersion,
     cloudReserve: c.cloudReserve,
     cloudReserveDeclined: c.cloudReserveDeclined,
+    cloudAnswer: c.cloudAnswer,
     deletedAt: c.deletedAt,
   };
 }
@@ -86,6 +88,7 @@ export function messageToDomain(
       ackedAt: e.ackedAt,
       ackedByHubId: e.ackedByHubId,
       ackedByCloud: e.ackedByCloud,
+      cloudAnswerRequested: e.cloudAnswerRequested,
       sentAt: e.sentAt,
       createdAt: e.createdAt,
       deletedAt: e.deletedAt,
@@ -112,6 +115,7 @@ export function messageToInsert(
     ackedAt: m.ackedAt,
     ackedByHubId: m.ackedByHubId,
     ackedByCloud: m.ackedByCloud,
+    cloudAnswerRequested: m.cloudAnswerRequested,
     sentAt: m.sentAt,
     ...(m.createdAt ? { createdAt: m.createdAt } : {}),
   };

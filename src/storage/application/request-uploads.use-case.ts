@@ -13,6 +13,10 @@ import type {
   UploadIntentView,
 } from './dto/backup-views.js';
 import { ObjectStore } from './ports/object-store.js';
+import {
+  type BackupWriteGuard,
+  ServerWriteRefusedError,
+} from './server-write-guard.js';
 import { lockTimeoutAsBusy, objectVersionConflict } from './storage-errors.js';
 import {
   StorageAccess,
@@ -48,10 +52,13 @@ export class RequestUploadsUseCase {
     spaceId: string,
     items: readonly UploadIntentInput[],
     now: Date = new Date(),
+    server: { guard: BackupWriteGuard } | null = null,
   ): Promise<UploadIntentView[]> {
     BackupRules.assertDistinctObjects(items.map((i) => i.objectId));
     for (const i of items) {
-      BackupRules.assertObjectIdWritable(spaceId, i.objectId);
+      // The server's own writes (`ServerBackupWriter`) may also write the cloud manifest's reserved id.
+      if (server) BackupRules.assertObjectIdServerWritable(spaceId, i.objectId);
+      else BackupRules.assertObjectIdWritable(spaceId, i.objectId);
       BackupRules.assertObjectSize(i.objectId, i.sizeBytes);
     }
     const uploader = uploaderOf(actor);
@@ -65,6 +72,9 @@ export class RequestUploadsUseCase {
           'update',
         );
         const orgId = space.organizationId;
+        if (server && !(await server.guard(space))) {
+          throw new ServerWriteRefusedError();
+        }
         for (const i of items) BackupRules.assertWritable(space, i.keyVersion);
         const sorted = [...items].sort((a, b) =>
           a.objectId < b.objectId ? -1 : a.objectId > b.objectId ? 1 : 0,

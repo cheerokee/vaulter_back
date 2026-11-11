@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import type { Actor } from '../../identity/application/dto/actor.js';
 import type { HubAuthContext } from '../../shared/application/hub-auth-context.js';
+import { ConflictError } from '../../shared/domain/errors.js';
 import { UnitOfWork } from '../../shared/infra/db/unit-of-work.js';
 import { SpaceCloud } from '../../spaces/application/space-cloud.js';
 import { SpaceStorage } from '../../spaces/application/space-storage.js';
@@ -32,7 +33,19 @@ export type SendMessageInput = {
   encryptedBody: string;
   /** Edit: the message (mine, live, of this conversation) this one replaces; it becomes a tombstone. */
   replacesMessageId: string | null;
+  /** "Responder pela nuvem" for this message (a person's only; ignored for the executor's own messages). */
+  cloudAnswerRequested?: boolean;
 };
+
+/** The cloud's answer must still be its own to give (`byCloud`'s `answering`): 409, nothing written. */
+export class CloudAnswerNotOwnedError extends ConflictError {
+  constructor() {
+    super(
+      'cloud-answer-not-owned',
+      'The message is no longer acknowledged by the cloud.',
+    );
+  }
+}
 
 // Mandar mensagem (spec conversations §4.3), pela pessoa (rotas do espaço) ou pelo Hub executor (rotas `/hub`):
 // 1. formato antes de travar nada (id v7, corpo cifrado ≤ 64 KiB: 422);
@@ -113,12 +126,16 @@ export class SendMessageUseCase {
    * The cloud as the reserve executor writes an answer (spec active-cloud §4.3): born acknowledged, `authorCloud`.
    * Only in a conversation with the reserve on, of a space still in the active cloud (read under the space lock);
    * anything else is the same 404 `conversation-not-found`. For the `cloud` jobs, through `CloudConversationExecutor`.
+   * `answering`: the person's message this answers; rechecked under the conversation lock: it must still be acknowledged
+   * by the cloud (else 409 `cloud-answer-not-owned`, nothing written: the reserve went off and the message went back to
+   * the queue, maybe to the Hub, while the cloud was thinking).
    */
   async byCloud(
     organizationId: string,
     spaceId: string,
     conversationId: string,
     input: SendMessageInput,
+    answering?: string,
   ): Promise<{ view: MessageView; created: boolean }> {
     validate(input);
     return this.uow.run(async () => {
@@ -141,6 +158,24 @@ export class SendMessageUseCase {
         spaceId,
         'no-key-update',
       );
+      if (answering !== undefined) {
+        const question = await this.messages.findById(scope, answering, {
+          withDeleted: true,
+        });
+        const ownAnswer = await this.messages.findById(scope, input.id, {
+          withDeleted: true,
+        });
+        // A resend of the same answer stays idempotent (the question may have been answered by it already).
+        if (
+          !ownAnswer &&
+          (!question ||
+            question.conversationId !== conversation.id ||
+            question.deletedAt ||
+            !question.ackedByCloud)
+        ) {
+          throw new CloudAnswerNotOwnedError();
+        }
+      }
       return this.send(scope, conversation, quotaBytes, input);
     });
   }
@@ -172,6 +207,7 @@ export class SendMessageUseCase {
       keyVersion: input.keyVersion,
       encryptedBody: input.encryptedBody,
       replacesMessageId: input.replacesMessageId,
+      cloudAnswerRequested: input.cloudAnswerRequested ?? false,
       sentAt: now,
       now,
     });
@@ -218,7 +254,9 @@ export class SendMessageUseCase {
     await this.conversations.save(scope, conversation);
     // A person's message waits for the executor: with the cloud reserve on, the cloud may take it (same transaction).
     if (message.pending) {
-      await this.reserve.signal(conversation, message.id, 'sent');
+      await this.reserve.signal(conversation, message.id, 'sent', {
+        cloudAnswerRequested: message.cloudAnswerRequested,
+      });
     }
 
     assertSpaceFits(

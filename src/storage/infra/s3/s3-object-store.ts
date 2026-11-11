@@ -103,6 +103,22 @@ export class S3ObjectStore extends ObjectStore implements OnModuleDestroy {
     };
   }
 
+  async put(key: string, body: Uint8Array, sha256Hex: string): Promise<void> {
+    if (!SHA256_HEX.test(sha256Hex)) {
+      throw new Error('put: sha256Hex must be 64 lowercase hex chars');
+    }
+    await this.client.send(
+      new PutObjectCommand({
+        Bucket: this.bucket,
+        Key: key,
+        Body: body,
+        ContentLength: body.byteLength,
+        ChecksumSHA256: Buffer.from(sha256Hex, 'hex').toString('base64'),
+        Tagging: UPLOAD_TAGGING,
+      }),
+    );
+  }
+
   presignGet(
     key: string,
     versionId: string,

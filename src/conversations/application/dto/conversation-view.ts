@@ -25,6 +25,8 @@ export type ConversationView = {
   cloudReserve: boolean;
   /** The owner switched the reserve off: only the owner switches it on again. */
   cloudReserveDeclined: boolean;
+  /** "Responder pela nuvem" in the whole conversation (only with the reserve). */
+  cloudAnswer: boolean;
   createdAt: Date | null;
   updatedAt: Date | null;
   /** Live participants, oldest first (the owner succession order). */

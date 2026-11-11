@@ -169,8 +169,8 @@ couber (spec de contas, §12).
   `cancelQueued` entram na transação (a tarefa só existe se ela confirmar). Pelo menos uma vez: handler idempotente, que
   reconfere sob trava. `send` com `startAfterSeconds` (atraso) e `singletonKey` (uma tarefa à espera por chave; enviar
   de novo substitui a que espera); `cancelQueued(nome, { spaceId })` apaga as que ainda esperam, num DELETE só guardado
-  pelo estado (nunca uma em execução); `sendMany(nome, [{ payload, singletonKey }])` enfileira muitas num INSERT só (uma
-  que já espera com a mesma chave é mantida). As filas com handler são criadas na subida (mesmo sem workers). Workers (busca,
+  pelo estado (nunca uma em execução); `sendMany(nome, [{ payload, singletonKey, startAfterSeconds? }])` enfileira muitas num INSERT só (uma
+  que já espera com a mesma chave é mantida, com a hora dela). As filas com handler são criadas na subida (mesmo sem workers). Workers (busca,
   manutenção, cron) só com `JOB_WORKERS_ENABLED` (padrão `true`); **os e2e rodam com `false`** (enfileirar funciona,
   nada roda sozinho) e o teste que precisa liga com `createTestApp({ env: { JOB_WORKERS_ENABLED: 'true' } })`;
   `resetDatabase` apaga `pgboss.job`. **Desligamento:** os workers param (e as tarefas em execução terminam, gracioso,
@@ -777,7 +777,11 @@ mesmo commit).
   `{ organizationId, spaceId, objectIds, change: 'committed'|'deleted' }`, por último no unit of work, com o espaço FOR
   SHARE; o gancho não trava nada; erro desfaz). **Ids de objeto** (`BackupRules.assertObjectIdWritable`): UUID v7 ou o
   id do manifesto do Hub daquele espaço (UUID v5, `docs/hubs/space-manifest.md`; outro: 422 `object-id-invalid`); o do
-  manifesto da nuvem é reservado ao servidor (enviar ou apagar: 422 `object-id-reserved`).
+  manifesto da nuvem é reservado ao servidor (enviar ou apagar: 422 `object-id-reserved`). **Gravação do servidor**
+  (`ServerBackupWriter`, exportado): o mesmo caminho de um envio (intenção, `ObjectStore.put` do blob no provisório com a
+  tag `stage=upload`, confirmação), tudo ou nada, em nome de uma pessoa com `memory.write`; aceita UUID v7 e o id do
+  manifesto da nuvem (`assertObjectIdServerWritable`); `guard` (precondição de quem chama) roda sob a trava do espaço nas
+  duas transações, falso = 409 `server-write-refused` sem gravar nada. Usado pela nuvem para os documentos dela.
 - **Regras de tamanho** (`domain/backup-limits.ts`; mudar qualquer valor é decisão de produto): espaço 10 GiB por padrão
   (1 GiB..5 TiB), franquia da organização 50 GiB (só o financeiro da plataforma altera: `PUT /platform/organizations/:orgId/
   storage-quota`, veja `platform`), objeto até 5 GiB (422 `object-too-large`), lote de 100 itens por pedido
@@ -979,8 +983,16 @@ registra a fonte `conversations`), `hubs` (`HubDirectory`: `ownerOf`,
   histórico do PRÓPRIO assunto, `lock`, `ack` atômico com o do Hub e idempotente para a própria confirmação ainda
   sem resposta, para o job que caiu entre o ack e a resposta retomar, `send` como autor nuvem) e o sinal
   `CloudReservePendingHooks` (mensagem `pending` num assunto com reserva: enviada, devolvida à fila, reserva ligada,
-  troca de chave feita), emitido dentro do unit of work. O ack do Hub numa mensagem já pega pela nuvem: 404
-  `message-not-found`. O Hub lê a pública do servidor em `GET /hub/cloud/server-key`.
+  troca de chave feita, "responder pela nuvem" ligado; `immediate` = sem os 30 s do Hub), emitido dentro do unit of
+  work. O ack do Hub numa mensagem já pega pela nuvem: 404 `message-not-found`. O Hub lê a pública do servidor em
+  `GET /hub/cloud/server-key`. "Respondida pela nuvem" = mensagem da nuvem depois do **ack da nuvem** (`acked_at`; a nuvem
+  responde uma de cada vez), não depois do `sent_at` (como no Hub): vale para o ack idempotente e para o `requeueAckedBy`.
+  `send(..., answering)` reconfere sob a trava do assunto que a pergunta ainda é da nuvem (409 `cloud-answer-not-owned`).
+- **Responder pela nuvem** (migration `ConversationCloudAnswer`): `conversations.cloud_answer` (o assunto inteiro; CHECK
+  só com a reserva; qualquer participante, `PUT .../:id/cloud-answer` `{ enabled }`, `SetCloudAnswerUseCase`, 422
+  `cloud-reserve-unavailable` sem a reserva; a reserva caindo desliga junto) e `conversation_messages.cloud_answer_requested`
+  (`cloudAnswer: true` no envio da pessoa; CHECK só mensagem de pessoa). Os dois, e `ackedByCloud`, saem nos feeds e nas
+  respostas. O Hub deixa essas mensagens para a nuvem (contrato em `docs/hubs/hub-lifecycle.md`).
 - **Ordem de locks:** Hub -> vínculo -> hub_space (FOR SHARE, `lockExecutorCandidate`) -> espaço (FOR SHARE ao criar e
   compartilhar) -> assunto (FOR UPDATE) -> participações -> **advisory lock das versões, sempre o ÚLTIMO** (só no
   COMMIT, `trg_<tabela>_sync_commit`, depois de todas as travas de linha da transação: não fecha ciclo). Ele fica preso
@@ -1257,6 +1269,25 @@ registra a fonte `conversations`), `hubs` (`HubDirectory`: `ownerOf`,
   warningLevel }` (0/75/90/100; orçamento 0 = `budgetConfigured: false` e 100) para **todo membro**, sem valores (porta
   `OrganizationAiSpend` do `organizations`, fonte registrada pelo `cloud`). e2e em `test/cloud/ai-budget.e2e-spec.ts`;
   nos outros e2e, `cloudSwitch.switchOn` põe US$ 100 numa organização sem orçamento (`setAiBudgetInDb`).
+- **Responder e documentar** (spec §4.3; `application/responder/`): fila `cloud.answer-conversation` (registrada em
+  `CloudSpaceJobs`), UMA tarefa à espera por assunto (`singletonKey`), agendada pelo sinal `CloudReservePendingHooks`
+  (mensagem nova: 30 s, `CLOUD_FALLBACK_AFTER_MS`; "responder pela nuvem", sem Hub executor ou outro motivo: na hora).
+  `AnswerConversationJob` responde **em ordem** (`nextResponderStep`: termina antes a que a própria nuvem pegou; uma
+  mensagem ainda do Hub = reagenda para a hora certa): leitura curta (`CloudConversationExecutor.read`) -> orçamento
+  (`AiBudget.tryReserve`; recusado = a mensagem fica `pending` para o Hub e o assunto recebe UM aviso fixo por fila,
+  `notice: 'ai-budget-exceeded'`, sem custo) -> `ack` (Hub antes = devolve a reserva e desiste) -> FORA de transação:
+  chaves do assunto (cópias do servidor), histórico DO PRÓPRIO assunto, embedding da pergunta, trechos DO ESPAÇO
+  (`CloudChunkRepository.search`, pgvector, só daquele espaço e modelo), prompt versionado do Antares
+  (`antares-prompt.ts`, pt-BR, com o público do espaço `SpaceCloud.audience`) e até 4 turnos do modelo com as ferramentas
+  `propose_document` / `record_document` -> resposta cifrada (convenção do texto em claro em `docs/crypto/conversations.md`)
+  com id derivado da pergunta (`answerIdFor`: nunca duas respostas) -> acerto do orçamento. **Gravar** só depois da
+  confirmação conferida pelo servidor (`confirmedProposal`: a proposta estava na mensagem da nuvem logo antes; botão
+  `documentDecision` recusando vence o modelo), em nome de quem confirmou (precisa de `memory.write`):
+  `CloudDocumentWriter` (um objeto Markdown + o manifesto da nuvem, cifrados com a versão atual da chave do espaço, numa
+  gravação só pelo `ServerBackupWriter` do `storage`, com a guarda "ainda `active_cloud`" sob a trava do espaço; tira do
+  manifesto da nuvem o que o Hub já incorporou; indexação na hora). Relógio do executor: `ResponderClock` (os e2e o
+  movem por DI). Nada legível em log (só ids, contagens, códigos, versão do prompt). e2e em
+  `test/cloud/responder.e2e-spec.ts` (LLM e embedder falsos).
 
 ## Banco de dados (TypeORM + migrations)
 - **Pool:** o do driver `pg`, com tamanho explícito `DB_POOL_MAX_CONNECTIONS` (10 por instância; instâncias × (10 + 1 da conexão LISTEN dos assuntos + 4 do pool do pg-boss, `JOB_QUEUE_POOL_MAX`) abaixo
@@ -1490,7 +1521,7 @@ Os valores do `.env.example` para os segredos são **só de desenvolvimento**; p
   | `POST .../objects/:objectId/versions/:versionId/download` (URL de download, as mesmas duas formas) | 12 mil/h por Hub / por usuário (uma URL por versão: 50 mil objetos em ~4 h) |
   | `POST /spaces/:spaceId/conversations` e `POST /hub/conversations` (criar assunto) | 120/h por usuário (`userIdTracker`) / por Hub (`hubIdTracker`), contador próprio por rota |
   | `POST .../conversations/:id/keys` (troca da chave do assunto, as duas formas) | 30/h por usuário / por Hub |
-  | compartilhar, sair, tirar, estado, executor, nuvem de reserva e mover o assunto (`/spaces/:spaceId/conversations/:id/...`, `PUT /hub/conversations/:id/state`) | 600/h por usuário / por Hub, contador próprio por rota |
+  | compartilhar, sair, tirar, estado, executor, nuvem de reserva, "responder pela nuvem" e mover o assunto (`/spaces/:spaceId/conversations/:id/...`, `PUT /hub/conversations/:id/state`) | 600/h por usuário / por Hub, contador próprio por rota |
   | mandar e apagar mensagem do assunto (`POST .../:id/messages`, `DELETE .../:id/messages/:messageId`) | 60/min por usuário / 300/min por Hub, contador próprio por rota |
   | `POST /hub/conversations/:id/messages/:messageId/ack` | 600/min por Hub |
   | anexo do assunto: intenção, confirmação e apagar (`POST .../:id/attachments`, `POST .../:id/attachments/:attachmentId/confirm`, `DELETE .../:id/attachments/:attachmentId`; a URL de download fica no limite geral) | 120/h por usuário / 600/h por Hub, contador próprio por rota |

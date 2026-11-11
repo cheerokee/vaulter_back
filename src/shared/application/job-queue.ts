@@ -49,11 +49,16 @@ export abstract class JobQueue {
 
   /**
    * Enqueues many jobs of one queue in ONE statement (in the unit of work, like `send`). A job whose `singletonKey`
-   * already has a waiting job is skipped (not replaced). Returns how many were added.
+   * already has a waiting job is skipped (not replaced: the waiting one keeps its start time). Returns how many were
+   * added.
    */
   abstract sendMany<P extends JobPayload>(
     name: string,
-    jobs: readonly { payload: P; singletonKey?: string }[],
+    jobs: readonly {
+      payload: P;
+      singletonKey?: string;
+      startAfterSeconds?: number;
+    }[],
   ): Promise<number>;
 
   /**

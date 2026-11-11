@@ -63,6 +63,7 @@ import { SpaceConversationsController } from './infra/http/space-conversations.c
 import { CloudConversationExecutor } from './application/cloud-conversation-executor.js';
 import { ConversationsCloudDeactivatedHook } from './application/cloud-deactivated.hook.js';
 import { ConversationCloudReserve } from './application/conversation-cloud-reserve.js';
+import { SetCloudAnswerUseCase } from './application/set-cloud-answer.use-case.js';
 import { SetCloudReserveUseCase } from './application/set-cloud-reserve.use-case.js';
 
 /**
@@ -164,6 +165,7 @@ import { SetCloudReserveUseCase } from './application/set-cloud-reserve.use-case
     ConversationCloudReserve,
     ConversationsCloudDeactivatedHook,
     SetCloudReserveUseCase,
+    SetCloudAnswerUseCase,
     CloudConversationExecutor,
   ],
   exports: [CloudConversationExecutor],

@@ -9,9 +9,16 @@ export type CloudReservePendingContext = {
   /**
    * Why it is (again) waiting: `sent` (a person sent it), `requeued` (the Hub that acknowledged it stopped being the
    * executor without answering), `reserve_enabled` (the reserve was switched on while it waited) or `key_rotated` (a
-   * pending key rotation, which keeps the cloud from writing, was just done).
+   * pending key rotation, which keeps the cloud from writing, was just done) or `cloud_answer` ("responder pela nuvem"
+   * was switched on for the conversation).
    */
-  reason: 'sent' | 'requeued' | 'reserve_enabled' | 'key_rotated';
+  reason:
+    'sent' | 'requeued' | 'reserve_enabled' | 'key_rotated' | 'cloud_answer';
+  /**
+   * The Hub gets no head start: "responder pela nuvem" (on the message or the conversation) or no executor Hub at all.
+   * Otherwise the cloud waits `CLOUD_FALLBACK_AFTER_MS` from the message's `sentAt` for a Hub ack.
+   */
+  immediate: boolean;
 };
 
 export type CloudReservePendingHook = {

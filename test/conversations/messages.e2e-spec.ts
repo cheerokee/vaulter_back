@@ -159,6 +159,8 @@ describe('conversation messages (e2e)', () => {
         replacesMessageId: null,
         pending: true,
         ackedAt: null,
+        ackedByCloud: false,
+        cloudAnswerRequested: false,
         sentAt: expect.any(String),
         deletedAt: null,
       });

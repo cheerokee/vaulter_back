@@ -83,10 +83,18 @@ export class ConversationMessageTypeormRepository extends ConversationMessageRep
     conversationId: string,
     by: AckedBy,
   ): Promise<string[]> {
+    // The cloud answers one message at a time, after its own ack: its answer is a cloud message after the ACK (an
+    // answer to an earlier message, sent after this one arrived, never counts). A Hub may ack in batches: after `sent_at`.
     const [acked, authored] =
       by.kind === 'hub'
-        ? ['msg.acked_by_hub_id = $3', 'reply.author_hub_id = $3']
-        : ['msg.acked_by_cloud', 'reply.author_cloud'];
+        ? [
+            'msg.acked_by_hub_id = $3',
+            'reply.author_hub_id = $3 AND reply.sent_at > msg.sent_at',
+          ]
+        : [
+            'msg.acked_by_cloud',
+            'reply.author_cloud AND reply.sent_at > msg.acked_at',
+          ];
     const params =
       by.kind === 'hub'
         ? [scope.organizationId, conversationId, by.hubId]
@@ -100,7 +108,7 @@ export class ConversationMessageTypeormRepository extends ConversationMessageRep
             AND NOT EXISTS (
               SELECT 1 FROM conversation_messages reply
                WHERE reply.organization_id = msg.organization_id AND reply.conversation_id = msg.conversation_id
-                 AND ${authored} AND reply.sent_at > msg.sent_at)
+                 AND ${authored})
         RETURNING msg.id`,
         params,
       ),

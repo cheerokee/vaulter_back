@@ -30,6 +30,11 @@ export abstract class SpaceRoleRepository {
     userId: string,
   ): Promise<void>;
   abstract activeMemberIds(orgId: string, spaceId: string): Promise<string[]>;
+  /** How many active PEOPLE hold each space role (only roles with at least one person). */
+  abstract roleCounts(
+    orgId: string,
+    spaceId: string,
+  ): Promise<{ roleKey: SpaceRoleKey; count: number }[]>;
   /** Active space-scope assignments, with role. */
   abstract listMembers(
     orgId: string,

@@ -32,6 +32,7 @@ describe('SpaceCloudDeactivatedHooks / CloudReservePendingHooks', () => {
       conversationId: 'c',
       messageId: 'm',
       reason: 'sent',
+      immediate: false,
     });
     expect(calls).toEqual(['off', 'pending']);
     off.unregister('a');
@@ -42,6 +43,7 @@ describe('SpaceCloudDeactivatedHooks / CloudReservePendingHooks', () => {
       conversationId: 'c',
       messageId: 'm',
       reason: 'sent',
+      immediate: false,
     });
     expect(calls).toHaveLength(2);
   });

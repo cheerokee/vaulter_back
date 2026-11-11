@@ -55,6 +55,11 @@ import type { ConversationTypeormEntity } from './conversation.entity.js';
   'ck_conversation_messages_acked_by_cloud',
   `(NOT "acked_by_cloud") OR ((NOT "pending") AND ("acked_by_hub_id" IS NULL))`,
 )
+// "Responder pela nuvem" só numa mensagem de pessoa.
+@Check(
+  'ck_conversation_messages_cloud_answer',
+  `(NOT "cloud_answer_requested") OR ("author_user_id" IS NOT NULL)`,
+)
 @Index('ix_conversation_messages_sync_version', ['syncVersion'])
 @Index('fk_conversation_messages_organizations_idx', ['organizationId'])
 @Index('fk_conversation_messages_conversations_idx', ['conversationId'])
@@ -170,6 +175,10 @@ export class ConversationMessageTypeormEntity extends DeviceIdSyncableTypeormEnt
   /** The cloud (reserve executor) acknowledged it. */
   @Column({ type: 'boolean', default: false })
   ackedByCloud!: boolean;
+
+  /** "Responder pela nuvem" for this person's message (migration ConversationCloudAnswer). */
+  @Column({ type: 'boolean', default: false })
+  cloudAnswerRequested!: boolean;
 
   @Column({ type: 'timestamptz' })
   sentAt!: Date;

@@ -48,6 +48,7 @@ const conversation = (owner = ANA) =>
       movedFromConversationId: null,
       cloudReserve: false,
       cloudReserveDeclined: false,
+      cloudAnswer: false,
       participantUserIds: [ANA, BIA].sort(),
       createdAt: new Date(),
       deletedAt: null,

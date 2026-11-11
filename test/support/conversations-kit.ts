@@ -100,6 +100,8 @@ export function conversationsKit(getApp: () => INestApplication) {
         text?: string;
         keyVersion?: number;
         replacesMessageId?: string;
+        /** "Responder pela nuvem" for this message. */
+        cloudAnswer?: boolean;
       } = {},
     ) => {
       const id = opts.id ?? newId();
@@ -117,6 +119,9 @@ export function conversationsKit(getApp: () => INestApplication) {
         ),
         ...(opts.replacesMessageId
           ? { replacesMessageId: opts.replacesMessageId }
+          : {}),
+        ...(opts.cloudAnswer !== undefined
+          ? { cloudAnswer: opts.cloudAnswer }
           : {}),
       };
       const res = await http()
@@ -442,6 +447,17 @@ export function conversationsKit(getApp: () => INestApplication) {
               }
             : { enabled: false },
         ),
+    /** "Responder pela nuvem" for the whole conversation. */
+    setCloudAnswer: (
+      user: KeyedUser,
+      spaceId: string,
+      id: string,
+      enabled: boolean,
+    ) =>
+      http()
+        .put(`${base(spaceId, id)}/cloud-answer`)
+        .set(bearer(user.token))
+        .send({ enabled }),
     rotate: (user: KeyedUser, spaceId: string, id: string, body: object) =>
       http()
         .post(`${base(spaceId, id)}/keys`)

@@ -209,10 +209,20 @@ entram exportados para um destes tipos.
 
 ## Manifesto da nuvem e incorporação pelo Hub
 
-Os documentos que a nuvem grava (decisões, atas, convenções: spec active-cloud §4.3; escrito pela Task 7) são objetos
-comuns do backup (UUID v7, cifrados com a chave do espaço, contando no tamanho do espaço) listados **só** no manifesto
-da nuvem, com `"writer": "cloud"` e `source: { "kind": "cloud" }`. O Hub é o dono dos arquivos e do manifesto dele;
-para não haver dois escritores no mesmo manifesto:
+Os documentos que a nuvem grava (decisões, atas, convenções: spec active-cloud §4.3) são objetos comuns do backup
+(UUID v7, cifrados com a **versão atual** da chave do espaço, contando no tamanho do espaço) listados **só** no manifesto
+da nuvem, com `"writer": "cloud"` e `source: { "kind": "cloud" }`. Como a nuvem grava hoje:
+
+- um documento = **um arquivo Markdown** (`mediaType: "text/markdown"`, nome `<título>.md`, `path` nulo) em **uma parte**;
+  o `fileId` é o id da proposta que a pessoa confirmou (UUID v7) e o `objectId` da parte é derivado dele (UUID v7);
+- o objeto e o manifesto da nuvem sobem **juntos** numa gravação só do servidor (os dois entram no índice do backup na
+  mesma transação; nunca um manifesto apontando para uma parte que não existe), registrados como enviados pela
+  **pessoa que confirmou** (ela precisa poder escrever no espaço: Editor ou Gestor);
+- o espaço precisa estar em nuvem ativa no momento da gravação (conferido sob a trava do espaço: desligar no meio =
+  nada gravado) e sem troca de chave pendente; espaço cheio = não grava (a nuvem avisa na conversa);
+- a indexação começa na hora (o documento já responde na próxima pergunta).
+
+O Hub é o dono dos arquivos e do manifesto dele; para não haver dois escritores no mesmo manifesto:
 
 1. O Hub lê o manifesto da nuvem a cada sincronização do backup (listagem, §9 de `hub-lifecycle.md`; o objeto do
    manifesto da nuvem aparece como qualquer outro, com o id derivado acima).
@@ -221,9 +231,11 @@ para não haver dois escritores no mesmo manifesto:
    `objectId`s** (não reenvia os bytes: os objetos já estão no backup). O `source` pode continuar `{ "kind": "cloud" }`
    (a origem do documento) ou passar a `file`.
 3. Envia o manifesto do Hub atualizado.
-4. O servidor, ao ver o `fileId` no manifesto do Hub, **tira a entrada do manifesto da nuvem** (o Hub nunca escreve
-   nele). Enquanto as duas listas têm o `fileId`, vale a do Hub. (A escrita do manifesto da nuvem, inclusive este
-   passo, entra junto com os documentos gravados pela nuvem; até lá o manifesto da nuvem não existe.)
+4. O servidor **tira do manifesto da nuvem** as entradas cujo `fileId` já está no manifesto do Hub (o Hub nunca
+   escreve nele) na **próxima vez que reescreve** o manifesto da nuvem (a próxima gravação de documento). Até lá as duas
+   listas têm o `fileId` e **vale a do Hub** (a nuvem une as entradas por `fileId`), então o Hub deve tolerar ver de novo
+   uma entrada que já incorporou (ela já está no manifesto dele: nada a fazer). Os objetos das partes nunca são apagados
+   por esse passo (agora são do Hub).
 
 Daí em diante o arquivo é do Hub como outro qualquer (editar, mover, apagar). Se o Hub nunca voltar (roubado), o
 manifesto da nuvem continua listando os documentos e nada some numa reindexação.

@@ -30,6 +30,11 @@ export type ConversationMessageProps = {
   ackedByHubId: string | null;
   /** The cloud (reserve executor) acknowledged it; never together with `ackedByHubId`. */
   ackedByCloud: boolean;
+  /**
+   * "Responder pela nuvem" for this message (a person's message only): with the reserve on, the cloud takes it right
+   * away instead of waiting for the Hub (spec active-cloud §4.3). Set when sent, never changed.
+   */
+  cloudAnswerRequested: boolean;
   sentAt: Date;
   createdAt?: Date;
   deletedAt: Date | null;
@@ -45,6 +50,8 @@ export class ConversationMessage extends Entity<ConversationMessageProps> {
     keyVersion: number;
     encryptedBody: string;
     replacesMessageId: string | null;
+    /** A person asks the cloud to answer this one at once (ignored for the executor's own messages: they are born acked). */
+    cloudAnswerRequested?: boolean;
     sentAt: Date;
     now: Date;
   }): ConversationMessage {
@@ -72,6 +79,8 @@ export class ConversationMessage extends Entity<ConversationMessageProps> {
         ackedAt: fromExecutor ? input.now : null,
         ackedByHubId: null,
         ackedByCloud: false,
+        cloudAnswerRequested:
+          !fromExecutor && (input.cloudAnswerRequested ?? false),
         sentAt: input.sentAt,
         createdAt: input.now,
         deletedAt: null,
@@ -188,6 +197,9 @@ export class ConversationMessage extends Entity<ConversationMessageProps> {
   }
   get ackedByCloud(): boolean {
     return this.props.ackedByCloud;
+  }
+  get cloudAnswerRequested(): boolean {
+    return this.props.cloudAnswerRequested;
   }
   get sentAt(): Date {
     return this.props.sentAt;

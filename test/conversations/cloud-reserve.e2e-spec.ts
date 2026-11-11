@@ -352,6 +352,8 @@ describe('conversations: the cloud as reserve executor (e2e)', () => {
           conversationId: conv.id,
           messageId: sent.id,
           reason: 'sent',
+          // A Hub executor and no "responder pela nuvem": the Hub gets its 30 s first.
+          immediate: false,
         },
       ]);
 

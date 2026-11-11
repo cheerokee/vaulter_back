@@ -41,6 +41,7 @@ function conversation(participants: string[], executorHubId: string | null) {
       movedFromConversationId: null,
       cloudReserve: false,
       cloudReserveDeclined: false,
+      cloudAnswer: false,
       participantUserIds: participants,
       createdAt: t0,
       deletedAt: null,

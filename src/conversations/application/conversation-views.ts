@@ -37,6 +37,7 @@ export class ConversationViews {
       movedFromConversationId: p.movedFromConversationId,
       cloudReserve: p.cloudReserve,
       cloudReserveDeclined: p.cloudReserveDeclined,
+      cloudAnswer: p.cloudAnswer,
       createdAt: p.createdAt ?? null,
       updatedAt: p.updatedAt ?? null,
       participants: await this.participants.listLive(scope, c.id),

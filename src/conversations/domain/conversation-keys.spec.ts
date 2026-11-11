@@ -129,6 +129,7 @@ describe('Conversation.assertRotationAllowed', () => {
         movedFromConversationId: null,
         cloudReserve: false,
         cloudReserveDeclined: false,
+        cloudAnswer: false,
         participantUserIds: [OWNER, OTHER],
         createdAt: now,
         deletedAt: null,

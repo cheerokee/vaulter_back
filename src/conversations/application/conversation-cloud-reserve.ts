@@ -71,11 +71,15 @@ export class ConversationCloudReserve {
     }
   }
 
-  /** A pending message the cloud may take (only with the reserve on; else nothing). */
+  /**
+   * A pending message the cloud may take (only with the reserve on; else nothing). `immediate`: no reason to give the
+   * Hub its 30 s ("responder pela nuvem" on the message or the conversation, or no executor Hub at all).
+   */
   async signal(
     conversation: Conversation,
     messageId: string,
     reason: CloudReservePendingContext['reason'],
+    options: { cloudAnswerRequested?: boolean } = {},
   ): Promise<void> {
     if (!conversation.isCloudExecutor()) return;
     await this.pending.run({
@@ -84,6 +88,10 @@ export class ConversationCloudReserve {
       conversationId: conversation.id,
       messageId,
       reason,
+      immediate:
+        (options.cloudAnswerRequested ?? false) ||
+        conversation.cloudAnswer ||
+        conversation.executorHubId === null,
     });
   }
 }

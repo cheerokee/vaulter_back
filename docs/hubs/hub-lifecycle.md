@@ -483,12 +483,12 @@ organização está aprovado). Rotas com o token de Hub:
     assunto), o backend devolve a `pending` toda mensagem que o Hub antigo confirmou sem mandar nenhuma mensagem dele
     depois no assunto (ela chega de novo no feed com `pending: true`);
   - **nuvem de reserva** (espaço em nuvem ativa; spec active-cloud §4.3): o item `conversation` traz `cloudReserve`.
-    Com ela ligada, a nuvem também pode pegar uma mensagem `pending` (quando o Hub não confirma a tempo, ou a pessoa
-    pede "responder pela nuvem"): **o primeiro ack vale**. Se a nuvem pegou antes, o ack do Hub dá **404**
-    `message-not-found` (descarte, nunca execute) e a mensagem chega no feed com `pending: false`. A resposta da nuvem é
-    uma `conversation_message` com `authorCloud: true` (nasce confirmada). Uma mensagem que a nuvem confirmou e ainda não respondeu continua sendo
-    dela (o ack do Hub segue 404) até a reserva cair. Quando a reserva cai (o dono desliga, o
-    espaço sai da nuvem ativa), o que a nuvem confirmou sem responder volta a `pending` e é trabalho do Hub;
+    Com ela ligada, a nuvem também pode pegar uma mensagem `pending`: **o primeiro ack vale** (contrato completo em
+    "A nuvem como executor de reserva", abaixo). Se a nuvem pegou antes, o ack do Hub dá **404** `message-not-found`
+    (descarte, nunca execute) e a mensagem chega no feed com `pending: false` e `ackedByCloud: true`. A resposta da
+    nuvem é uma `conversation_message` com `authorCloud: true` (nasce confirmada). Uma mensagem que a nuvem confirmou e
+    ainda não respondeu continua sendo dela (o ack do Hub segue 404) até a reserva cair. Quando a reserva cai (o dono
+    desliga, o espaço sai da nuvem ativa), o que a nuvem confirmou sem responder volta a `pending` e é trabalho do Hub;
   - **troca de chave pelo executor:** quando o item `conversation` vier com `keyRotationRequired: true`, o Hub **não
     pode mandar mensagem nem anexo** (409 `conversation-key-rotation-required`); ele (ou qualquer participante) faz a
     troca com `POST /hub/conversations/:id/keys`, e o assunto volta a aceitar mensagens. Enquanto pendente, guarde o que
@@ -555,6 +555,43 @@ no Hub), até **100 MiB** cifrados.
   `attachment-not-found`. O backend não sabe quais anexos uma mensagem cita (a referência está no corpo cifrado): ao
   apagar uma mensagem, apague também os anexos dela. O apagado fica 30 dias na lixeira (conta no uso do espaço) e
   depois a retenção tira o conteúdo; o dono do assunto pode esvaziar antes, pelo app.
+
+### A nuvem como executor de reserva (contrato com o Hub)
+
+Num espaço em **nuvem ativa** todo assunto nasce com a nuvem como executor de **reserva** (`cloudReserve: true`; spec
+active-cloud §4.3). O Hub continua sendo o executor principal; a nuvem só cobre quando ele está fora de alcance.
+
+1. **Hub primeiro, 30 s.** Uma mensagem de pessoa `pending` é do Hub durante **30 s** contados do `sentAt` dela
+   (`CLOUD_FALLBACK_AFTER_MS = 30_000`). Um Hub ligado acompanha o feed com sondagem longa e confirma em segundos; se
+   não confirmar em 30 s, a nuvem tenta pegá-la. **O `ack` decide quem pegou, nunca os dois:** o Hub e a nuvem travam o
+   assunto do mesmo jeito e o primeiro ack vale.
+2. **A nuvem não espera** (pega na hora) quando a pessoa pede **"responder pela nuvem"**: na mensagem
+   (`cloudAnswerRequested: true` no item `conversation_message`) ou no assunto inteiro (`cloudAnswer: true` no item
+   `conversation`), e quando o assunto não tem Hub executor. **O Hub deve deixar essas mensagens para a nuvem** (não
+   confirmar uma mensagem `pending` com `cloudAnswerRequested` nem as de um assunto com `cloudAnswer`, enquanto
+   `cloudReserve` estiver ligada). Se confirmar mesmo assim, o primeiro ack continua valendo (nunca duas respostas).
+3. **Mensagem confirmada pela nuvem não é executada pelo Hub.** O ack do Hub dá 404 `message-not-found` (descarte) e o
+   feed mostra `pending: false`, `ackedByCloud: true`. Vale também quando o Hub volta **no meio** da resposta da nuvem:
+   ela já é da nuvem; a resposta chega depois como `authorCloud: true`. Se a reserva cair antes da resposta, a mensagem
+   volta a `pending` e é do Hub (a nuvem confere, sob a trava do assunto, que a mensagem ainda é dela antes de gravar a
+   resposta; senão não grava nada).
+4. **Ordem:** a nuvem responde as mensagens de um assunto **em ordem**, uma de cada vez (só pega a próxima depois de
+   responder a anterior); o id da resposta é derivado do id da pergunta (uma resposta por pergunta, mesmo com
+   repetição).
+5. **Orçamento de IA esgotado:** a nuvem **não pega** a mensagem (ela continua `pending`, é do Hub) e manda **um** aviso
+   fixo por fila de pendentes (`notice: "ai-budget-exceeded"` no texto em claro). O Hub segue normal.
+6. **Texto em claro** das mensagens (todos os executores): a convenção v1 de `docs/crypto/conversations.md` ("Texto em
+   claro das mensagens"): `{"text": "..."}` e campos opcionais; texto puro também vale.
+7. **Regra de confidencialidade (vale para o Hub também):** antes de gravar um documento no espaço (decisão, convenção,
+   ata, planejamento), o executor **propõe e pergunta** (mensagem com `documentProposal`) e só grava depois que a
+   pessoa confirma na mensagem **seguinte** (texto ou `documentDecision: { decision: "record" }`). Se o conteúdo
+   parecer confidencial e o espaço for amplo, avisa **quem lê o espaço** (quantas pessoas e papéis; o Hub tem isso pela
+   sincronização) e oferece: gravar mesmo assim, gravar num espaço mais restrito, não gravar. **Nunca grava em
+   silêncio.** Depois de gravar, a resposta traz `documentRecorded: { fileId, title }`.
+8. **Documentos gravados pela nuvem** vão para o backup do espaço e para o **manifesto da nuvem**; o Hub os
+   **incorpora** ao próprio manifesto (mesmo `fileId` e mesmos `objectId`s, sem reenviar bytes) e o servidor tira a
+   entrada do manifesto da nuvem na gravação seguinte: `docs/hubs/space-manifest.md`, "Manifesto da nuvem e incorporação
+   pelo Hub".
 
 **Assunto movido de espaço** (pelo dono, no app): o assunto antigo ganha lápide (chega no feed como `conversation` com
 `deleted: true`: apague-o localmente) e o novo, criado no destino com `movedFromConversationId`, só chega a este Hub se
