@@ -104,6 +104,8 @@ describe('create conversation: the same id racing', () => {
     as<UnitOfWork>(uow),
     as<SpaceStorage>(spaceStorage),
     as<SpaceStorageUsage>(usage),
+    as<SpaceCloud>({ modeOf: vi.fn(async () => 'encrypted_backup') }),
+    as<ConversationCloudReserve>({}),
   );
   const userInput = {
     id: ID,

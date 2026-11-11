@@ -51,8 +51,10 @@ export type CloudConversationRead = {
 };
 
 /**
- * Result of the cloud's ack: `acked` = the cloud took it (it must answer); `taken` = someone else took it first (the
- * Hub, or the cloud before), or it was deleted: give up; `unavailable` = the conversation is out of the cloud's reach
+ * Result of the cloud's ack: `acked` = the cloud took it (it must answer). Idempotent for the cloud's own ack: a message
+ * the cloud already acknowledged and has not answered yet (no cloud message after it) is `acked` again, so a job that
+ * crashed between its ack and its answer resumes (the Hub's ack of it is 404: nobody else would answer it).
+ * `taken` = the Hub took it, the cloud already answered it, or it was deleted: give up; `unavailable` = the conversation is out of the cloud's reach
  * (reserve off, space out of the active cloud, conversation gone) or its key must rotate first (the cloud cannot write
  * nor rotate): nothing changed, try again after a `CloudReservePendingHooks` signal.
  */
@@ -163,8 +165,17 @@ export class CloudConversationExecutor {
       const m = await this.messages.findById(scope, messageId, {
         withDeleted: true,
       });
-      if (!m || m.conversationId !== c.id || m.deletedAt || !m.pending) {
-        return 'taken';
+      if (!m || m.conversationId !== c.id || m.deletedAt) return 'taken';
+      if (!m.pending) {
+        const mineUnanswered =
+          m.ackedByCloud &&
+          !(await this.messages.answeredAfter(
+            scope,
+            c.id,
+            { kind: 'cloud' },
+            m.sentAt,
+          ));
+        return mineUnanswered ? 'acked' : 'taken';
       }
       m.ack(await this.messages.databaseNow(), { kind: 'cloud' });
       await this.messages.save(scope, m);

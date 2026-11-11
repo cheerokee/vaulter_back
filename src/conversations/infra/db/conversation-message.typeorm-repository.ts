@@ -108,6 +108,31 @@ export class ConversationMessageTypeormRepository extends ConversationMessageRep
     return updatedRows<{ id: string }>(raw).map((r) => r.id);
   }
 
+  // Mesma regra do `requeueAckedBy` (mensagem do autor depois da confirmada, com ou sem lápide).
+  async answeredAfter(
+    scope: ConversationScope,
+    conversationId: string,
+    by: AckedBy,
+    after: Date,
+  ): Promise<boolean> {
+    const [authored, params] =
+      by.kind === 'hub'
+        ? [
+            'author_hub_id = $4',
+            [scope.organizationId, conversationId, after, by.hubId],
+          ]
+        : ['author_cloud', [scope.organizationId, conversationId, after]];
+    const rows: unknown[] = await inScope(this.dataSource, scope, (m) =>
+      m.query(
+        `SELECT 1 FROM conversation_messages
+          WHERE organization_id = $1 AND conversation_id = $2 AND ${authored} AND sent_at > $3
+          LIMIT 1`,
+        params,
+      ),
+    );
+    return rows.length > 0;
+  }
+
   async listRecent(
     scope: ConversationScope,
     conversationId: string,

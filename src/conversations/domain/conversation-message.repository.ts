@@ -37,6 +37,13 @@ export abstract class ConversationMessageRepository {
     conversationId: string,
     by: AckedBy,
   ): Promise<string[]>;
+  /** Whether `by` (Hub or cloud) wrote a message in the conversation after `after` (it answered what it acked). */
+  abstract answeredAfter(
+    scope: ConversationScope,
+    conversationId: string,
+    by: AckedBy,
+    after: Date,
+  ): Promise<boolean>;
   /** The last `limit` live messages of the conversation (with their bodies), oldest first: the cloud's history. */
   abstract listRecent(
     scope: ConversationScope,

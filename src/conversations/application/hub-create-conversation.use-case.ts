@@ -8,11 +8,14 @@ import {
 } from '../../shared/domain/errors.js';
 import { UnitOfWork } from '../../shared/infra/db/unit-of-work.js';
 import { SpaceAccess } from '../../spaces/application/space-access.js';
+import { SpaceCloud } from '../../spaces/application/space-cloud.js';
 import { SpaceStorage } from '../../spaces/application/space-storage.js';
 import { SpaceStorageUsage } from '../../spaces/application/space-storage-usage.js';
 import type { ConversationScope } from '../domain/conversation-actor.js';
 import {
   assertSpaceFits,
+  cloudReserveCopyRequired,
+  cloudReserveUnavailable,
   conversationIdConflict,
   executorInvalid,
   participantNotSpaceMember,
@@ -27,6 +30,7 @@ import { ConversationRepository } from '../domain/conversation.repository.js';
 import { Conversation } from '../domain/conversation.js';
 import { assertParticipantCapacity } from '../domain/participation-rules.js';
 import { assertWrappedConversationKey } from '../domain/wrapped-conversation-key.js';
+import { ConversationCloudReserve } from './conversation-cloud-reserve.js';
 import { ConversationExecutors } from './conversation-executors.js';
 import { isIdConflict } from './create-conversation.use-case.js';
 import { ConversationViews } from './conversation-views.js';
@@ -44,6 +48,12 @@ export type HubCreateConversationInput = {
   grants: { userId: string; wrappedKey: string }[];
   /** Version 1 sealed for the hub itself (the executor). */
   hubWrappedKey: string;
+  /**
+   * Version 1 sealed for the server key (`GET /hub/cloud/server-key`): required exactly when the space is in the active
+   * cloud (the conversation is born with the cloud reserve, like the app's create): else 422
+   * `cloud-reserve-copy-required` / `cloud-reserve-unavailable`; a copy that does not open: 422 `server-copy-invalid`.
+   */
+  serverWrappedKey?: string | null;
 };
 
 // O Hub abre um assunto (o "aviso" do copiloto, spec §4.1) em nome de uma pessoa, sendo ele mesmo o executor. A
@@ -52,6 +62,10 @@ export type HubCreateConversationInput = {
 // `participant-not-space-member`). Espaço que não está no Hub (ou vínculo não aprovado), dono do Hub fora das
 // `grants`, ou pessoa sem papel no Hub: 422 `executor-invalid`. O RLS deixa o Hub inserir com qualquer dono (policy
 // `executor_hub_id = app.hub_id`): estas regras SÃO a trava. Reenviar o mesmo `id` devolve o mesmo assunto.
+// Nuvem ativa (spec active-cloud §4.3, sem exceção para o Hub): num espaço em `active_cloud` (lido sob o lock do
+// espaço) o assunto nasce com a nuvem de reserva e a versão 1 vai também para a chave do servidor (`serverWrappedKey`,
+// selada para `GET /hub/cloud/server-key`); sem ela 422 `cloud-reserve-copy-required`; fora da nuvem ativa, 422
+// `cloud-reserve-unavailable`; cópia que não abre, 422 `server-copy-invalid`.
 // Locks: Hub -> vínculo -> hub_space (FOR SHARE) -> espaço (FOR SHARE) -> o assunto novo.
 @Injectable()
 export class HubCreateConversationUseCase {
@@ -67,6 +81,8 @@ export class HubCreateConversationUseCase {
     private readonly uow: UnitOfWork,
     private readonly spaceStorage: SpaceStorage,
     private readonly usage: SpaceStorageUsage,
+    private readonly spaceCloud: SpaceCloud,
+    private readonly reserve: ConversationCloudReserve,
   ) {}
 
   execute(
@@ -76,6 +92,10 @@ export class HubCreateConversationUseCase {
     const { hubId } = hub;
     const { spaceId, ownerUserId } = input;
     assertWrappedConversationKey(input.hubWrappedKey);
+    const serverWrappedKey = input.serverWrappedKey ?? null;
+    if (serverWrappedKey !== null) {
+      assertWrappedConversationKey(serverWrappedKey);
+    }
     for (const g of input.grants) assertWrappedConversationKey(g.wrappedKey);
     const participantIds = input.grants.map((g) => g.userId);
     if (new Set(participantIds).size !== participantIds.length) {
@@ -113,7 +133,7 @@ export class HubCreateConversationUseCase {
         return { view: await this.views.of(scope, found), created: false };
       };
       if (existing) return replay(existing);
-      const conversation = Conversation.create({
+      const conversationInput = {
         id: input.id,
         organizationId,
         spaceId,
@@ -123,7 +143,9 @@ export class HubCreateConversationUseCase {
         state: assertInitialState('hub', input.state ?? 'aviso'),
         encryptedHeader: input.encryptedHeader,
         now: new Date(),
-      });
+      };
+      // Format first (422 before any lock), as before; the reserve is decided under the space lock below.
+      Conversation.create(conversationInput);
       await this.executors.lockEligible({
         hubId,
         organizationId,
@@ -163,6 +185,24 @@ export class HubCreateConversationUseCase {
         spaceId,
       );
       if (quotaBytes === null) throw participantNotSpaceMember();
+      // Read under the space lock (switching the cloud on/off takes it FOR UPDATE): in the active cloud the
+      // conversation is born with the cloud reserve, v1 sealed for the server key too (no Hub exception).
+      const activeCloud =
+        (await this.spaceCloud.modeOf(organizationId, spaceId)) ===
+        'active_cloud';
+      if (activeCloud && serverWrappedKey === null) {
+        throw cloudReserveCopyRequired();
+      }
+      if (!activeCloud && serverWrappedKey !== null) {
+        throw cloudReserveUnavailable();
+      }
+      if (serverWrappedKey !== null) {
+        await this.reserve.assertServerCopies([serverWrappedKey]);
+      }
+      const conversation = Conversation.create({
+        ...conversationInput,
+        cloudReserve: activeCloud,
+      });
       try {
         await this.conversations.create(scope, conversation);
       } catch (e) {
@@ -196,6 +236,14 @@ export class HubCreateConversationUseCase {
         recipient: { kind: 'hub', hubId },
         wrappedKey: input.hubWrappedKey,
       });
+      if (serverWrappedKey !== null) {
+        await this.reserve.putServerCopy(
+          scope,
+          conversation.id,
+          1,
+          serverWrappedKey,
+        );
+      }
       // The header counts in the space usage (trigger); checked AFTER writing, like a message.
       assertSpaceFits(
         quotaBytes,

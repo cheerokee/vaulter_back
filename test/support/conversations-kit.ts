@@ -239,7 +239,12 @@ export function conversationsKit(getApp: () => INestApplication) {
       spaceId: string,
       owner: Recipient,
       participants: Recipient[],
-      opts: { id?: string; state?: string } = {},
+      opts: {
+        id?: string;
+        state?: string;
+        /** The server public key (`GET /hub/cloud/server-key`): v1 sealed for it too (cloud reserve). */
+        serverPublicKey?: string;
+      } = {},
     ) => {
       const id = opts.id ?? newId();
       const key = await newConversationKey();
@@ -262,6 +267,14 @@ export function conversationsKit(getApp: () => INestApplication) {
             key,
             hub.identity.encryptionPublicKey,
           ),
+          ...(opts.serverPublicKey
+            ? {
+                serverWrappedKey: await sealConversationKey(
+                  key,
+                  opts.serverPublicKey,
+                ),
+              }
+            : {}),
         });
       return { res, id, keys: [key] as ConversationKeys };
     },

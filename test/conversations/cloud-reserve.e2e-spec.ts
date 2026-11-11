@@ -205,6 +205,61 @@ describe('conversations: the cloud as reserve executor (e2e)', () => {
       expect(await conversationRow(id)).toBeNull();
     });
 
+    it('the Hub opens a conversation in the active cloud: same rule (no Hub exception), the server key read with the hub token', async () => {
+      const hubServerPk = (
+        await expectStatus(
+          http().get('/hub/cloud/server-key').set(bearer(casaToken)),
+          200,
+        )
+      ).body.publicKey as string;
+      expect(hubServerPk).toBe(serverPk);
+      const without = await k.hubCreate(
+        casa,
+        casaToken,
+        active,
+        recipientOf(olivia),
+        [recipientOf(olivia)],
+      );
+      expectProblem(without.res, 422, 'cloud-reserve-copy-required');
+      expect(await conversationRow(without.id)).toBeNull();
+      const wrong = await k.hubCreate(
+        casa,
+        casaToken,
+        active,
+        recipientOf(olivia),
+        [recipientOf(olivia)],
+        { serverPublicKey: ana.account.publicKey },
+      );
+      expectProblem(wrong.res, 422, 'server-copy-invalid');
+      const ok = await k.hubCreate(
+        casa,
+        casaToken,
+        active,
+        recipientOf(olivia),
+        [recipientOf(olivia)],
+        { serverPublicKey: hubServerPk },
+      );
+      const body = (await expectStatus(Promise.resolve(ok.res), 201)).body;
+      expect(body.cloudReserve).toBe(true);
+      expect(await serverCopies(ok.id)).toEqual([[1, 'server']]);
+      const read = await executor().read(orgId, active, ok.id);
+      const opened = await app
+        .get(ServerKeyring)
+        .openSealed(read!.serverKeyCopies[0]!.wrappedKey);
+      expect(Buffer.from(opened).equals(Buffer.from(ok.keys[0]!))).toBe(true);
+      // Outside the active cloud the Hub's copy is refused too.
+      await hubs.addSpace(olivia, casa.hubId, plain);
+      const outside = await k.hubCreate(
+        casa,
+        casaToken,
+        plain,
+        recipientOf(olivia),
+        [recipientOf(olivia)],
+        { serverPublicKey: hubServerPk },
+      );
+      expectProblem(outside.res, 422, 'cloud-reserve-unavailable');
+    });
+
     it('outside the active cloud a server copy is refused: 422 cloud-reserve-unavailable', async () => {
       const res = await k.create(olivia, plain, { serverPublicKey: serverPk });
       expectProblem(res.res, 422, 'cloud-reserve-unavailable');
@@ -322,8 +377,9 @@ describe('conversations: the cloud as reserve executor (e2e)', () => {
       expect(await executor().ack(orgId, active, conv.id, sent.id)).toBe(
         'acked',
       );
+      // A retried job (crashed between its ack and its answer) resumes: its own unanswered ack is `acked` again.
       expect(await executor().ack(orgId, active, conv.id, sent.id)).toBe(
-        'taken',
+        'acked',
       );
       expectProblem(
         await k.hubAck(casaToken, conv.id, sent.id),
@@ -351,6 +407,10 @@ describe('conversations: the cloud as reserve executor (e2e)', () => {
       });
       key.fill(0);
       expect(answer.created).toBe(true);
+      // Answered: nothing left for a retried job.
+      expect(await executor().ack(orgId, active, conv.id, sent.id)).toBe(
+        'taken',
+      );
       expect(answer.view).toMatchObject({
         authorCloud: true,
         authorUserId: null,
@@ -408,6 +468,14 @@ describe('conversations: the cloud as reserve executor (e2e)', () => {
         [withReserve.id],
       )) as unknown as [unknown[], number];
       expect(updated[1]).toBe(0);
+      // Nor deletes the server copies (only a participant does).
+      const deleted = (await asCloud(
+        active,
+        `DELETE FROM conversation_key_grants WHERE conversation_id = $1 AND server_recipient`,
+        [withReserve.id],
+      )) as unknown as [unknown[], number];
+      expect(deleted[1]).toBe(0);
+      expect(await serverCopies(withReserve.id)).toEqual([[1, 'server']]);
       expect(await executor().read(orgId, plain, noReserve.id)).toBeNull();
       expect(await executor().read(orgId, active, preexisting.id)).toBeNull();
     });

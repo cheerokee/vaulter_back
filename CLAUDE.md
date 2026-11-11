@@ -962,20 +962,22 @@ registra a fonte `conversations`), `hubs` (`HubDirectory`: `ownerOf`,
 - **Nuvem de reserva** (spec active-cloud §4.3; migration `ConversationCloudReserve`): `conversations.cloud_reserve`
   (+ `cloud_reserve_declined`, o dono desligou), cópias da chave para a chave do servidor em `conversation_key_grants`
   (`server_recipient`; CHECK um destinatário: pessoa, Hub OU servidor; nunca num feed) e a nuvem como autora/quem
-  confirmou (`author_cloud`, `acked_by_cloud`). Criar num espaço `active_cloud` exige `serverWrappedKey` (422
+  confirmou (`author_cloud`, `acked_by_cloud`). Criar num espaço `active_cloud` exige `serverWrappedKey`, também
+  quando é o Hub que cria (`POST /hub/conversations`, pública em `GET /hub/cloud/server-key`; sem exceção) (422
   `cloud-reserve-copy-required`; fora dele, 422 `cloud-reserve-unavailable`); `PUT .../:id/cloud-reserve`
   (`SetCloudReserveUseCase`) liga com as cópias de todas as versões (qualquer participante, menos depois de o dono
   desligar) e desliga (só o dono); com a reserva, a troca de chave exige `serverWrappedKey` (409 `key-rotation-mismatch`
   com `missingServer`). Toda cópia para o servidor é conferida (abre com a chave dele, 422 `server-copy-invalid`). A
   reserva cai (cópias do servidor **APAGADAS**, exceção documentada à lápide: GRANT DELETE só nessas linhas pela policy
-  `conversation_server_copy_delete`; troca pendente; o que a nuvem confirmou sem responder volta a `pending`) quando o
+  `conversation_server_copy_delete`, só em contexto de pessoa, nunca de Hub nem da nuvem; troca pendente; o que a nuvem confirmou sem responder volta a `pending`) quando o
   dono desliga, quando o assunto ganha lápide (último sai, mover) e quando o espaço sai da nuvem ativa (gancho
   `conversations.cloud-deactivated`, escrito no contexto do DONO, como o executor perdido). **RLS:** contexto
   `app.cloud_executor` = UM espaço (`UnitOfWorkContext.cloudExecutorSpaceId`, ator `{ kind: 'cloud', spaceId }`): só os
   assuntos vivos daquele espaço com `cloud_reserve` (e os filhos deles); nele não se grava participação, cópia nem anexo
   (`conversation_no_cloud_*`). Que o espaço está em `active_cloud` é conferido pelo `conversations` (`SpaceCloud`) a cada
   operação. **Para o `cloud`:** `CloudConversationExecutor` (ids com reserva, `read` = assunto + cópias do servidor +
-  histórico do PRÓPRIO assunto, `lock`, `ack` atômico com o do Hub, `send` como autor nuvem) e o sinal
+  histórico do PRÓPRIO assunto, `lock`, `ack` atômico com o do Hub e idempotente para a própria confirmação ainda
+  sem resposta, para o job que caiu entre o ack e a resposta retomar, `send` como autor nuvem) e o sinal
   `CloudReservePendingHooks` (mensagem `pending` num assunto com reserva: enviada, devolvida à fila, reserva ligada,
   troca de chave feita), emitido dentro do unit of work. O ack do Hub numa mensagem já pega pela nuvem: 404
   `message-not-found`. O Hub lê a pública do servidor em `GET /hub/cloud/server-key`.

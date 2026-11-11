@@ -185,6 +185,15 @@ export class HubCreateConversationDto extends HeaderFields {
   @IsString()
   @Matches(WRAPPED_CONVERSATION_KEY_PATTERN)
   hubWrappedKey!: string;
+
+  /**
+   * Version 1 sealed for the server key (`GET /hub/cloud/server-key`): required exactly when the space is in the active
+   * cloud (422 `cloud-reserve-copy-required` / `cloud-reserve-unavailable`).
+   */
+  @IsOptional()
+  @IsString()
+  @Matches(WRAPPED_CONVERSATION_KEY_PATTERN)
+  serverWrappedKey?: string;
 }
 
 export class ShareTargetDto {

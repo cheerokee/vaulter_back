@@ -141,6 +141,7 @@ export class HubConversationsController {
           wrappedKey: g.wrappedKey,
         })),
         hubWrappedKey: dto.hubWrappedKey,
+        serverWrappedKey: dto.serverWrappedKey ?? null,
       },
     );
     res.status(created ? 201 : 200);

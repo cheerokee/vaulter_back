@@ -486,7 +486,8 @@ organização está aprovado). Rotas com o token de Hub:
     Com ela ligada, a nuvem também pode pegar uma mensagem `pending` (quando o Hub não confirma a tempo, ou a pessoa
     pede "responder pela nuvem"): **o primeiro ack vale**. Se a nuvem pegou antes, o ack do Hub dá **404**
     `message-not-found` (descarte, nunca execute) e a mensagem chega no feed com `pending: false`. A resposta da nuvem é
-    uma `conversation_message` com `authorCloud: true` (nasce confirmada). Quando a reserva cai (o dono desliga, o
+    uma `conversation_message` com `authorCloud: true` (nasce confirmada). Uma mensagem que a nuvem confirmou e ainda não respondeu continua sendo
+    dela (o ack do Hub segue 404) até a reserva cair. Quando a reserva cai (o dono desliga, o
     espaço sai da nuvem ativa), o que a nuvem confirmou sem responder volta a `pending` e é trabalho do Hub;
   - **troca de chave pelo executor:** quando o item `conversation` vier com `keyRotationRequired: true`, o Hub **não
     pode mandar mensagem nem anexo** (409 `conversation-key-rotation-required`); ele (ou qualquer participante) faz a
@@ -500,7 +501,11 @@ organização está aprovado). Rotas com o token de Hub:
   membro do espaço, sendo ele o executor. `grants` = a versão 1 da chave trancada para cada participante: a pessoa e,
   se não for ela, o **dono do Hub** (regra do executor). Espaço que não está no Hub, vínculo não aprovado ou dono do
   Hub fora das `grants`: 422 `executor-invalid`; participante fora do espaço: 422 `participant-not-space-member`.
-  Mandar de novo o mesmo `id` devolve o mesmo assunto (200).
+  Mandar de novo o mesmo `id` devolve o mesmo assunto (200). **Espaço em nuvem ativa** (spec active-cloud §4.3, sem
+  exceção para o Hub): o assunto nasce com a nuvem de reserva e o pedido leva também `serverWrappedKey` (a versão 1
+  selada para a pública do servidor, `GET /hub/cloud/server-key`); sem ela 422 `cloud-reserve-copy-required`; fora da
+  nuvem ativa, mandar a cópia é 422 `cloud-reserve-unavailable`; cópia que não abre com a chave do servidor, 422
+  `server-copy-invalid`. O Hub sabe se o espaço está em nuvem ativa pelo app/`cloud` (ou tenta e recebe o 422).
 - `GET /hub/conversations/:id`: metadado, participantes e as cópias da chave do próprio Hub (todas as versões).
 - `PUT /hub/conversations/:id/header` `{ keyVersion, encryptedHeader }`: o executor troca o cabeçalho cifrado (título,
   plano; `docs/crypto/conversations.md`, rótulo do cabeçalho, `recordId` = id do assunto) com a versão **atual** da
