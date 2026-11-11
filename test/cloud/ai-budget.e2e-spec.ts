@@ -324,6 +324,21 @@ describe('monthly AI budget (e2e)', () => {
       );
     });
 
+    it('keepAlive moves the expiry of a live reservation forward', async () => {
+      const r = await budget().reserve(req(10n));
+      await db(
+        `UPDATE cloud_ai_reservations SET expires_at = now() + interval '5 seconds' WHERE id = $1`,
+        [r.id],
+      );
+      await budget().keepAlive(r);
+      const [{ secs }] = await db<{ secs: number }>(
+        `SELECT extract(epoch FROM expires_at - now())::int AS secs FROM cloud_ai_reservations WHERE id = $1`,
+        [r.id],
+      );
+      expect(secs).toBeGreaterThan(14 * 60);
+      await budget().release(r);
+    });
+
     it('a forgotten reservation stops counting when it expires; a late settle still records the spend', async () => {
       const r = await budget().reserve(req(1000n));
       await expect(budget().reserve(req(1n))).rejects.toBeInstanceOf(
@@ -333,6 +348,8 @@ describe('monthly AI budget (e2e)', () => {
         `UPDATE cloud_ai_reservations SET expires_at = now() - interval '1 second' WHERE id = $1`,
         [r.id],
       );
+      // keepAlive does not revive an expired reservation.
+      await budget().keepAlive(r);
       const next = await budget().reserve(req(1n));
       const [{ status }] = await db<{ status: string }>(
         `SELECT status FROM cloud_ai_reservations WHERE id = $1`,
@@ -360,8 +377,8 @@ describe('monthly AI budget (e2e)', () => {
     });
   });
 
-  describe('indexing stops at the next batch and resumes when finance raises the budget (Review Focus 3)', () => {
-    it('pauses with the spend recorded and a resume scheduled for next month; a raise resumes it now', async () => {
+  describe('indexing stops at the next file and resumes when finance raises the budget (Review Focus 3)', () => {
+    it('a file the month cannot cover never starts (no paid batch wasted); a raise resumes it now', async () => {
       await resetLedger();
       const ana = await c.spaces.signUpKeyed('ana@example.com', 'Ana');
       const anaOrg = await c.spaces.orgWithKit(ana);
@@ -371,43 +388,56 @@ describe('monthly AI budget (e2e)', () => {
         anaOrg.kit.publicKey,
       );
       const space = { spaceId: created.spaceId, key: created.key };
-      // 4 batches of embeddings; the budget fits exactly 2 (the 3rd reservation does not fit).
-      const text = Array.from({ length: 12_000 }, (_, i) => `termo${i}`).join(
-        ' ',
-      );
-      const pieces = chunkText(text);
-      expect(Math.ceil(pieces.length / EMBEDDING_BATCH)).toBeGreaterThanOrEqual(
-        3,
-      );
+      const words = (n: number, prefix: string) =>
+        Array.from({ length: n }, (_, i) => `${prefix}${i}`).join(' ');
+      const smallText = words(300, 'curto');
+      const bigText = words(12_000, 'termo');
       const pricing = new AiPricing();
-      const batch = (n: number) =>
-        pieces.slice(n * EMBEDDING_BATCH, (n + 1) * EMBEDDING_BATCH);
-      const actual = (n: number) =>
-        pricing.costMicroUsd(
-          {
-            inputTokens: batch(n).reduce(
-              (s, t) => s + Math.ceil(t.length / 4),
-              0,
+      const batchesOf = (pieces: string[]) =>
+        Array.from(
+          { length: Math.ceil(pieces.length / EMBEDDING_BATCH) },
+          (_, n) =>
+            pieces.slice(n * EMBEDDING_BATCH, (n + 1) * EMBEDDING_BATCH),
+        );
+      // What the fake embedder bills (ceil(chars / 4) tokens, priced per call) and what the job reserves.
+      const actual = (pieces: string[]) =>
+        batchesOf(pieces).reduce(
+          (sum, b) =>
+            sum +
+            pricing.costMicroUsd(
+              {
+                inputTokens: b.reduce((s, t) => s + Math.ceil(t.length / 4), 0),
+                outputTokens: 0,
+              },
+              FAKE_EMBEDDING_MODEL,
             ),
-            outputTokens: 0,
-          },
-          FAKE_EMBEDDING_MODEL,
+          0n,
         );
-      const estimate = (n: number) =>
+      const estimate = (pieces: string[]) =>
         pricing.costMicroUsd(
-          { inputTokens: estimateEmbeddingTokens(batch(n)), outputTokens: 0 },
+          { inputTokens: estimateEmbeddingTokens(pieces), outputTokens: 0 },
           FAKE_EMBEDDING_MODEL,
         );
-      const limit = actual(0) + actual(1) + estimate(2) - 1n;
-      expect(actual(0) + estimate(1)).toBeLessThanOrEqual(limit);
+      const small = chunkText(smallText);
+      const big = chunkText(bigText);
+      expect(batchesOf(big).length).toBeGreaterThanOrEqual(3);
+      // The big file alone never fits; the small one does.
+      const limit = estimate(big) - 1n;
+      expect(estimate(small)).toBeLessThanOrEqual(limit);
       await setAiBudgetInDb(anaOrg.orgId, Number(limit));
 
       const sim = hub.forSpace(ana, space);
-      const { fileId } = await sim.addFile(
+      const smallFile = await sim.addFile(
+        'Nota.txt',
+        'text/plain',
+        enc(smallText),
+      );
+      const bigFile = await sim.addFile(
         'Manual grande.txt',
         'text/plain',
-        enc(text),
+        enc(bigText),
       );
+      embedder.calls.length = 0;
       await cloud.switchOn(ana, anaOrg.orgId, space.spaceId, [space.key]);
 
       const usageRow = () =>
@@ -416,7 +446,7 @@ describe('monthly AI budget (e2e)', () => {
             WHERE space_id = $1 AND kind = 'indexing'`,
           [space.spaceId],
         );
-      const fileRow = async () =>
+      const fileRow = async (fileId: string) =>
         (
           await db<{ status: string; chunk_count: number }>(
             `SELECT status, chunk_count FROM cloud_files WHERE space_id = $1 AND file_id = $2`,
@@ -429,17 +459,26 @@ describe('monthly AI budget (e2e)', () => {
             WHERE name = 'cloud.index-space' AND singleton_key = $1 AND state = 'created'`,
           [`space-resume:${space.spaceId}`],
         );
+      const embeddedChunks = () =>
+        embedder.calls.reduce((n, call) => n + call.count, 0);
 
-      // Paused: 2 batches spent and recorded, the file still pending, no chunk, the resume waiting for next month.
+      // Paused: the small file indexed and paid; the big one pending, never embedded, nothing paid for it; the resume
+      // waits for next month.
       await eventually(async () => {
         expect(await resumeJob()).toHaveLength(1);
+        expect(await fileRow(smallFile.fileId)).toEqual({
+          status: 'indexed',
+          chunk_count: small.length,
+        });
       });
-      const [paused] = await usageRow();
-      expect(paused).toEqual({
-        calls: 2,
-        cost: (actual(0) + actual(1)).toString(),
+      expect(await fileRow(bigFile.fileId)).toEqual({
+        status: 'pending',
+        chunk_count: 0,
       });
-      expect(await fileRow()).toEqual({ status: 'pending', chunk_count: 0 });
+      expect(embeddedChunks()).toBe(small.length);
+      expect(await usageRow()).toEqual([
+        { calls: 1, cost: actual(small).toString() },
+      ]);
       const [job] = await resumeJob();
       const nextMonth = new Date();
       nextMonth.setUTCDate(1);
@@ -449,28 +488,36 @@ describe('monthly AI budget (e2e)', () => {
         nextMonth.getTime(),
       );
       const anaUsage = await expectStatus(usage(ana, anaOrg.orgId), 200);
-      expect(anaUsage.body.items).toEqual([
-        expect.objectContaining({
-          spaceId: space.spaceId,
-          kind: 'indexing',
-          calls: 2,
-        }),
-      ]);
+      expect(anaUsage.body).toMatchObject({
+        spentMicroUsd: Number(actual(small)),
+        reservedMicroUsd: 0,
+        items: [
+          expect.objectContaining({
+            spaceId: space.spaceId,
+            kind: 'indexing',
+            calls: 1,
+          }),
+        ],
+      });
 
-      // Finance raises it: the indexing resumes now and finishes.
+      // Finance raises it: the big file starts now and finishes; every paid batch is in the index (none repeated).
       await expectStatus(
         putBudget(finance.token, anaOrg.orgId, budgetBody(100_000_000)),
         200,
       );
       await eventually(async () => {
-        expect(await fileRow()).toEqual({
+        expect(await fileRow(bigFile.fileId)).toEqual({
           status: 'indexed',
-          chunk_count: pieces.length,
+          chunk_count: big.length,
         });
       });
-      const [done] = await usageRow();
-      // The paused file starts over (its first batches were not kept): 2 + every batch.
-      expect(done!.calls).toBe(2 + Math.ceil(pieces.length / EMBEDDING_BATCH));
+      expect(embeddedChunks()).toBe(small.length + big.length);
+      expect(embedder.calls).toHaveLength(
+        batchesOf(small).length + batchesOf(big).length,
+      );
+      expect(await usageRow()).toEqual([
+        { calls: 2, cost: (actual(small) + actual(big)).toString() },
+      ]);
       // Nothing legible in the ledger: ids, kinds, models, counts and costs only.
       const ledgerText = JSON.stringify(
         await db(`SELECT * FROM cloud_ai_reservations`),

@@ -40,6 +40,7 @@ function setup(budget: bigint | null, spent = 0n, reserved = 0n) {
     }),
     settle: vi.fn(async () => true),
     release: vi.fn(async () => true),
+    extend: vi.fn(async () => true),
   };
   const uow = {
     isActive: vi.fn(() => inTx),
@@ -152,5 +153,7 @@ describe('AiBudget', () => {
     expect(k.uow.run).toHaveBeenCalledTimes(2);
     await k.budget.release(r);
     expect(k.ledger.release).toHaveBeenCalledWith(ORG, r.id);
+    await k.budget.keepAlive(r);
+    expect(k.ledger.extend).toHaveBeenCalledWith(ORG, r.id, 15 * 60);
   });
 });

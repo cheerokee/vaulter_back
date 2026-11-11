@@ -150,6 +150,25 @@ export class AiUsageSqlLedger extends AiUsageLedger {
     });
   }
 
+  async extend(
+    orgId: string,
+    reservationId: string,
+    ttlSeconds: number,
+  ): Promise<boolean> {
+    const [, affected]: [unknown[], number] = await runInOrganizationScope(
+      this.dataSource,
+      orgId,
+      (m) =>
+        m.query(
+          `UPDATE cloud_ai_reservations
+              SET expires_at = now() + make_interval(secs => $3), updated_at = now()
+            WHERE organization_id = $1 AND id = $2 AND status = 'reserved' AND expires_at > now()`,
+          [orgId, reservationId, ttlSeconds],
+        ),
+    );
+    return affected > 0;
+  }
+
   async release(orgId: string, reservationId: string): Promise<boolean> {
     const [, affected]: [unknown[], number] = await runInOrganizationScope(
       this.dataSource,

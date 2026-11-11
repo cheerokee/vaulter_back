@@ -121,6 +121,20 @@ export class AiBudget {
     );
   }
 
+  /**
+   * Renews a live reservation for another `AI_RESERVATION_TTL_SECONDS` from now (a long job calls it between its
+   * calls, so a crash still frees the budget within the TTL). No lock on the organization: extending only shrinks the
+   * room of the others. An already expired, settled or released reservation is left as it is (a late settle still
+   * records the spend).
+   */
+  async keepAlive(reservation: AiReservation): Promise<void> {
+    await this.ledger.extend(
+      reservation.organizationId,
+      reservation.id,
+      AI_RESERVATION_TTL_SECONDS,
+    );
+  }
+
   /** Gives the reservation back without spend (the call failed before costing anything). */
   async release(reservation: AiReservation): Promise<void> {
     await this.ledger.release(reservation.organizationId, reservation.id);

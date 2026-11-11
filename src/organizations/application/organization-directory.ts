@@ -99,11 +99,6 @@ export class OrganizationDirectory {
   }
 
   /**
-   * Same, with the organization row locked (`FOR NO KEY UPDATE`) until the end of the unit of work: creating or
-   * growing a space (and changing the quota) serialize on it, so two reservations never both fit in the same room.
-   * MUST run inside `UnitOfWork.run`. The organization row is a LEAF lock: take it after hubs and spaces.
-   */
-  /**
    * The organization's monthly AI budget (micro-USD); null for an unknown org or a malformed id. A plain read (views,
    * authorizing the cloud): a check that reserves spend must use `lockAiBudget`.
    */
@@ -125,6 +120,11 @@ export class OrganizationDirectory {
     return org?.aiBudgetMicroUsd ?? null;
   }
 
+  /**
+   * Same, with the organization row locked (`FOR NO KEY UPDATE`) until the end of the unit of work: creating or
+   * growing a space (and changing the quota) serialize on it, so two reservations never both fit in the same room.
+   * MUST run inside `UnitOfWork.run`. The organization row is a LEAF lock: take it after hubs and spaces.
+   */
   async lockStorageQuota(
     orgId: string,
   ): Promise<OrganizationStorageQuota | null> {

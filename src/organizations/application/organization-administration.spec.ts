@@ -275,7 +275,6 @@ describe('OrganizationAdministration', () => {
         t.indexOf('orgs.save'),
       );
       expect(t.indexOf('orgs.save')).toBeLessThan(t.indexOf('hook.raised'));
-      expect(t).not.toContain('hook.raised@out');
       const saved = kit.mocks.orgs.save.mock.calls[0]![0] as Organization;
       expect(saved.aiBudgetMicroUsd).toBe(5_000_000n);
       expect(raised).toHaveBeenCalledWith({

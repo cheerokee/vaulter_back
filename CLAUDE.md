@@ -678,7 +678,8 @@ ganha acesso a conteúdo (as chaves ficam com os clientes).
   (`billing.storage_quota` e `billing.ai_budget`). **Orçamento de IA:** `PUT /platform/organizations/:orgId/ai-budget`
   `{ budgetMicroUsd (0..2^53-1), reason, currentAuthProof }` (financeiro ou admin; `@ThrottleReauth`):
   `OrganizationAdministration.setAiBudget` trava a organização, grava, audita `organization.ai_budget_changed` e, num
-  aumento, roda `AiBudgetRaisedHooks`; trilha `platform.organization.ai_budget_changed`. **Franquia de nuvem:** `PUT /platform/organizations/:orgId/storage-quota`
+  aumento, roda `AiBudgetRaisedHooks` (gravar a linha sobe o `sync_version` da organização: os Hubs recebem um item
+  `organization` sem o orçamento, inofensivo); trilha `platform.organization.ai_budget_changed`. **Franquia de nuvem:** `PUT /platform/organizations/:orgId/storage-quota`
   `{ quotaBytes, reason, currentAuthProof }` (financeiro ou admin; `@ThrottleReauth`): `OrganizationAdministration.setStorageQuota`
   trava a organização, 422 `storage-quota-below-reserved` abaixo do reservado, audita `organization.storage_quota_changed`
   (ator `AuditActor` `platform_staff`, sem pedido de suporte, `user_id` nulo) e `platform.organization.storage_quota_changed`. Conta normal do `identity`
@@ -1193,8 +1194,8 @@ registra a fonte `conversations`), `hubs` (`HubDirectory`: `ownerOf`,
   unpdf, fflate + htmlparser2 para docx/xlsx com limites contra zip bomb, htmlparser2, UTF-8; tempo/memória/falha =
   `skipped` `unreadable`, terminal até versão nova; formato desconhecido = `skipped` `unsupported-format`; registro só
   de ids, tipo conhecido e motivo, nunca o nome), divide como o Hub (`chunkText`: 800/80, sem sobreposição) e calcula embeddings em lotes de
-  32 pelo `IndexingCostMeter` (porta; `BudgetIndexingCostMeter`: cada lote reserva no orçamento de IA, acerta o custo
-  real ou devolve; recusado = para no lote, arquivo fica `pending`, veja "Orçamento de IA"). Tabelas `cloud_files` (nome/tipo/caminho: LEGÍVEIS) e `cloud_chunks`
+  32 pelo `IndexingCostMeter` (porta; `BudgetIndexingCostMeter`: cada arquivo reserva o custo do arquivo inteiro antes do
+  primeiro lote, renova a cada lote e acerta uma vez; recusado = o arquivo não começa e fica `pending`, veja "Orçamento de IA"). Tabelas `cloud_files` (nome/tipo/caminho: LEGÍVEIS) e `cloud_chunks`
   (texto, `embedding vector(768)` com índice HNSW de cosseno criado na migration, `synchronize: false` na entidade, e o
   modelo em cada linha), RLS por organização, DELETE físico. **Review Focus 1:** nenhum trabalho longo segura transação;
   toda gravação legível roda numa transação curta que antes trava o espaço FOR SHARE (`SpaceCloud.lockActiveForWrite`):
@@ -1216,9 +1217,12 @@ registra a fonte `conversations`), `hubs` (`HubDirectory`: `ownerOf`,
   Reserva esquecida conta por 15 min (`AI_RESERVATION_TTL_SECONDS`) e depois para; acerto tardio ainda grava. `tryReserve`
   devolve a recusa e roda um callback **na transação que recusou**, ainda sob a trava. Livro: `cloud_ai_reservations`
   (uma linha por chamada) e `cloud_ai_usage` (soma do mês por espaço e tipo), RLS por organização, **só ids, tipo,
-  modelo, tokens e custos**; ficam depois de desligar a nuvem. **Indexação (Review Focus 3):** cada lote reserva por cima
-  (`estimateEmbeddingTokens`: 1 token / 2 caracteres); recusado, o job para sem gravar (o arquivo fica `pending`, os lotes
-  já feitos ficam registrados; o arquivo recomeça do zero ao retomar) e a transação que recusou agenda uma passada do
+  modelo, tokens e custos**; ficam depois de desligar a nuvem. **Indexação (Review Focus 3):** cada ARQUIVO reserva, antes do primeiro
+  lote, o custo estimado de todos os trechos (`estimateEmbeddingTokens`: 1 token / 2 caracteres, por cima), renova a
+  reserva a cada lote (`AiBudget.keepAlive`) e acerta uma vez no fim (também se falhar no meio: o que as chamadas feitas
+  custaram). Não cabe no que sobra do mês: o arquivo **não começa** (nada embutido nem pago; fica `pending`), então uma
+  pausa nunca joga fora lote pago e uma indexação grande para no próximo arquivo; nunca há trecho parcial gravado
+  (os trechos só entram no fim, na transação com o espaço FOR SHARE). A transação que recusou agenda uma passada do
   espaço para o começo do mês seguinte (`singletonKey` `space-resume:<id>`, separada da passada normal). O **aumento** do
   orçamento roda `AiBudgetRaisedHooks` (`src/shared/application/`) dentro do unit of work do ajuste, com a organização
   travada: o `cloud` enfileira na hora a passada de todo espaço com arquivo `pending` (`ix_cloud_files_pending`). Uso:

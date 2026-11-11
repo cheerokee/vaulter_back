@@ -20,12 +20,12 @@ import {
 } from '../../domain/indexing-limits.js';
 import { chunkText } from '../../domain/text-chunker.js';
 import { BackupObjectOpenError } from '../ports/backup-object-opener.js';
+import { Embedder, EmbeddingServiceError } from '../ports/embedder.js';
 import {
-  Embedder,
-  EmbeddingServiceError,
-  type EmbeddingResult,
-} from '../ports/embedder.js';
-import { IndexingCostMeter } from '../ports/indexing-cost-meter.js';
+  IndexingCostMeter,
+  type IndexingCharge,
+  type IndexingUsage,
+} from '../ports/indexing-cost-meter.js';
 import { TextExtractor } from '../ports/text-extractor.js';
 import { BackupPlaintextReader } from './backup-plaintext-reader.js';
 import type { IndexFilePayload } from './cloud-indexing-queue.js';
@@ -63,10 +63,11 @@ export class IndexingAbortedError extends Error {
 //    gravou (senão para: outra passada cuida). Tamanho (soma das partes decifradas) até 100 MiB, formato suportado (senão
 //    `skipped` com o motivo e um registro só com ids e o tipo, nunca o nome). Lê cada parte pela versão do índice, abre
 //    com a chave do espaço, junta na ordem; extrai o texto; divide em trechos (`chunkText`); embeddings em lotes de 32,
-//    cada lote passando pelo `IndexingCostMeter` (antes: reserva o custo estimado no orçamento de IA, que pode parar
-//    aqui: o arquivo fica `pending`, nada é gravado e a retomada já está agendada (Review Focus 3); depois: acerta o
-//    custo real `AiPricing`, ou devolve a reserva se a chamada falhou). Nenhuma transação nem conexão do pool segurada
-//    enquanto isso (cada reserva/acerto é uma transação curta própria).
+//    pelo `IndexingCostMeter`: ANTES do primeiro lote reserva o custo estimado do ARQUIVO INTEIRO no orçamento de IA
+//    (não cabe: o arquivo fica `pending`, nada é chamado nem gravado e a retomada já está agendada; Review Focus 3 —
+//    nenhum lote pago é jogado fora numa pausa); a cada lote seguinte renova a reserva (`keepAlive`); no fim acerta o
+//    custo real `AiPricing` das chamadas feitas (também se o job falhar no meio) ou devolve a reserva se nenhuma foi
+//    feita. Nenhuma transação nem conexão do pool segurada enquanto isso (cada reserva/acerto é uma transação curta).
 // 2. Uma transação curta (Review Focus 1): espaço FOR SHARE (`lockActiveForWrite`) -> se desligou, NADA é gravado
 //    (desligar trava o espaço FOR UPDATE e apaga arquivos e trechos: ou ele esperou este COMMIT e apaga o que entrou,
 //    ou este job o esperou e vê o espaço desligado) -> o arquivo FOR UPDATE (sumiu, deixou de estar `pending` ou mudou
@@ -210,47 +211,55 @@ export class IndexFileJob {
       spaceId: file.spaceId,
       cloudFileId: file.id,
     };
+    if (signal?.aborted) throw new IndexingAbortedError();
+    // The WHOLE file is reserved before the first batch (fix round 1 of Task 5): a file that does not fit in what is
+    // left of the month never starts, so no paid batch is ever thrown away by a pause.
+    const charge = await this.costMeter.reserve(scope, pieces);
+    if (!charge) throw new IndexingPausedError();
     const chunks: NewChunk[] = [];
     let model: string | null = null;
     let inputTokens = 0;
     let costMicroUsd = 0n;
-    for (let i = 0; i < pieces.length; i += EMBEDDING_BATCH) {
-      if (signal?.aborted) throw new IndexingAbortedError();
-      const batch = pieces.slice(i, i + EMBEDDING_BATCH);
-      const charge = await this.costMeter.reserve(scope, batch);
-      if (!charge) throw new IndexingPausedError();
-      let result: EmbeddingResult;
-      try {
-        result = await this.embedder.embed(batch, 'document');
-      } catch (error) {
-        await this.costMeter.release(charge);
-        throw error;
+    let calls = 0;
+    try {
+      for (let i = 0; i < pieces.length; i += EMBEDDING_BATCH) {
+        if (signal?.aborted) throw new IndexingAbortedError();
+        if (i > 0) await this.costMeter.keepAlive(charge);
+        const batch = pieces.slice(i, i + EMBEDDING_BATCH);
+        const result = await this.embedder.embed(batch, 'document');
+        // The call was made: its real cost counts even if the answer is unusable.
+        calls += 1;
+        inputTokens += result.inputTokens;
+        costMicroUsd += this.pricing.costMicroUsd(
+          { inputTokens: result.inputTokens, outputTokens: 0 },
+          result.model,
+        );
+        if (
+          result.dimensions !== EMBEDDING_DIMENSIONS ||
+          result.vectors.length !== batch.length ||
+          result.vectors.some((v) => v.length !== EMBEDDING_DIMENSIONS) ||
+          (model !== null && result.model !== model)
+        ) {
+          throw new EmbeddingServiceError(false, 'unexpected-shape');
+        }
+        model = result.model;
+        batch.forEach((text, j) =>
+          chunks.push({ position: i + j, text, embedding: result.vectors[j]! }),
+        );
       }
-      // The call was made: its real cost is recorded even if the answer is unusable.
-      const cost = this.pricing.costMicroUsd(
-        { inputTokens: result.inputTokens, outputTokens: 0 },
-        result.model,
-      );
-      await this.costMeter.settle(charge, {
-        model: result.model,
-        inputTokens: result.inputTokens,
-        costMicroUsd: cost,
+    } catch (error) {
+      await this.closeCharge(scope, charge, calls, {
+        model: model ?? this.embedder.model,
+        inputTokens,
+        costMicroUsd,
       });
-      if (
-        result.dimensions !== EMBEDDING_DIMENSIONS ||
-        result.vectors.length !== batch.length ||
-        result.vectors.some((v) => v.length !== EMBEDDING_DIMENSIONS) ||
-        (model !== null && result.model !== model)
-      ) {
-        throw new EmbeddingServiceError(false, 'unexpected-shape');
-      }
-      model = result.model;
-      inputTokens += result.inputTokens;
-      costMicroUsd += cost;
-      batch.forEach((text, j) =>
-        chunks.push({ position: i + j, text, embedding: result.vectors[j]! }),
-      );
+      throw error;
     }
+    await this.closeCharge(scope, charge, calls, {
+      model: model!,
+      inputTokens,
+      costMicroUsd,
+    });
     this.logger.log(
       {
         organizationId: file.organizationId,
@@ -263,6 +272,36 @@ export class IndexFileJob {
       'cloud file embedded',
     );
     return { kind: 'indexed', model: model!, chunks };
+  }
+
+  /**
+   * Settles what the calls made really cost, or gives the reservation back when no call was made. Never masks the
+   * job's own outcome: a ledger failure is logged (ids and amounts only) and the reservation expires on its own.
+   */
+  private async closeCharge(
+    scope: { organizationId: string; spaceId: string; cloudFileId: string },
+    charge: IndexingCharge,
+    calls: number,
+    usage: IndexingUsage,
+  ): Promise<void> {
+    try {
+      if (calls === 0) await this.costMeter.release(charge);
+      else await this.costMeter.settle(charge, usage);
+    } catch (error) {
+      this.logger.error(
+        {
+          ...scope,
+          reservationId: charge.reservationId,
+          calls,
+          inputTokens: usage.inputTokens,
+          costMicroUsd: usage.costMicroUsd.toString(),
+          error: error instanceof Error ? error.name : 'unknown',
+        },
+        calls === 0
+          ? 'cloud indexing reservation not released'
+          : 'cloud indexing spend not recorded',
+      );
+    }
   }
 
   private async write(file: CloudFile, outcome: Outcome): Promise<void> {

@@ -40,6 +40,12 @@ export abstract class AiUsageLedger {
     reservationId: string,
     spend: AiSpend,
   ): Promise<boolean>;
+  /** Moves a LIVE reservation's expiry to `ttlSeconds` from now; false when it is no longer live. */
+  abstract extend(
+    orgId: string,
+    reservationId: string,
+    ttlSeconds: number,
+  ): Promise<boolean>;
   /** Gives a live or expired reservation back without spend; false when it was already settled or released. */
   abstract release(orgId: string, reservationId: string): Promise<boolean>;
   /** The current month's usage lines, by space and kind (space id order). */

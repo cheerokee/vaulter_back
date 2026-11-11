@@ -19,8 +19,9 @@ type BudgetCharge = IndexingCharge & { reservation: AiReservation };
 /** Margin after the month turns before the paused indexing retries (clocks of the API and the database may differ). */
 const RESUME_MARGIN_SECONDS = 60;
 
-// O orçamento de IA aplicado à indexação (Review Focus 3). Cada lote de embeddings reserva o custo estimado
-// (`estimateEmbeddingTokens` x preço do modelo de embeddings, por cima) pelo `AiBudget`. Recusado: na MESMA transação
+// O orçamento de IA aplicado à indexação (Review Focus 3). Cada ARQUIVO reserva, antes do primeiro lote, o custo
+// estimado de todos os seus trechos (`estimateEmbeddingTokens` x preço do modelo de embeddings, por cima) pelo
+// `AiBudget`; a reserva é renovada a cada lote e acertada uma vez no fim. Recusado: na MESMA transação
 // que recusou, ainda sob a trava da organização, agenda uma passada do espaço para o começo do mês seguinte
 // (`CloudIndexingQueue.enqueueSpaceResume`, chave própria: não adia a passada normal do espaço, que ainda precisa
 // tirar arquivos apagados). O aumento do orçamento (gancho `cloud.indexing-resume`) retoma antes disso. Assim parar e
@@ -83,6 +84,10 @@ export class BudgetIndexingCostMeter extends IndexingCostMeter {
       reservation: outcome.reservation,
     };
     return charge;
+  }
+
+  async keepAlive(charge: IndexingCharge): Promise<void> {
+    await this.budget.keepAlive((charge as BudgetCharge).reservation);
   }
 
   async settle(charge: IndexingCharge, usage: IndexingUsage): Promise<void> {

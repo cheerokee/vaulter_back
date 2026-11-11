@@ -94,6 +94,7 @@ function setup(text = 'word '.repeat(40 * 50)) {
       trace.push('reserve');
       return { reservationId: `r${++charges}` };
     }),
+    keepAlive: vi.fn(async () => trace.push('keepAlive')),
     settle: vi.fn(async () => trace.push('settle')),
     release: vi.fn(async () => trace.push('release')),
   };
@@ -148,11 +149,16 @@ function setup(text = 'word '.repeat(40 * 50)) {
 }
 
 describe('IndexFileJob', () => {
-  it('reads the parts in order, embeds in batches through the AI budget (reserve, settle), then writes under the space lock', async () => {
+  it('reads the parts in order, reserves the whole file, embeds in batches, settles once, then writes under the space lock', async () => {
     const k = setup();
     await k.job.run(PAYLOAD);
     // 2000 words of 5 chars = 10000 chars -> 13 chunks of <= 800 -> one batch of 32.
     expect(k.embedder.calls).toEqual([{ count: 13, kind: 'document' }]);
+    const [, reserved] = k.meter.reserve.mock.calls[0] as unknown as [
+      unknown,
+      string[],
+    ];
+    expect(reserved).toHaveLength(13);
     expect(k.meter.reserve).toHaveBeenCalledWith(
       { organizationId: ORG, spaceId: SPACE, cloudFileId: 'row-1' },
       expect.any(Array),
@@ -204,24 +210,33 @@ describe('IndexFileJob', () => {
     expect(k.key.every((b) => b === 0)).toBe(true);
   });
 
-  it('budget exhausted at the 2nd batch (Review Focus 3): stops there, the 1st batch is settled, nothing written, no error', async () => {
-    // 2000 chunks' worth: 60_000 words -> 375 chunks -> 12 batches of 32.
-    const k = setup('word '.repeat(60_000));
-    k.meter.reserve
-      .mockImplementationOnce(async () => {
-        k.trace.push('reserve');
-        return { reservationId: 'r1' };
-      })
-      .mockImplementationOnce(async () => {
-        k.trace.push('reserve (refused)');
-        return null;
-      });
+  it('budget does not cover the whole file (Review Focus 3): nothing is embedded nor paid, nothing written, no error', async () => {
+    const k = setup();
+    k.meter.reserve.mockImplementationOnce(async () => {
+      k.trace.push('reserve (refused)');
+      return null;
+    });
     await expect(k.job.run(PAYLOAD)).resolves.toBeUndefined();
-    expect(k.embedder.calls).toEqual([{ count: 32, kind: 'document' }]);
-    expect(k.trace).toEqual(['reserve', 'settle', 'reserve (refused)']);
+    expect(k.embedder.calls).toEqual([]);
+    expect(k.trace).toEqual(['reserve (refused)']);
     expect(k.files.upsert).not.toHaveBeenCalled();
-    expect(k.chunks.replaceForFile).not.toHaveBeenCalled();
     expect(k.key.every((b) => b === 0)).toBe(true);
+  });
+
+  it('a long file: one reservation for every chunk, renewed before each later batch, settled once with the sum', async () => {
+    const k = setup('word '.repeat(60_000));
+    await k.job.run(PAYLOAD);
+    const batches = k.embedder.calls.length;
+    expect(batches).toBeGreaterThan(2);
+    expect(k.meter.reserve).toHaveBeenCalledTimes(1);
+    expect(k.meter.keepAlive).toHaveBeenCalledTimes(batches - 1);
+    expect(k.meter.settle).toHaveBeenCalledTimes(1);
+    const [, usage] = k.meter.settle.mock.calls[0] as unknown as [
+      unknown,
+      { inputTokens: number },
+    ];
+    const chunks = k.embedder.calls.reduce((n, c) => n + c.count, 0);
+    expect(usage.inputTokens).toBe(chunks * 200);
   });
 
   it('an embedding call that fails gives its reservation back; an unusable answer is still settled (the call was made)', async () => {
@@ -231,6 +246,30 @@ describe('IndexFileJob', () => {
     });
     await expect(k.job.run(PAYLOAD)).rejects.toThrow('service down');
     expect(k.trace).toEqual(['reserve', 'release']);
+
+    // A failure after some calls: what they cost is settled (they were made), not released.
+    const k3 = setup('word '.repeat(60_000));
+    const real = k3.embedder.embed.bind(k3.embedder);
+    let n = 0;
+    k3.embedder.embed = vi.fn(async (texts, kind) => {
+      n += 1;
+      if (n === 2) throw new Error('service down');
+      return real(texts, kind);
+    });
+    await expect(k3.job.run(PAYLOAD)).rejects.toThrow('service down');
+    expect(k3.trace).toEqual(['reserve', 'keepAlive', 'settle']);
+    expect(k3.meter.settle).toHaveBeenCalledWith(
+      { reservationId: 'r1' },
+      expect.objectContaining({ inputTokens: 32 * 200 }),
+    );
+
+    // A ledger failure never masks the job's own error.
+    const k4 = setup();
+    k4.embedder.embed = vi.fn(async () => {
+      throw new Error('service down');
+    });
+    k4.meter.release.mockRejectedValueOnce(new Error('db down'));
+    await expect(k4.job.run(PAYLOAD)).rejects.toThrow('service down');
 
     const k2 = setup();
     k2.embedder.embed = vi.fn(async () => ({
