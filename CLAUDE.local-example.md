@@ -40,3 +40,6 @@
 
 ## Observações da máquina
 <!-- Qualquer peculiaridade local: portas ocupadas, processos que rodam junto, atalhos, etc. -->
+
+## Notas pessoais (opcional)
+<!-- Onde a IA registra tarefas/decisões suas fora do repositório (ex.: um vault pessoal), com a pasta e a tag a usar -->
