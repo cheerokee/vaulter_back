@@ -14,6 +14,7 @@ import {
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import {
   ObjectStore,
+  ObjectTooLargeToReadError,
   type ObjectHead,
   type PresignedPut,
   type PresignPutInput,
@@ -116,6 +117,33 @@ export class S3ObjectStore extends ObjectStore implements OnModuleDestroy {
       }),
       { expiresIn: expiresInSeconds },
     );
+  }
+
+  async getVersion(
+    key: string,
+    versionId: string,
+    maxBytes: number,
+  ): Promise<Uint8Array> {
+    const out = await this.client.send(
+      new GetObjectCommand({
+        Bucket: this.bucket,
+        Key: key,
+        VersionId: versionId,
+      }),
+    );
+    const body = out.Body;
+    const declared = out.ContentLength ?? 0;
+    if (!body) throw new Error('getVersion: empty response body');
+    if (declared > maxBytes) {
+      // Not read: release the socket.
+      await body.transformToWebStream().cancel();
+      throw new ObjectTooLargeToReadError(declared, maxBytes);
+    }
+    const bytes = await body.transformToByteArray();
+    if (bytes.byteLength > maxBytes) {
+      throw new ObjectTooLargeToReadError(bytes.byteLength, maxBytes);
+    }
+    return bytes;
   }
 
   async head(key: string): Promise<ObjectHead | null> {

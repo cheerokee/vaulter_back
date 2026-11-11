@@ -268,7 +268,12 @@ Hub, como faria para uma pessoa.
 O Hub envia as mudanças dos espaços **a cada 5 min**, na mesma passada da sincronização (spec
 `docs/superpowers/specs/2026-11-09-storage-backup-design.md` §4.2). Cada objeto é um blob cifrado com a chave do espaço
 (`docs/crypto/space-backup.md`); o `objectId` (UUID v7) é do Hub e estável (arquivo atualizado = versão nova do mesmo
-objeto). O backend guarda só o índice (ids, tamanho, sha256 do blob, versão da chave), nunca nome de arquivo.
+objeto). O backend guarda só o índice (ids, tamanho, sha256 do blob, versão da chave), nunca nome de arquivo. O que é
+cada objeto (nome, tipo, origem, partes em ordem) fica no **manifesto do espaço**, um objeto cifrado com `objectId`
+fixo (UUID v5 do `spaceId`), no formato de `docs/hubs/space-manifest.md`: a nuvem ativa depende dele para indexar o
+espaço, e nos espaços em nuvem ativa os espelhos de conector também entram no backup (mesmo documento). Além de UUID v7,
+o backend aceita só o id do manifesto do Hub daquele espaço (outro UUID: 422 `object-id-invalid`); o id do manifesto da
+nuvem é reservado ao servidor (enviar ou apagar com ele: 422 `object-id-reserved`).
 
 - **Quem envia e apaga** (`memory.write`; apagar é a mesma permissão de substituir): com o token do Hub, só nos espaços
   da **Sala** dele com papel `space_editor` (`/hub/spaces/:spaceId/...`); com o token da pessoa logada nele

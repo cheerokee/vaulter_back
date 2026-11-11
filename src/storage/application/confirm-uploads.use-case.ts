@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import { BackupObjectsChangedHooks } from '../../shared/application/backup-objects-changed-hooks.js';
 import { UnitOfWork } from '../../shared/infra/db/unit-of-work.js';
 import { objectKey, uploadKey } from '../domain/backup-keys.js';
 import { INDEX_TAIL_TIMEOUT_MS } from '../domain/backup-limits.js';
@@ -67,6 +68,7 @@ function sameUploader(
 // objeto que ganhou versão nova (inclusive um apagado que volta) tem as substituídas além das 10 mais recentes apagadas de vez (`BackupTrash.capObject`:
 // `purged` no índice, sob a trava do objeto, no mesmo unit of work) e, só DEPOIS do COMMIT, apagadas do S3
 // (`removeFromBucket`, que nunca falha o pedido: a marca do diário deixa o resto para a varredura).
+// Por último, ainda no unit of work, `BackupObjectsChangedHooks` (`committed`, os objetos que ganharam versão).
 @Injectable()
 export class ConfirmUploadsUseCase {
   constructor(
@@ -77,6 +79,7 @@ export class ConfirmUploadsUseCase {
     private readonly healer: BackupObjectHealer,
     private readonly trash: BackupTrash,
     private readonly uow: UnitOfWork,
+    private readonly changed: BackupObjectsChangedHooks,
   ) {}
 
   async execute(
@@ -231,6 +234,13 @@ export class ConfirmUploadsUseCase {
         for (const objectId of objectIds) {
           await this.objects.save(locked.get(objectId)!);
         }
+        // Quem reage ao backup (nuvem ativa: enfileira a reindexação) entra nesta transação, sem travar nada.
+        await this.changed.run({
+          organizationId: orgId,
+          spaceId: space.spaceId,
+          objectIds,
+          change: 'committed',
+        });
         return uploadIds.map((id) => committedVersionView(found.get(id)!));
       });
     } catch (error) {

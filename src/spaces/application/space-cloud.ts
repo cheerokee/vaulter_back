@@ -47,4 +47,30 @@ export class SpaceCloud {
       null,
     );
   }
+
+  /**
+   * The cloud mode of the space, read without a lock (null for an unknown space). For hooks that run while the caller
+   * already holds the space row (e.g. the backup's `FOR SHARE`), so the mode cannot change underneath. Trusted read.
+   */
+  async modeOf(
+    organizationId: string,
+    spaceId: string,
+  ): Promise<'encrypted_backup' | 'active_cloud' | null> {
+    const space = await this.spaces.findById(organizationId, spaceId);
+    return space ? space.cloudMode : null;
+  }
+
+  /**
+   * Locks the space row `FOR SHARE` and tells whether it is in `active_cloud` (false for an unknown space). The cloud's
+   * background jobs call it in the SAME transaction that writes anything legible, right before writing: switching
+   * off takes the row `FOR UPDATE`, so a job that sees `true` here writes before the switch-off can start, and one
+   * that waits behind a switch-off sees `false` and writes nothing. REQUIRES a unit of work. Trusted (no actor).
+   */
+  async lockActiveForWrite(
+    organizationId: string,
+    spaceId: string,
+  ): Promise<boolean> {
+    const space = await this.spaces.lockForShare(organizationId, spaceId);
+    return space?.cloudMode === 'active_cloud';
+  }
 }

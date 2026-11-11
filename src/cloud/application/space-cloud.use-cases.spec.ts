@@ -18,6 +18,11 @@ import type { CloudSpaceAccess } from './cloud-space-access.js';
 import { CloudSpaceJobs } from './cloud-space-jobs.js';
 import { AcceptCloudTermsUseCase } from './cloud-terms.use-cases.js';
 import type { ServerKeyring } from './ports/server-keyring.js';
+import type { CloudIndexingQueue } from './indexing/cloud-indexing-queue.js';
+import type {
+  CloudChunkRepository,
+  CloudFileRepository,
+} from '../domain/indexing.repositories.js';
 import {
   ActivateSpaceCloudUseCase,
   AuthorizeSpaceCloudUseCase,
@@ -126,6 +131,15 @@ function setup() {
   };
   const jobs = new CloudSpaceJobs(jobQueue as unknown as JobQueue);
   const audit = { record: vi.fn(async () => undefined) };
+  const indexing = {
+    enqueueSpace: vi.fn(t('indexing.enqueueSpace', async () => undefined)),
+  };
+  const files = {
+    deleteForSpace: vi.fn(t('files.deleteForSpace', async () => 3)),
+  };
+  const chunks = {
+    deleteForSpace: vi.fn(t('chunks.deleteForSpace', async () => 12)),
+  };
   const uow = { run: vi.fn(async (fn: () => Promise<unknown>) => fn()) };
   const orgAccess = {
     requirePermission: vi.fn(async () => undefined),
@@ -150,9 +164,15 @@ function setup() {
     jobQueue,
     jobs,
     audit,
+    indexing,
+    files,
+    chunks,
     uow,
     orgAccess,
     deps: {
+      indexing: indexing as unknown as CloudIndexingQueue,
+      files: files as unknown as CloudFileRepository,
+      chunks: chunks as unknown as CloudChunkRepository,
       access: access as unknown as CloudSpaceAccess,
       terms: terms as unknown as CloudTermRepository,
       acceptances: acceptances as unknown as CloudTermAcceptanceRepository,
@@ -310,6 +330,7 @@ describe('ActivateSpaceCloudUseCase', () => {
       k.deps.keyring,
       k.deps.audit,
       k.deps.uow,
+      k.deps.indexing,
     );
   const input = {
     serverGrants: [
@@ -341,6 +362,13 @@ describe('ActivateSpaceCloudUseCase', () => {
       ORG,
       SPACE,
       expect.any(Date),
+    );
+    // The initial indexing, in the same unit of work, right after the space is marked active.
+    expect(k.indexing.enqueueSpace).toHaveBeenCalledWith(ORG, SPACE, {
+      debounce: false,
+    });
+    expect(k.trace.indexOf('indexing.enqueueSpace')).toBeGreaterThan(
+      k.trace.indexOf('spaceCloud.markActive'),
     );
     expect(JSON.stringify(k.audit.record.mock.calls)).not.toContain(copy(1));
     expect(k.audit.record).toHaveBeenCalledWith(
@@ -424,9 +452,11 @@ describe('DeactivateSpaceCloudUseCase', () => {
       k.jobs,
       k.deps.audit,
       k.deps.uow,
+      k.deps.files,
+      k.deps.chunks,
     );
 
-  it('deletes the server copies, cancels waiting jobs, ends the cycle and goes back to encrypted_backup', async () => {
+  it('deletes the server copies, chunks and files for real, cancels waiting jobs, ends the cycle and goes back to encrypted_backup', async () => {
     const k = setup();
     k.jobs.register('cloud.test-index');
     const active = authorizedActivation();
@@ -437,6 +467,8 @@ describe('DeactivateSpaceCloudUseCase', () => {
       'access.lockAsManagerOrDecider',
       'activations.lockLive',
       'grants.deleteForSpace',
+      'chunks.deleteForSpace',
+      'files.deleteForSpace',
       'jobs.cancelQueued',
       'activations.end',
       'spaceCloud.markEncryptedBackup',
@@ -452,6 +484,8 @@ describe('DeactivateSpaceCloudUseCase', () => {
         spaceId: SPACE,
         previousState: 'active',
         serverCopiesDeleted: 2,
+        chunksDeleted: 12,
+        filesDeleted: 3,
         jobsCancelled: 1,
       },
     });

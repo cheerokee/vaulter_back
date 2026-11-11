@@ -12,15 +12,24 @@ let admin: DataSource | undefined;
 
 /**
  * `env` patches ConfigService.get/getOrThrow for those keys only; defaults stay untouched. `controllers` adds
- * test-only controllers next to AppModule (the global guards and filters apply to them as to any route).
+ * test-only controllers next to AppModule (the global guards and filters apply to them as to any route). `overrides`
+ * replaces providers by DI (e.g. the embedder by a deterministic fake).
  */
 export async function createTestApp(
-  options: { env?: Record<string, string>; controllers?: Type[] } = {},
+  options: {
+    env?: Record<string, string>;
+    controllers?: Type[];
+    overrides?: { provide: unknown; useValue: unknown }[];
+  } = {},
 ): Promise<INestApplication> {
-  const moduleRef = await Test.createTestingModule({
+  const builder = Test.createTestingModule({
     imports: [AppModule],
     controllers: options.controllers ?? [],
-  }).compile();
+  });
+  for (const o of options.overrides ?? []) {
+    builder.overrideProvider(o.provide).useValue(o.useValue);
+  }
+  const moduleRef = await builder.compile();
   const env = options.env;
   if (env) {
     const config = moduleRef.get(ConfigService);

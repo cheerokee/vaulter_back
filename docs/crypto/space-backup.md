@@ -38,7 +38,8 @@ ad   = 0x01 ‖ ASCII "space-object" ‖ spaceId(16) ‖ objectId(16) ‖ keyVer
 ## Manifesto
 
 O manifesto (lista de objetos, ordem das partes, metadados) é **um objeto comum**: mesmo formato, cifrado com
-a chave do espaço, com o próprio `objectId`. O backend não distingue manifesto de dado.
+a chave do espaço, com o próprio `objectId`. O backend não distingue manifesto de dado (só reserva o id do manifesto da
+nuvem ao servidor). Formato do conteúdo, `objectId` fixo (UUID v5 do `spaceId`) e regras: `docs/hubs/space-manifest.md`.
 
 ## Nada em claro
 

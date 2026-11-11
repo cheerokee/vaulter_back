@@ -4,6 +4,7 @@ import { HubsModule } from '../hubs/hubs.module.js';
 import { IdentityModule } from '../identity/identity.module.js';
 import { OrganizationsModule } from '../organizations/organizations.module.js';
 import { SpacesModule } from '../spaces/spaces.module.js';
+import { BackupContentReader } from './application/backup-content-reader.js';
 import { BackupObjectHealer } from './application/backup-object-healer.js';
 import { BackupTrash } from './application/backup-trash.js';
 import { ConfirmUploadsUseCase } from './application/confirm-uploads.use-case.js';
@@ -31,8 +32,10 @@ import { S3ObjectStore } from './infra/s3/s3-object-store.js';
 /**
  * Encrypted backup of spaces (spec 2026-11-09-storage-backup). Depends on `spaces` (SpaceContentAccess, the usage
  * port it binds), `hubs` (HubDirectory), `identity` (CurrentAuthProofVerifier: emptying the trash reauthenticates) and
- * `organizations` (AuditLog) through what they export. Exports only the `ObjectStore` port (the bucket), for another
- * index of the same bucket (`conversations`: attachments) that reuses the mechanism through `application/object-uploads`.
+ * `organizations` (AuditLog) through what they export. Exports the `ObjectStore` port (the bucket), for another
+ * index of the same bucket (`conversations`: attachments) that reuses the mechanism through `application/object-uploads`,
+ * and `BackupContentReader` (the server's own read of the encrypted backup by the index's versions: active cloud).
+ * Emits `BackupObjectsChangedHooks` on confirm/delete (the active cloud enqueues its reindexing there).
  */
 @Module({
   imports: [
@@ -58,6 +61,7 @@ import { S3ObjectStore } from './infra/s3/s3-object-store.js';
     },
     { provide: BackupIndexReader, useClass: BackupIndexSqlReader },
     StorageAccess,
+    BackupContentReader,
     BackupSpaceStorageUsage,
     BackupObjectHealer,
     BackupTrash,
@@ -69,6 +73,6 @@ import { S3ObjectStore } from './infra/s3/s3-object-store.js';
     ListObjectsUseCase,
     GetDownloadUrlUseCase,
   ],
-  exports: [ObjectStore],
+  exports: [ObjectStore, BackupContentReader],
 })
 export class StorageModule {}

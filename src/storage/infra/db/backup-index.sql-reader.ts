@@ -9,6 +9,7 @@ import {
   BackupIndexReader,
   type ListedObject,
   type ListedVersion,
+  type LiveObjectVersion,
   type ObjectListing,
   type StoredObjectVersion,
 } from '../../application/ports/backup-index-reader.js';
@@ -195,5 +196,38 @@ export class BackupIndexSqlReader extends BackupIndexReader {
         ),
     );
     return rows[0]?.s3_version_id ?? null;
+  }
+
+  async liveVersions(
+    orgId: string,
+    spaceId: string,
+    objectIds: readonly string[],
+  ): Promise<LiveObjectVersion[]> {
+    const ids = [...new Set(objectIds)].filter((id) => validate(id));
+    if (ids.length === 0) return [];
+    if (ids.length > 1000) {
+      throw new Error('liveVersions: at most 1000 object ids per call');
+    }
+    const rows: (VersionColumns & {
+      object_id: string;
+      s3_version_id: string;
+    })[] = await runInOrganizationScope(this.dataSource, orgId, (m) =>
+      m.query(
+        `SELECT o.id AS object_id, ${VERSION_COLUMNS}, v.s3_version_id
+           FROM storage_objects o
+           JOIN storage_object_versions v
+             ON v.id = o.current_version_id AND v.organization_id = o.organization_id
+          WHERE o.organization_id = $1 AND o.space_id = $2 AND o.id = ANY($3::uuid[])
+            AND o.deleted_at IS NULL AND v.deleted_at IS NULL
+            AND v.status = 'committed' AND v.s3_version_id IS NOT NULL
+          ORDER BY o.id`,
+        [orgId, spaceId, ids],
+      ),
+    );
+    return rows.map((r) => ({
+      ...versionOf(r),
+      objectId: r.object_id,
+      s3VersionId: r.s3_version_id,
+    }));
   }
 }

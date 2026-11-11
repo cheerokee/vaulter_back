@@ -19,6 +19,11 @@ import {
 import { CloudSpaceAccess } from './cloud-space-access.js';
 import { CloudSpaceJobs } from './cloud-space-jobs.js';
 import {
+  CloudChunkRepository,
+  CloudFileRepository,
+} from '../domain/indexing.repositories.js';
+import { CloudIndexingQueue } from './indexing/cloud-indexing-queue.js';
+import {
   toSpaceCloudStateView,
   type SpaceCloudStateView,
 } from './dto/cloud-views.js';
@@ -128,6 +133,7 @@ export class ActivateSpaceCloudUseCase {
     private readonly keyring: ServerKeyring,
     private readonly audit: AuditLog,
     private readonly uow: UnitOfWork,
+    private readonly indexing: CloudIndexingQueue,
   ) {}
 
   async execute(
@@ -167,7 +173,8 @@ export class ActivateSpaceCloudUseCase {
       }
       await this.activations.save(activation);
       await this.spaceCloud.markActive(orgId, space.id, now);
-      // Task 4: a indexação inicial (pg-boss) é enfileirada aqui, na mesma transação (some se ela desfizer).
+      // Indexação inicial (pg-boss), na mesma transação (some se ela desfizer).
+      await this.indexing.enqueueSpace(orgId, space.id, { debounce: false });
       await this.audit.record({
         organizationId: orgId,
         userId: actor.userId,
@@ -179,9 +186,11 @@ export class ActivateSpaceCloudUseCase {
   }
 }
 
-// Desligar (quem decide ou o Gestor): APAGA de verdade o que é legível (as cópias da chave do espaço para o servidor;
-// a Task 4 soma trechos, embeddings e textos extraídos, neste mesmo unit of work), cancela as tarefas da nuvem que
+// Desligar (quem decide ou o Gestor): APAGA de verdade o que é legível (as cópias da chave do espaço para o servidor,
+// os trechos com os embeddings e os arquivos com nome/tipo, neste mesmo unit of work), cancela as tarefas da nuvem que
 // ainda esperam (`CloudSpaceJobs`), encerra o ciclo (lápide com quem desligou) e volta o espaço a `encrypted_backup`.
+// Uma tarefa já RODANDO (com a chave aberta) não grava depois disto: ela confere o espaço FOR SHARE na transação em que
+// grava (`SpaceCloud.lockActiveForWrite`), e esta segura o espaço FOR UPDATE até o COMMIT.
 // O backup cifrado não muda. Desligar um espaço autorizado e ainda não ligado cancela a autorização. Nada vivo:
 // idempotente (sem gravar nem auditar). Travas: espaço FOR UPDATE -> ciclo vivo FOR UPDATE -> cópias. Auditado
 // `space.cloud.deactivated`.
@@ -195,6 +204,8 @@ export class DeactivateSpaceCloudUseCase {
     private readonly jobs: CloudSpaceJobs,
     private readonly audit: AuditLog,
     private readonly uow: UnitOfWork,
+    private readonly files: CloudFileRepository,
+    private readonly chunks: CloudChunkRepository,
   ) {}
 
   async execute(actor: Actor, spaceId: string): Promise<void> {
@@ -216,6 +227,8 @@ export class DeactivateSpaceCloudUseCase {
       orgId,
       space.id,
     );
+    const chunksDeleted = await this.chunks.deleteForSpace(orgId, space.id);
+    const filesDeleted = await this.files.deleteForSpace(orgId, space.id);
     const jobsCancelled = await this.jobs.cancelForSpace(space.id);
     if (live) await this.activations.end(live, userId, new Date());
     if (wasActive) await this.spaceCloud.markEncryptedBackup(orgId, space.id);
@@ -227,6 +240,8 @@ export class DeactivateSpaceCloudUseCase {
         spaceId: space.id,
         previousState: live?.state ?? 'active',
         serverCopiesDeleted,
+        chunksDeleted,
+        filesDeleted,
         jobsCancelled,
       },
     });

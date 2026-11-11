@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import { BackupObjectsChangedHooks } from '../../shared/application/backup-objects-changed-hooks.js';
 import { UnitOfWork } from '../../shared/infra/db/unit-of-work.js';
 import { objectKey } from '../domain/backup-keys.js';
 import { INDEX_TAIL_TIMEOUT_MS } from '../domain/backup-limits.js';
@@ -25,7 +26,7 @@ import { StorageAccess, type StorageActor } from './storage-access.js';
 // dias), lápide no objeto e `superseded_at` na versão. As marcas nunca são limpas aqui (só pela varredura). Uma troca
 // de chave pendente não impede apagar. Se o unit of work rejeitar depois do S3, os objetos são reparados (`repair`):
 // com a lápide confirmada os markers ficam; sem ela, saem. Espera por trava além de 10 s (`lock_timeout`) = 409
-// `storage-busy`, repetível.
+// `storage-busy`, repetível. Por último, no unit of work, `BackupObjectsChangedHooks` (`deleted`).
 @Injectable()
 export class DeleteObjectsUseCase {
   constructor(
@@ -35,6 +36,7 @@ export class DeleteObjectsUseCase {
     private readonly store: ObjectStore,
     private readonly healer: BackupObjectHealer,
     private readonly uow: UnitOfWork,
+    private readonly changed: BackupObjectsChangedHooks,
   ) {}
 
   async execute(
@@ -44,6 +46,8 @@ export class DeleteObjectsUseCase {
     now: Date = new Date(),
   ): Promise<void> {
     BackupRules.assertDistinctObjects(items.map((i) => i.objectId));
+    for (const i of items)
+      BackupRules.assertObjectIdDeletable(spaceId, i.objectId);
     const writing: ObjectRef[] = [];
     try {
       // Diário ANTES do unit of work (transação curta própria, relógio do banco; veja ConfirmUploadsUseCase), depois da
@@ -123,6 +127,13 @@ export class DeleteObjectsUseCase {
         await this.versions.markSuperseded(orgId, superseded);
         // As marcas ficam: só a varredura por idade as limpa.
         for (const object of deleted) await this.objects.save(object);
+        // Quem reage ao backup (nuvem ativa: tira os trechos) entra nesta transação, sem travar nada.
+        await this.changed.run({
+          organizationId: orgId,
+          spaceId: space.spaceId,
+          objectIds: deleted.map((o) => o.id),
+          change: 'deleted',
+        });
       });
     } catch (error) {
       if (writing.length > 0) await this.healer.repair(writing);

@@ -1,4 +1,5 @@
 import { Global, Module } from '@nestjs/common';
+import { BackupObjectsChangedHooks } from './backup-objects-changed-hooks.js';
 import { HubExecutorLostHooks } from './hub-executor-lost-hooks.js';
 import { InvitationHooks } from './invitation-hooks.js';
 import { MemberRemovedHooks } from './member-removed-hooks.js';
@@ -19,6 +20,7 @@ import { StorageReconcileHooks } from './storage-reconcile-hooks.js';
     SpaceKeyRotatedHooks,
     HubExecutorLostHooks,
     StorageReconcileHooks,
+    BackupObjectsChangedHooks,
   ],
   exports: [
     RegistrationHooks,
@@ -29,6 +31,7 @@ import { StorageReconcileHooks } from './storage-reconcile-hooks.js';
     SpaceKeyRotatedHooks,
     HubExecutorLostHooks,
     StorageReconcileHooks,
+    BackupObjectsChangedHooks,
   ],
 })
 export class SharedApplicationModule {}

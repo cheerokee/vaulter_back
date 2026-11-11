@@ -31,6 +31,13 @@ export type StoredObjectVersion = ListedVersion & {
   current: boolean;
 };
 
+/** The live (committed, current) version of a live object, with what the server needs to read its bytes. */
+export type LiveObjectVersion = ListedVersion & {
+  objectId: string;
+  /** The S3 version the index points to: the only one to read. */
+  s3VersionId: string;
+};
+
 export type ObjectListing = { include: 'current' | 'trash'; since?: Date };
 
 /**
@@ -69,4 +76,13 @@ export abstract class BackupIndexReader {
     objectId: string,
     versionId: string,
   ): Promise<string | null>;
+  /**
+   * The live version of each of these objects that is live (committed current version, no tombstone); objects that are
+   * missing, deleted or never confirmed are absent from the result. At most 1000 ids per call.
+   */
+  abstract liveVersions(
+    orgId: string,
+    spaceId: string,
+    objectIds: readonly string[],
+  ): Promise<LiveObjectVersion[]>;
 }

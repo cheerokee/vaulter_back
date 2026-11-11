@@ -751,8 +751,8 @@ o lado do aparelho em `docs/hubs/hub-lifecycle.md` (§9, §10; mudou rota, corpo
 mesmo commit).
 - **Fronteiras:** `storage` depende de `spaces` (`SpaceContentAccess`, e a porta `SpaceStorageUsage`, que ele liga), de
   `hubs` (`HubDirectory`: organizações de vínculo aprovado do Hub), de `identity` (`CurrentAuthProofVerifier`, para
-  esvaziar a lixeira) e de `organizations` (`AuditLog`), só pelo que exportam; só o `conversations` importa `storage` (a
-  porta `ObjectStore` e a `application/`, para os anexos).
+  esvaziar a lixeira) e de `organizations` (`AuditLog`), só pelo que exportam; só o `conversations` (a porta
+  `ObjectStore` e a `application/`, para os anexos) e o `cloud` (`BackupContentReader`) importam `storage`.
   Leituras entre módulos, todas documentadas onde nascem: o `organizations` soma `spaces.storage_quota_bytes` em SQL
   (franquia; veja "Franquia de nuvem" em `organizations`), o `hubs` lê `spaces.storage_quota_bytes` em SQL ao instalar
   (veja "Capacidade do Hub" em `hubs`) e a sincronização do Hub já era exceção. `SpaceStorageUsage` (porta do `spaces`,
@@ -762,6 +762,13 @@ mesmo commit).
   `ObjectStore` (provider) e, pela `application/`, a peça compartilhada `object-uploads.ts` (o `conversations`
   reaproveita o mecanismo para os anexos); a varredura `storage:reconcile` roda também os ganchos
   `StorageReconcileHooks` (`src/shared/application/`). Tamanho do espaço e franquia: veja "Tamanho do espaço" em `spaces`.
+  **Nuvem ativa:** `BackupContentReader` (exportado) lê o backup cifrado pelo próprio servidor (versões vivas pelo índice,
+  bytes pela `s3VersionId` do índice com `ObjectStore.getVersion`, conferidos pelo sha256; sem autorização: quem chama
+  já conferiu `active_cloud`); confirmar e apagar emitem `BackupObjectsChangedHooks` (`src/shared/application/`, global;
+  `{ organizationId, spaceId, objectIds, change: 'committed'|'deleted' }`, por último no unit of work, com o espaço FOR
+  SHARE; o gancho não trava nada; erro desfaz). **Ids de objeto** (`BackupRules.assertObjectIdWritable`): UUID v7 ou o
+  id do manifesto do Hub daquele espaço (UUID v5, `docs/hubs/space-manifest.md`; outro: 422 `object-id-invalid`); o do
+  manifesto da nuvem é reservado ao servidor (enviar ou apagar: 422 `object-id-reserved`).
 - **Regras de tamanho** (`domain/backup-limits.ts`; mudar qualquer valor é decisão de produto): espaço 10 GiB por padrão
   (1 GiB..5 TiB), franquia da organização 50 GiB (só o financeiro da plataforma altera: `PUT /platform/organizations/:orgId/
   storage-quota`, veja `platform`), objeto até 5 GiB (422 `object-too-large`), lote de 100 itens por pedido
@@ -1163,7 +1170,25 @@ registra a fonte `conversations`), `hubs` (`HubDirectory`: `ownerOf`,
   fila é registrada ali; `cancelQueued(fila, { spaceId })`), encerra o ciclo (lápide em `cloud_space_activations`, com
   quem desligou) e volta a `encrypted_backup`. `GET /spaces/:spaceId/cloud` (membro ou quem decide) -> `state`
   `off|authorized|active`. Auditoria: `organization.cloud_terms.accepted`, `space.cloud.authorized|activated|deactivated`
-  (só ids, versões e contagens). Travas: espaço `FOR UPDATE` -> ciclo vivo `FOR UPDATE` -> cópias.
+  (só ids, versões e contagens). Travas: espaço `FOR UPDATE` -> ciclo vivo `FOR UPDATE` -> cópias -> trechos -> arquivos.
+- **Indexação** (spec §4.2; contrato do manifesto `docs/hubs/space-manifest.md`, com o vetor do UUID v5;
+  `application/indexing/`): duas filas do pg-boss registradas em `CloudSpaceJobs` (`cloud.index-space`, uma por espaço
+  com `singletonKey` e 2 s de debounce, enfileirada ao ligar e pelo gancho `BackupObjectsChangedHooks` num espaço
+  `active_cloud`; `cloud.index-file`, uma por arquivo). A passada do espaço lê os dois manifestos (do Hub e da nuvem, o
+  do Hub vence por `fileId`), compara as versões das partes com `cloud_files` e marca `pending` só o que mudou
+  (`planIndexSync`); o job do arquivo lê as partes pela versão do índice, decifra (`SpaceKeys`: cópias do servidor
+  abertas sob demanda e apagadas no fim), extrai (`TextExtractor`: unpdf, fflate + htmlparser2 para docx/xlsx com
+  limites contra zip bomb, htmlparser2, UTF-8; formato desconhecido = `skipped` `unsupported-format` com registro só de
+  ids e tipo, nunca o nome), divide como o Hub (`chunkText`: 800/80, sem sobreposição) e calcula embeddings em lotes de
+  32 pelo `IndexingCostMeter` (porta; hoje `NoopIndexingCostMeter`; a Task 5 liga o orçamento: `beforeBatch` pode parar,
+  `record` recebe tokens e custo `AiPricing`). Tabelas `cloud_files` (nome/tipo/caminho: LEGÍVEIS) e `cloud_chunks`
+  (texto, `embedding vector(768)` com índice HNSW de cosseno criado na migration, `synchronize: false` na entidade, e o
+  modelo em cada linha), RLS por organização, DELETE físico. **Review Focus 1:** nenhum trabalho longo segura transação;
+  toda gravação legível roda numa transação curta que antes trava o espaço FOR SHARE (`SpaceCloud.lockActiveForWrite`):
+  desligar trava FOR UPDATE e apaga trechos e arquivos, então um job com a chave já aberta nunca grava depois do
+  desligar (e2e `test/cloud/indexing.e2e-spec.ts`). Conversas nunca entram no índice. e2e com o Hub simulado em
+  `test/support/space-manifest.ts` (`simulatedHub`, `cloudSwitch`), workers ligados e embedder falso por DI
+  (`createTestApp({ overrides })`); documentos de teste reais em `src/cloud/testing/document-fixtures.ts`.
 - **Preço** (`AiPricing`, `domain/ai-pricing.ts`): tabela em código, micro-USD por milhão de tokens (`bigint`), conta com
   arredondamento **para cima** por chamada; modelo sem preço = `UnpricedModelError` (falha fechada; o `CloudModule` confere `CLOUD_LLM_MODEL_ID` e `EMBEDDING_MODEL` **na subida**). Valores atuais são
   **provisórios** (Jonas decide); embedding próprio tem custo nominal de US$ 0,02/MTok para a indexação consumir o orçamento.
@@ -1187,7 +1212,8 @@ registra a fonte `conversations`), `hubs` (`HubDirectory`: `ownerOf`,
   - **runtime** (`DB_APP_USERNAME`/`DB_APP_PASSWORD`, padrão `vaulter_app`): o que a API usa. Sem superusuário,
     sem `BYPASSRLS`, membro do papel de grupo `app_runtime`, que tem só `SELECT, INSERT, UPDATE` — **sem
     `DELETE`** (reforça o soft delete; a limpeza de lápides decide isso depois). Exceções documentadas: `rate_limit_hits`
-    (contador técnico) e as tabelas legíveis da nuvem ativa (`cloud_space_key_grants`; desligar apaga de verdade). As permissões vêm das migrations;
+    (contador técnico) e as tabelas legíveis da nuvem ativa (`cloud_space_key_grants`, `cloud_files`, `cloud_chunks`;
+    desligar apaga de verdade). As permissões vêm das migrations;
     o login é criado por `.docker/postgres/init/02-app-role.sh` (idempotente);
   - **dono** (`DB_USERNAME`): migrations, CLI, compose, pgAdmin e a preparação do banco de teste.
   - Em banco **já existente** (criado antes do script), rodar uma vez:

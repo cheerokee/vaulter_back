@@ -217,6 +217,22 @@ export class ServerKeyGrantTypeormRepository extends ServerKeyGrantRepository {
     );
   }
 
+  async findForSpace(
+    orgId: string,
+    spaceId: string,
+  ): Promise<{ keyVersion: number; wrappedKey: string }[]> {
+    const rows = await runInOrganizationScope(this.dataSource, orgId, (m) =>
+      m.getRepository(ServerKeyGrantTypeormEntity).find({
+        where: { organizationId: orgId, spaceId },
+        order: { keyVersion: 'ASC' },
+      }),
+    );
+    return rows.map((r) => ({
+      keyVersion: r.keyVersion,
+      wrappedKey: r.wrappedKey,
+    }));
+  }
+
   async deleteForSpace(orgId: string, spaceId: string): Promise<number> {
     const result = await runInOrganizationScope(this.dataSource, orgId, (m) =>
       m

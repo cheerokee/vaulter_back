@@ -25,6 +25,11 @@ import { ReconcileStorageUseCase } from './reconcile-storage.use-case.js';
 import { RequestUploadsUseCase } from './request-uploads.use-case.js';
 import type { StorageAccess } from './storage-access.js';
 import { SpaceStorageUsage } from '../../spaces/application/space-storage-usage.js';
+import { BackupObjectsChangedHooks } from '../../shared/application/backup-objects-changed-hooks.js';
+import {
+  cloudManifestObjectId,
+  hubManifestObjectId,
+} from '../../shared/domain/space-manifest-ids.js';
 
 const NOW = new Date('2026-11-09T12:00:00Z');
 const ORG = '01900000-0000-7000-8000-000000000001';
@@ -360,6 +365,14 @@ function setup() {
   );
   const trash = new BackupTrash(versionRepoDep, storeDep);
   const accessDep = access as unknown as StorageAccess;
+  // Who reacts to the backup (the active cloud, in the app): recorded in the trace, inside the unit of work.
+  const changed = new BackupObjectsChangedHooks();
+  changed.register({
+    name: 'trace',
+    onBackupObjectsChanged: async (c) => {
+      trace.push(`changed:${c.change}:${c.objectIds.join(',')}`);
+    },
+  });
   return {
     trace,
     state,
@@ -405,6 +418,7 @@ function setup() {
       healer,
       trash,
       uowDep,
+      changed,
     ),
     remove: new DeleteObjectsUseCase(
       accessDep,
@@ -413,6 +427,7 @@ function setup() {
       storeDep,
       healer,
       uowDep,
+      changed,
     ),
     reconcile: new ReconcileStorageUseCase(versionRepoDep, healer),
   };
@@ -558,6 +573,38 @@ describe('RequestUploadsUseCase', () => {
     expect(t.versions.size).toBe(0);
   });
 
+  it("object ids: v7 or the space's Hub manifest; the cloud manifest is reserved (422) before any lock", async () => {
+    const [hubManifest] = await t.request.execute(
+      HUB,
+      SPACE,
+      [item(hubManifestObjectId(SPACE))],
+      NOW,
+    );
+    expect(hubManifest!.objectId).toBe(hubManifestObjectId(SPACE));
+    t.mocks.access.lock.mockClear();
+    await expect(
+      t.request.execute(HUB, SPACE, [item(cloudManifestObjectId(SPACE))], NOW),
+    ).rejects.toMatchObject({ code: 'object-id-reserved' });
+    // A v5 of another space (or any other non-v7 id) is not a manifest of this space.
+    await expect(
+      t.request.execute(
+        HUB,
+        SPACE,
+        [item(hubManifestObjectId('01900000-0000-7000-8000-000000000099'))],
+        NOW,
+      ),
+    ).rejects.toMatchObject({ code: 'object-id-invalid' });
+    await expect(
+      t.remove.execute(
+        HUB,
+        SPACE,
+        [{ objectId: cloudManifestObjectId(SPACE), replacesVersionId: OBJ_B }],
+        NOW,
+      ),
+    ).rejects.toMatchObject({ code: 'object-id-reserved' });
+    expect(t.mocks.access.lock).not.toHaveBeenCalled();
+  });
+
   it('above 5 GiB: 422 object-too-large before touching the space; duplicate objects: 422', async () => {
     await expect(
       t.request.execute(
@@ -632,6 +679,8 @@ describe('ConfirmUploadsUseCase', () => {
       // The per-object cap of old versions (10): one old version, nothing to purge.
       `trashOf:${OBJ_A}`,
       `saveObject:${OBJ_A}`,
+      // Last, inside the unit of work: who reacts to the backup (no lock).
+      `changed:committed:${OBJ_A}`,
       'commit',
     ]);
     // Never cleared on commit: only the sweep clears marks.
@@ -993,6 +1042,27 @@ describe('DeleteObjectsUseCase', () => {
       NOW,
     );
     expect(t.mocks.store.deleteCurrent).not.toHaveBeenCalled();
+  });
+
+  it('tells who reacts to the backup which objects were deleted, inside the unit of work', async () => {
+    const v = await committed(OBJ_A);
+    t.trace.length = 0;
+    await t.remove.execute(
+      HUB,
+      SPACE,
+      [{ objectId: OBJ_A, replacesVersionId: v }],
+      NOW,
+    );
+    expect(t.trace.slice(-2)).toEqual([`changed:deleted:${OBJ_A}`, 'commit']);
+    // Nothing deleted (already gone): nobody is told.
+    t.trace.length = 0;
+    await t.remove.execute(
+      HUB,
+      SPACE,
+      [{ objectId: OBJ_A, replacesVersionId: v }],
+      NOW,
+    );
+    expect(t.trace.some((x) => x.startsWith('changed:'))).toBe(false);
   });
 
   it('another version or an unknown object: 409; a rolled back batch removes the markers it left', async () => {

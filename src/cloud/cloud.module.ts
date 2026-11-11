@@ -3,6 +3,31 @@ import { ConfigService } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { OrganizationsModule } from '../organizations/organizations.module.js';
 import { SpacesModule } from '../spaces/spaces.module.js';
+import { StorageModule } from '../storage/storage.module.js';
+import { BackupPlaintextReader } from './application/indexing/backup-plaintext-reader.js';
+import { CloudIndexingQueue } from './application/indexing/cloud-indexing-queue.js';
+import { CloudIndexingWorkers } from './application/indexing/cloud-indexing.workers.js';
+import { IndexFileJob } from './application/indexing/index-file.job.js';
+import { IndexSpaceJob } from './application/indexing/index-space.job.js';
+import { SpaceKeyOpener } from './application/indexing/space-keys.js';
+import { BackupObjectOpener } from './application/ports/backup-object-opener.js';
+import {
+  IndexingCostMeter,
+  NoopIndexingCostMeter,
+} from './application/ports/indexing-cost-meter.js';
+import { TextExtractor } from './application/ports/text-extractor.js';
+import {
+  CloudChunkRepository,
+  CloudFileRepository,
+} from './domain/indexing.repositories.js';
+import { CloudChunkTypeormEntity } from './infra/db/cloud-chunk.entity.js';
+import { CloudFileTypeormEntity } from './infra/db/cloud-file.entity.js';
+import {
+  CloudChunkSqlRepository,
+  CloudFileTypeormRepository,
+} from './infra/db/cloud-index.typeorm-repositories.js';
+import { SodiumBackupObjectOpener } from './infra/crypto/sodium-backup-object-opener.js';
+import { LibraryTextExtractor } from './infra/extraction/library-text-extractor.js';
 import { CloudKeyRotatedHook } from './application/cloud-key-rotated.hook.js';
 import { CloudSpaceAccess } from './application/cloud-space-access.js';
 import { CloudSpaceJobs } from './application/cloud-space-jobs.js';
@@ -63,19 +88,23 @@ export function createLanguageModel(config: ConfigService): LanguageModel {
  * Depends on the other modules only through what they export; no module imports `cloud`. Task 1: the server key
  * (KMS envelope) and its public route; the job queue is the global `JobQueue` (src/shared/infra/jobs). Task 3: the term
  * and its acceptance, authorizing / switching on / switching off a space, and the server copy on key rotations
- * (`SpaceKeyRotatedHooks`).
+ * (`SpaceKeyRotatedHooks`). Task 4: indexing from the encrypted backup (manifests, extraction, chunks + pgvector),
+ * through `storage`'s `BackupContentReader` and `BackupObjectsChangedHooks`.
  */
 @Module({
   imports: [
     // Uma direção só: o cloud usa o que spaces e organizations exportam; ninguém importa o cloud.
     OrganizationsModule,
     SpacesModule,
+    StorageModule,
     TypeOrmModule.forFeature([
       CloudServerKeyTypeormEntity,
       CloudTermTypeormEntity,
       CloudTermAcceptanceTypeormEntity,
       SpaceActivationTypeormEntity,
       ServerKeyGrantTypeormEntity,
+      CloudFileTypeormEntity,
+      CloudChunkTypeormEntity,
     ]),
   ],
   controllers: [
@@ -106,6 +135,18 @@ export function createLanguageModel(config: ConfigService): LanguageModel {
     AuthorizeSpaceCloudUseCase,
     ActivateSpaceCloudUseCase,
     DeactivateSpaceCloudUseCase,
+    { provide: CloudFileRepository, useClass: CloudFileTypeormRepository },
+    { provide: CloudChunkRepository, useClass: CloudChunkSqlRepository },
+    { provide: BackupObjectOpener, useClass: SodiumBackupObjectOpener },
+    { provide: TextExtractor, useClass: LibraryTextExtractor },
+    // Task 5 (orçamento de IA) troca pela implementação que confere e registra o gasto.
+    { provide: IndexingCostMeter, useClass: NoopIndexingCostMeter },
+    CloudIndexingQueue,
+    SpaceKeyOpener,
+    BackupPlaintextReader,
+    IndexSpaceJob,
+    IndexFileJob,
+    CloudIndexingWorkers,
     KmsKeyEnvelope,
     ServerKeyTypeormStore,
     { provide: ServerKeyring, useClass: KmsServerKeyring },

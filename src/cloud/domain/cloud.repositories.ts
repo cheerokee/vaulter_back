@@ -58,6 +58,11 @@ export abstract class ServerKeyGrantRepository {
     keyVersion: number;
     wrappedKey: string;
   }): Promise<void>;
+  /** Every copy of the space (one per key version). */
+  abstract findForSpace(
+    orgId: string,
+    spaceId: string,
+  ): Promise<{ keyVersion: number; wrappedKey: string }[]>;
   /** Physical DELETE of every copy of the space; returns how many. */
   abstract deleteForSpace(orgId: string, spaceId: string): Promise<number>;
 }

@@ -21,7 +21,8 @@ import {
 } from './storage-access.js';
 
 // Intenção de envio (spec storage-backup §4.2, passo 1), tudo ou nada por pedido (até 100 objetos):
-// 1. formato: cada objeto uma vez (422 `duplicate-object`), até 5 GiB (422 `object-too-large`), antes de travar nada;
+// 1. formato: cada objeto uma vez (422 `duplicate-object`), id v7 ou o do manifesto do Hub (422 `object-id-invalid`; o do
+//    manifesto da nuvem: 422 `object-id-reserved`), até 5 GiB (422 `object-too-large`), antes de travar nada;
 // 2. no unit of work: trava o espaço (`StorageAccess.lock`, `memory.write`; FOR UPDATE, a mesma trava do
 //    redimensionar e da troca de chave: duas intenções do mesmo espaço se serializam, senão cada uma caberia sozinha
 //    e juntas estourariam o tamanho; nenhuma chamada ao S3 acontece sob ela), confere troca de chave pendente / versão da chave (409), trava cada objeto em
@@ -49,8 +50,10 @@ export class RequestUploadsUseCase {
     now: Date = new Date(),
   ): Promise<UploadIntentView[]> {
     BackupRules.assertDistinctObjects(items.map((i) => i.objectId));
-    for (const i of items)
+    for (const i of items) {
+      BackupRules.assertObjectIdWritable(spaceId, i.objectId);
       BackupRules.assertObjectSize(i.objectId, i.sizeBytes);
+    }
     const uploader = uploaderOf(actor);
 
     const created = await this.uow

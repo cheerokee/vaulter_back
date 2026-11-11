@@ -52,6 +52,17 @@ export abstract class ObjectStore {
     expiresInSeconds: number,
   ): Promise<string>;
 
+  /**
+   * The bytes of ONE specific version (never "the current one": the index says which version is the truth). Refuses a
+   * body larger than `maxBytes` before reading it (`ObjectTooLargeToReadError`). For the server's own reads of the
+   * backup (active cloud indexing); clients download through presigned URLs.
+   */
+  abstract getVersion(
+    key: string,
+    versionId: string,
+    maxBytes: number,
+  ): Promise<Uint8Array>;
+
   /** Current version of the key, or null when there is none (missing or behind a delete marker). */
   abstract head(key: string): Promise<ObjectHead | null>;
 
@@ -82,4 +93,15 @@ export abstract class ObjectStore {
 
   /** Every version and delete marker of exactly this key (any order). */
   abstract listVersions(key: string): Promise<StoredVersion[]>;
+}
+
+/** `ObjectStore.getVersion` of a body bigger than the caller accepts (nothing was read). */
+export class ObjectTooLargeToReadError extends Error {
+  constructor(
+    readonly sizeBytes: number,
+    readonly maxBytes: number,
+  ) {
+    super(`object has ${sizeBytes} bytes, more than ${maxBytes}`);
+    this.name = 'ObjectTooLargeToReadError';
+  }
 }
