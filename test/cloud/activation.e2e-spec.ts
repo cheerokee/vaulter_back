@@ -11,6 +11,10 @@ import {
 } from '../setup/test-app.js';
 import { generateSpaceKey, sealSpaceKey } from '../support/client-crypto.js';
 import {
+  setAiBudgetInDb,
+  TEST_AI_BUDGET_MICRO_USD,
+} from '../support/space-manifest.js';
+import {
   expectStatus,
   identityClient,
   recipientOf,
@@ -103,6 +107,7 @@ describe('active cloud: term, authorize, switch on, switch off (e2e, real client
       await c.spaces.joinOrg(ana, orgId, bob);
       await c.spaces.joinOrg(ana, orgId, carol, 'org_admin');
       await c.spaces.joinOrg(ana, orgId, dave);
+      await setAiBudgetInDb(orgId, TEST_AI_BUDGET_MICRO_USD);
       const created = await c.spaces.create(ana, orgId, kitPk);
       expect(created.res.status).toBe(201);
       spaceId = created.spaceId;
@@ -186,6 +191,19 @@ describe('active cloud: term, authorize, switch on, switch off (e2e, real client
       expect(early.body.type).toMatch(/cloud-not-authorized$/);
       await authorize(bob, spaceId).expect(403);
       await authorize(dave, spaceId).expect(403);
+    });
+
+    it('authorizing without an AI budget (0, the default): 422 ai-budget-required, nothing written', async () => {
+      await setAiBudgetInDb(orgId, 0);
+      const res = await authorize(carol, spaceId);
+      expect(res.status).toBe(422);
+      expect(res.body.type).toMatch(/ai-budget-required$/);
+      const cycles = await db<{ n: number }>(
+        `SELECT count(*)::int AS n FROM cloud_space_activations WHERE space_id = $1`,
+        [spaceId],
+      );
+      expect(cycles[0]!.n).toBe(0);
+      await setAiBudgetInDb(orgId, TEST_AI_BUDGET_MICRO_USD);
     });
 
     it('the admin outside the space authorizes; every member and the admin see "authorized"', async () => {
@@ -512,6 +530,7 @@ describe('active cloud: term, authorize, switch on, switch off (e2e, real client
       m.recoveryKitKeypair(),
     );
     await c.spaces.setRecoveryKit(zoe, personal.id, kit.publicKey).expect(204);
+    await setAiBudgetInDb(personal.id, TEST_AI_BUDGET_MICRO_USD);
     const created = await c.spaces.create(zoe, personal.id, kit.publicKey);
     await acceptCurrent(zoe, personal.id);
     await expectStatus(authorize(zoe, created.spaceId), 200);

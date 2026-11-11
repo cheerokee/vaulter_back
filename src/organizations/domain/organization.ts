@@ -1,6 +1,7 @@
 import { DomainValidationError } from '../../shared/domain/errors.js';
 import { Entity } from '../../shared/domain/entity.js';
 import { assertRecoveryPublicKey } from './recovery-key.js';
+import { AI_BUDGET_DEFAULT_MICRO_USD, assertAiBudget } from './ai-budget.js';
 import { ORGANIZATION_STORAGE_QUOTA_DEFAULT_BYTES } from './storage-quota.js';
 
 export const HUB_LINK_POLICIES = ['any_member_hub', 'admin_approved'] as const;
@@ -39,6 +40,8 @@ export type OrganizationProps = {
   platformAppointment: PlatformAppointment | null;
   /** Cloud quota (bytes): the reserved sizes of the live spaces never add up beyond it. */
   storageQuotaBytes: number;
+  /** Monthly AI budget in micro-USD (spec active-cloud §4.4); 0 = nothing that costs AI runs. */
+  aiBudgetMicroUsd: bigint;
   createdAt?: Date;
   updatedAt?: Date;
 };
@@ -69,6 +72,7 @@ export class Organization extends Entity<OrganizationProps> {
       recoveryKeyChangedByUserId: null,
       platformAppointment: null,
       storageQuotaBytes: ORGANIZATION_STORAGE_QUOTA_DEFAULT_BYTES,
+      aiBudgetMicroUsd: AI_BUDGET_DEFAULT_MICRO_USD,
       createdAt: input.now,
     });
   }
@@ -90,6 +94,7 @@ export class Organization extends Entity<OrganizationProps> {
       recoveryKeyChangedByUserId: null,
       platformAppointment: null,
       storageQuotaBytes: ORGANIZATION_STORAGE_QUOTA_DEFAULT_BYTES,
+      aiBudgetMicroUsd: AI_BUDGET_DEFAULT_MICRO_USD,
       createdAt: input.now,
     });
   }
@@ -123,6 +128,14 @@ export class Organization extends Entity<OrganizationProps> {
     const fromBytes = this.props.storageQuotaBytes;
     this.props = { ...this.props, storageQuotaBytes: bytes };
     return { fromBytes, toBytes: bytes };
+  }
+
+  /** Sets the monthly AI budget (finance decides the value; lowering it below the month's spend only stops the AI). */
+  setAiBudget(microUsd: bigint): { fromMicroUsd: bigint; toMicroUsd: bigint } {
+    const toMicroUsd = assertAiBudget(microUsd);
+    const fromMicroUsd = this.props.aiBudgetMicroUsd;
+    this.props = { ...this.props, aiBudgetMicroUsd: toMicroUsd };
+    return { fromMicroUsd, toMicroUsd };
   }
 
   rename(name: string): void {
@@ -252,6 +265,9 @@ export class Organization extends Entity<OrganizationProps> {
   }
   get storageQuotaBytes(): number {
     return this.props.storageQuotaBytes;
+  }
+  get aiBudgetMicroUsd(): bigint {
+    return this.props.aiBudgetMicroUsd;
   }
   get createdAt(): Date | undefined {
     return this.props.createdAt;

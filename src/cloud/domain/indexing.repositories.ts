@@ -39,6 +39,8 @@ export abstract class CloudFileRepository {
   abstract deleteByIds(orgId: string, ids: readonly string[]): Promise<void>;
   /** Physical DELETE of every file of the space; returns how many. */
   abstract deleteForSpace(orgId: string, spaceId: string): Promise<number>;
+  /** Spaces of the organization with a file still `pending` (an indexing to finish or resume), in id order. */
+  abstract spacesWithPending(orgId: string): Promise<string[]>;
 }
 
 /** The chunks (`cloud_chunks`, legible text + `vector(768)`), by file. Physical DELETE only. */

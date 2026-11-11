@@ -289,7 +289,10 @@ describe('Platform staff and roles (e2e)', () => {
     const res = await p.me(fin.token).expect(200);
     expect(res.body).toEqual({
       roles: ['platform_finance'],
-      permissions: ['platform.billing.storage_quota'],
+      permissions: [
+        'platform.billing.ai_budget',
+        'platform.billing.storage_quota',
+      ],
     });
     await p.staff(fin.token).expect(404);
   });

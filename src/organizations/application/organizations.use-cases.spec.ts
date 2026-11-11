@@ -16,6 +16,7 @@ import {
 } from '../../../test/support/organizations-kit.js';
 import { CreateOrganizationUseCase } from './create-organization.use-case.js';
 import { GetOrganizationUseCase } from './get-organization.use-case.js';
+import { OrganizationAiSpend } from './organization-ai-spend.js';
 import { ListMyOrganizationsUseCase } from './list-my-organizations.use-case.js';
 import { SetRecoveryKeyUseCase } from './set-recovery-key.use-case.js';
 import { UpdateOrganizationUseCase } from './update-organization.use-case.js';
@@ -148,7 +149,8 @@ describe('ListMyOrganizationsUseCase', () => {
 });
 
 describe('GetOrganizationUseCase', () => {
-  const useCase = () => new GetOrganizationUseCase(d.access, d.orgs);
+  const aiSpend = new OrganizationAiSpend();
+  const useCase = () => new GetOrganizationUseCase(d.access, d.orgs, aiSpend);
 
   it('returns the organization with the role of a member', async () => {
     const out = await useCase().execute(actor(MEMBER), ORG_ID);
@@ -163,6 +165,25 @@ describe('GetOrganizationUseCase', () => {
       reservedBytes: 12_884_901_888,
     });
     expect(m.orgs.reservedStorageBytes).toHaveBeenCalledWith(ORG_ID);
+  });
+
+  it('shows the AI budget state to every member, never the amounts', async () => {
+    expect((await useCase().execute(actor(MEMBER), ORG_ID)).ai).toEqual({
+      budgetConfigured: false,
+      warningLevel: 100,
+    });
+    m.orgs.findById.mockResolvedValueOnce(
+      makeOrganization({ aiBudgetMicroUsd: 1_000n }),
+    );
+    aiSpend.register({ consumedMicroUsd: async () => 800n });
+    try {
+      expect((await useCase().execute(actor(MEMBER), ORG_ID)).ai).toEqual({
+        budgetConfigured: true,
+        warningLevel: 75,
+      });
+    } finally {
+      aiSpend.unregister();
+    }
   });
 
   it('404 for a non-member', async () => {
@@ -375,7 +396,8 @@ describe('SetRecoveryKeyUseCase', () => {
 
 describe('organization view (app warning data)', () => {
   const DAY = 24 * 60 * 60 * 1000;
-  const getUseCase = () => new GetOrganizationUseCase(d.access, d.orgs);
+  const getUseCase = () =>
+    new GetOrganizationUseCase(d.access, d.orgs, new OrganizationAiSpend());
 
   it('nothing changed: null kit change and null appointment', async () => {
     await expect(

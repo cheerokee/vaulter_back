@@ -11,10 +11,16 @@ import { IndexFileJob } from './application/indexing/index-file.job.js';
 import { IndexSpaceJob } from './application/indexing/index-space.job.js';
 import { SpaceKeyOpener } from './application/indexing/space-keys.js';
 import { BackupObjectOpener } from './application/ports/backup-object-opener.js';
-import {
-  IndexingCostMeter,
-  NoopIndexingCostMeter,
-} from './application/ports/indexing-cost-meter.js';
+import { IndexingCostMeter } from './application/ports/indexing-cost-meter.js';
+import { AiBudget } from './application/ai-budget.js';
+import { GetAiUsageUseCase } from './application/ai-usage.use-case.js';
+import { CloudAiBudgetHooks } from './application/cloud-ai-budget.hooks.js';
+import { BudgetIndexingCostMeter } from './application/indexing/budget-indexing-cost-meter.js';
+import { AiUsageLedger } from './domain/ai-usage.repository.js';
+import { AiReservationTypeormEntity } from './infra/db/ai-reservation.entity.js';
+import { AiUsageTypeormEntity } from './infra/db/ai-usage.entity.js';
+import { AiUsageSqlLedger } from './infra/db/ai-usage.sql-repository.js';
+import { AiUsageController } from './infra/http/ai-usage.controller.js';
 import { TextExtractor } from './application/ports/text-extractor.js';
 import {
   CloudChunkRepository,
@@ -89,7 +95,8 @@ export function createLanguageModel(config: ConfigService): LanguageModel {
  * (KMS envelope) and its public route; the job queue is the global `JobQueue` (src/shared/infra/jobs). Task 3: the term
  * and its acceptance, authorizing / switching on / switching off a space, and the server copy on key rotations
  * (`SpaceKeyRotatedHooks`). Task 4: indexing from the encrypted backup (manifests, extraction, chunks + pgvector),
- * through `storage`'s `BackupContentReader` and `BackupObjectsChangedHooks`.
+ * through `storage`'s `BackupContentReader` and `BackupObjectsChangedHooks`. Task 5: the monthly AI budget (`AiBudget`:
+ * reserve -> call -> settle/release; usage ledger; `GET /organizations/:id/ai-usage`; indexing pauses/resumes).
  */
 @Module({
   imports: [
@@ -105,12 +112,15 @@ export function createLanguageModel(config: ConfigService): LanguageModel {
       ServerKeyGrantTypeormEntity,
       CloudFileTypeormEntity,
       CloudChunkTypeormEntity,
+      AiReservationTypeormEntity,
+      AiUsageTypeormEntity,
     ]),
   ],
   controllers: [
     CloudServerKeyController,
     CloudTermsController,
     SpaceCloudController,
+    AiUsageController,
   ],
   providers: [
     { provide: CloudTermRepository, useClass: CloudTermTypeormRepository },
@@ -139,8 +149,12 @@ export function createLanguageModel(config: ConfigService): LanguageModel {
     { provide: CloudChunkRepository, useClass: CloudChunkSqlRepository },
     { provide: BackupObjectOpener, useClass: SodiumBackupObjectOpener },
     { provide: TextExtractor, useClass: WorkerTextExtractor },
-    // Task 5 (orçamento de IA) troca pela implementação que confere e registra o gasto.
-    { provide: IndexingCostMeter, useClass: NoopIndexingCostMeter },
+    // Orçamento de IA (Task 5): cada lote de embeddings reserva no orçamento e acerta o gasto real.
+    { provide: IndexingCostMeter, useClass: BudgetIndexingCostMeter },
+    { provide: AiUsageLedger, useClass: AiUsageSqlLedger },
+    AiBudget,
+    GetAiUsageUseCase,
+    CloudAiBudgetHooks,
     CloudIndexingQueue,
     SpaceKeyOpener,
     BackupPlaintextReader,

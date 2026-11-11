@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { validate } from 'uuid';
 import { UserDirectory } from '../../identity/application/user-directory.js';
+import { AiBudgetRaisedHooks } from '../../shared/application/ai-budget-raised-hooks.js';
 import {
   auditActorFields,
   type AuditActor,
@@ -46,6 +47,7 @@ export class OrganizationAdministration {
     private readonly users: UserDirectory,
     private readonly audit: AuditLog,
     private readonly uow: UnitOfWork,
+    private readonly aiBudgetRaised: AiBudgetRaisedHooks,
   ) {}
 
   /**
@@ -167,6 +169,42 @@ export class OrganizationAdministration {
         });
       }
       return { fromBytes, toBytes };
+    });
+  }
+
+  /**
+   * Sets the monthly AI budget in micro-USD (spec active-cloud §4.4; finance adjusts it, like the storage quota). 0 is
+   * allowed (switches the AI off); a value below the month's spend only stops what costs AI. Locks the organization
+   * row (`lockForUpdate`, the same lock the cloud's AI reservations take), so a reservation sees the old or the new
+   * value, never a mix. On a RAISE, `AiBudgetRaisedHooks` run in the same unit of work after the write (the cloud
+   * resumes the indexing that stopped for lack of budget). Same value: nothing written or audited. Unknown
+   * organization: 404. Audits `organization.ai_budget_changed` (`fromMicroUsd`, `toMicroUsd`).
+   */
+  setAiBudget(
+    orgId: string,
+    microUsd: bigint,
+    actor: AuditActor,
+  ): Promise<{ fromMicroUsd: bigint; toMicroUsd: bigint }> {
+    if (!validate(orgId)) return Promise.reject(organizationNotFound());
+    const origin = auditActorFields(actor);
+    return this.uow.run(async () => {
+      const org = await lockOrganization(this.orgs, orgId);
+      const change = org.setAiBudget(microUsd);
+      if (change.toMicroUsd !== change.fromMicroUsd) {
+        await this.orgs.save(org);
+        await this.audit.record({
+          organizationId: orgId,
+          userId: origin.userId,
+          action: 'organization.ai_budget_changed',
+          metadata: {
+            ...origin.metadata,
+            fromMicroUsd: Number(change.fromMicroUsd),
+            toMicroUsd: Number(change.toMicroUsd),
+          },
+        });
+        await this.aiBudgetRaised.run({ organizationId: orgId, ...change });
+      }
+      return change;
     });
   }
 

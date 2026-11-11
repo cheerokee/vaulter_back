@@ -25,6 +25,7 @@ import type { HubLinkPolicy } from '../../domain/organization.js';
   `("recovery_key_changed_at" IS NULL) = ("recovery_key_changed_by_user_id" IS NULL)`,
 )
 @Check('ck_organizations_storage_quota_bytes', `"storage_quota_bytes" > 0`)
+@Check('ck_organizations_ai_budget_micro_usd', `"ai_budget_micro_usd" >= 0`)
 @Index('ix_organizations_sync_version', ['syncVersion'])
 @Index('uq_organizations_personal_owner', ['personalOwnerUserId'], {
   unique: true,
@@ -70,6 +71,10 @@ export class OrganizationTypeormEntity extends SyncableTypeormEntity {
   // Franquia de nuvem (bytes; bigint volta como string no driver pg, o mapper converte).
   @Column({ type: 'bigint', default: 53687091200 })
   storageQuotaBytes!: string;
+
+  // Orçamento mensal de IA em micro-USD (spec active-cloud §4.4); padrão 0 (a nuvem ativa é contratada).
+  @Column({ type: 'bigint', default: 0 })
+  aiBudgetMicroUsd!: string;
 
   // FK para users só como metadado (migration:generate). Alvo por nome: um módulo não importa a infra/ do outro.
   @ManyToOne('UserTypeormEntity')

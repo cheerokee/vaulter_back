@@ -202,6 +202,21 @@ export class CloudFileTypeormRepository extends CloudFileRepository {
     );
   }
 
+  async spacesWithPending(orgId: string): Promise<string[]> {
+    const rows: { space_id: string }[] = await runInOrganizationScope(
+      this.dataSource,
+      orgId,
+      (m) =>
+        m.query(
+          `SELECT DISTINCT space_id FROM cloud_files
+            WHERE organization_id = $1 AND status = 'pending'
+            ORDER BY space_id`,
+          [orgId],
+        ),
+    );
+    return rows.map((r) => r.space_id);
+  }
+
   async deleteForSpace(orgId: string, spaceId: string): Promise<number> {
     const result = await runInOrganizationScope(this.dataSource, orgId, (m) =>
       m

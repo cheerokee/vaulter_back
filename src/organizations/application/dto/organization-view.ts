@@ -1,3 +1,4 @@
+import type { OrganizationAiBudgetState } from '../../domain/ai-budget.js';
 import type { OrgRoleKey } from '../../domain/membership.js';
 import type { OrganizationStorageQuota } from '../../domain/storage-quota.js';
 import type {
@@ -26,6 +27,11 @@ export type OrganizationView = {
   roleKey: OrgRoleKey;
   /** Cloud quota and what the live spaces reserve (only on `GET /organizations/:id`). */
   storage?: OrganizationStorageQuota;
+  /**
+   * State of the monthly AI budget (only on `GET /organizations/:id`, for every member): whether it is set and the
+   * warning level reached (0/75/90/100 % of the month spent or reserved). Amounts only in `.../ai-usage`.
+   */
+  ai?: OrganizationAiBudgetState;
   createdAt: Date;
   updatedAt: Date;
 };

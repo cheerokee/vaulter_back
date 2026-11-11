@@ -66,4 +66,15 @@ describe('SpaceActivation', () => {
       }),
     );
   });
+
+  describe('assertAiBudgetSet', () => {
+    it('refuses a budget of 0 or an unknown one (422 ai-budget-required); any positive budget passes', () => {
+      for (const b of [0n, null]) {
+        expect(() => SpaceActivationRules.assertAiBudgetSet(b)).toThrow(
+          expect.objectContaining({ code: 'ai-budget-required' }),
+        );
+      }
+      expect(() => SpaceActivationRules.assertAiBudgetSet(1n)).not.toThrow();
+    });
+  });
 });

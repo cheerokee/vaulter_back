@@ -230,6 +230,7 @@ describe('Organization derived flags', () => {
       recoveryKeyChangedByUserId: null,
       platformAppointment: null,
       storageQuotaBytes: 53_687_091_200,
+      aiBudgetMicroUsd: 0n,
     };
     expect(() =>
       Organization.restore(

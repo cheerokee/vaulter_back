@@ -9,6 +9,7 @@ describe('platform catalog', () => {
     expect([...PLATFORM_PERMISSIONS].sort()).toEqual(
       [
         'platform.audit.read',
+        'platform.billing.ai_budget',
         'platform.billing.storage_quota',
         'platform.roles.manage',
         'platform.support.approve',
@@ -31,9 +32,10 @@ describe('platform catalog', () => {
     ]);
   });
 
-  it('platform_finance has only the storage quota permission', () => {
+  it('platform_finance has only the billing permissions (storage quota, AI budget)', () => {
     expect(PLATFORM_ROLES.platform_finance.permissions).toEqual([
       'platform.billing.storage_quota',
+      'platform.billing.ai_budget',
     ]);
   });
 

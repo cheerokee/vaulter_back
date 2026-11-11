@@ -21,7 +21,7 @@ export const EMBEDDING_TIMEOUT_MS = 120_000;
 @Injectable()
 export class OllamaEmbedder extends Embedder {
   private readonly baseUrl: string;
-  private readonly model: string;
+  readonly model: string;
 
   /** Test seam (not a constructor parameter: Nest would try to inject it). */
   fetchFn: typeof fetch = fetch;

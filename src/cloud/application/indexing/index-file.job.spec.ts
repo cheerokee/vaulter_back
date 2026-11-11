@@ -88,9 +88,14 @@ function setup(text = 'word '.repeat(40 * 50)) {
     })),
   };
   const embedder = new FakeEmbedder();
+  let charges = 0;
   const meter = {
-    beforeBatch: vi.fn(async () => trace.push('beforeBatch')),
-    record: vi.fn(async () => trace.push('record')),
+    reserve: vi.fn(async (): Promise<{ reservationId: string } | null> => {
+      trace.push('reserve');
+      return { reservationId: `r${++charges}` };
+    }),
+    settle: vi.fn(async () => trace.push('settle')),
+    release: vi.fn(async () => trace.push('release')),
   };
   const files = {
     findById: vi.fn(async () => ({ ...FILE })),
@@ -143,21 +148,25 @@ function setup(text = 'word '.repeat(40 * 50)) {
 }
 
 describe('IndexFileJob', () => {
-  it('reads the parts in order, embeds in batches through the cost meter, then writes under the space lock', async () => {
+  it('reads the parts in order, embeds in batches through the AI budget (reserve, settle), then writes under the space lock', async () => {
     const k = setup();
     await k.job.run(PAYLOAD);
     // 2000 words of 5 chars = 10000 chars -> 13 chunks of <= 800 -> one batch of 32.
     expect(k.embedder.calls).toEqual([{ count: 13, kind: 'document' }]);
-    expect(k.meter.record).toHaveBeenCalledWith(
+    expect(k.meter.reserve).toHaveBeenCalledWith(
       { organizationId: ORG, spaceId: SPACE, cloudFileId: 'row-1' },
+      expect.any(Array),
+    );
+    expect(k.meter.settle).toHaveBeenCalledWith(
+      { reservationId: 'r1' },
       expect.objectContaining({
         model: 'fake-embedding',
         costMicroUsd: expect.any(BigInt),
       }),
     );
     expect(k.trace).toEqual([
-      'beforeBatch',
-      'record',
+      'reserve',
+      'settle',
       'run',
       'lockActiveForWrite',
       'lockById',
@@ -176,14 +185,15 @@ describe('IndexFileJob', () => {
 
   it('switched off while embedding (key already opened): nothing is written (Review Focus 1)', async () => {
     const k = setup();
-    k.meter.beforeBatch.mockImplementationOnce(async () => {
+    k.meter.reserve.mockImplementationOnce(async () => {
       k.deactivate();
-      return k.trace.push('beforeBatch (switched off meanwhile)');
+      k.trace.push('reserve (switched off meanwhile)');
+      return { reservationId: 'r1' };
     });
     await k.job.run(PAYLOAD);
     expect(k.trace).toEqual([
-      'beforeBatch (switched off meanwhile)',
-      'record',
+      'reserve (switched off meanwhile)',
+      'settle',
       'run',
       'lockActiveForWrite',
       'commit',
@@ -192,6 +202,45 @@ describe('IndexFileJob', () => {
     expect(k.chunks.replaceForFile).not.toHaveBeenCalled();
     expect(k.files.upsert).not.toHaveBeenCalled();
     expect(k.key.every((b) => b === 0)).toBe(true);
+  });
+
+  it('budget exhausted at the 2nd batch (Review Focus 3): stops there, the 1st batch is settled, nothing written, no error', async () => {
+    // 2000 chunks' worth: 60_000 words -> 375 chunks -> 12 batches of 32.
+    const k = setup('word '.repeat(60_000));
+    k.meter.reserve
+      .mockImplementationOnce(async () => {
+        k.trace.push('reserve');
+        return { reservationId: 'r1' };
+      })
+      .mockImplementationOnce(async () => {
+        k.trace.push('reserve (refused)');
+        return null;
+      });
+    await expect(k.job.run(PAYLOAD)).resolves.toBeUndefined();
+    expect(k.embedder.calls).toEqual([{ count: 32, kind: 'document' }]);
+    expect(k.trace).toEqual(['reserve', 'settle', 'reserve (refused)']);
+    expect(k.files.upsert).not.toHaveBeenCalled();
+    expect(k.chunks.replaceForFile).not.toHaveBeenCalled();
+    expect(k.key.every((b) => b === 0)).toBe(true);
+  });
+
+  it('an embedding call that fails gives its reservation back; an unusable answer is still settled (the call was made)', async () => {
+    const k = setup();
+    k.embedder.embed = vi.fn(async () => {
+      throw new Error('service down');
+    });
+    await expect(k.job.run(PAYLOAD)).rejects.toThrow('service down');
+    expect(k.trace).toEqual(['reserve', 'release']);
+
+    const k2 = setup();
+    k2.embedder.embed = vi.fn(async () => ({
+      vectors: [],
+      model: 'fake-embedding',
+      dimensions: 768,
+      inputTokens: 10,
+    }));
+    await expect(k2.job.run(PAYLOAD)).rejects.toThrow(/unexpected-shape/);
+    expect(k2.trace).toEqual(['reserve', 'settle']);
   });
 
   it('a file changed meanwhile (another version listed) or no longer pending: nothing written', async () => {

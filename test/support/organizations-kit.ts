@@ -48,6 +48,7 @@ export function makeOrganization(
       recoveryKeyChangedByUserId: null,
       platformAppointment: null,
       storageQuotaBytes: 53_687_091_200,
+      aiBudgetMicroUsd: 0n,
       createdAt: new Date('2026-10-01T00:00:00Z'),
       updatedAt: new Date('2026-10-02T00:00:00Z'),
       ...overrides,

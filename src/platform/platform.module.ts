@@ -20,6 +20,7 @@ import {
 } from './application/lookup.use-cases.js';
 import { PlatformAccess } from './application/platform-access.js';
 import { PlatformAudit } from './application/platform-audit.js';
+import { SetOrganizationAiBudgetUseCase } from './application/set-organization-ai-budget.use-case.js';
 import { SetOrganizationStorageQuotaUseCase } from './application/set-organization-storage-quota.use-case.js';
 import { RevokePlatformRoleUseCase } from './application/revoke-platform-role.use-case.js';
 import { PlatformAuditLogRepository } from './domain/platform-audit-log.repository.js';
@@ -100,6 +101,7 @@ import { SupportRequestsController } from './infra/http/support-requests.control
     LookupOrganizationUseCase,
     ListPlatformAuditUseCase,
     SetOrganizationStorageQuotaUseCase,
+    SetOrganizationAiBudgetUseCase,
   ],
   exports: [PlatformAccess, PlatformAudit],
 })

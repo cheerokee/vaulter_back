@@ -127,6 +127,11 @@ export class UnitOfWork {
     return runInTransaction(this.dataSource, work);
   }
 
+  /** Whether a `run` is open in this async context (for work that must hold its locks only in its own transaction). */
+  isActive(): boolean {
+    return activeManager(this.dataSource) !== undefined;
+  }
+
   // Contexto do RLS (`app.organization_id`, `app.user_id`, `app.hub_id`) para o resto da transação ativa. Para uma
   // troca temporária (ex.: gravar em outra organização no meio do `run`), use `withContext`.
   // O hash do convite e a chave de assinatura do Hub ficam fora: cada um só abre uma linha por vez, via

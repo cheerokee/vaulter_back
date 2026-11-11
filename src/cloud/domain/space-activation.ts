@@ -117,6 +117,21 @@ export const SpaceActivationRules = {
     }
   },
 
+  /**
+   * Authorizing needs a monthly AI budget above 0 (spec active-cloud §4.1: "orçamento > 0"): 422 `ai-budget-required`
+   * (the AI is not contracted; the platform's finance sets it). A budget already spent this month does not block
+   * authorizing: the cloud only waits for the next month or a raise (`ai-budget-exceeded` is for the calls). `null`
+   * (unknown organization) counts as 0.
+   */
+  assertAiBudgetSet(budgetMicroUsd: bigint | null): void {
+    if (budgetMicroUsd === null || budgetMicroUsd <= 0n) {
+      throw new DomainValidationError(
+        'ai-budget-required',
+        'The organization has no AI budget: the active cloud needs one above zero.',
+      );
+    }
+  },
+
   /** Switching on needs the authorization first: 422 `cloud-not-authorized`. */
   assertAuthorized(activation: SpaceActivation | null): SpaceActivation {
     if (!activation) {

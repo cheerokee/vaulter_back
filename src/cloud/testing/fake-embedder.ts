@@ -14,6 +14,7 @@ export const FAKE_EMBEDDING_DIMENSIONS = 768;
  * so retrieval e2e can assert "the right chunk comes first". Tokens = ceil(chars / 4).
  */
 export class FakeEmbedder extends Embedder {
+  readonly model = FAKE_EMBEDDING_MODEL;
   readonly calls: { count: number; kind: EmbeddingKind }[] = [];
 
   async embed(

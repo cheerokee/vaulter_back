@@ -36,6 +36,8 @@ export class EmbeddingServiceError extends Error {
  * Implementations never log the texts.
  */
 export abstract class Embedder {
+  /** The model the next call will use (priced by `AiPricing`; the AI budget reserves with it before the call). */
+  abstract readonly model: string;
   abstract embed(
     texts: readonly string[],
     kind: EmbeddingKind,

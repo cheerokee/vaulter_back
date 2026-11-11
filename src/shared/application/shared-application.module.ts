@@ -1,4 +1,5 @@
 import { Global, Module } from '@nestjs/common';
+import { AiBudgetRaisedHooks } from './ai-budget-raised-hooks.js';
 import { BackupObjectsChangedHooks } from './backup-objects-changed-hooks.js';
 import { HubExecutorLostHooks } from './hub-executor-lost-hooks.js';
 import { InvitationHooks } from './invitation-hooks.js';
@@ -21,6 +22,7 @@ import { StorageReconcileHooks } from './storage-reconcile-hooks.js';
     HubExecutorLostHooks,
     StorageReconcileHooks,
     BackupObjectsChangedHooks,
+    AiBudgetRaisedHooks,
   ],
   exports: [
     RegistrationHooks,
@@ -32,6 +34,7 @@ import { StorageReconcileHooks } from './storage-reconcile-hooks.js';
     HubExecutorLostHooks,
     StorageReconcileHooks,
     BackupObjectsChangedHooks,
+    AiBudgetRaisedHooks,
   ],
 })
 export class SharedApplicationModule {}

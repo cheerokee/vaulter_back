@@ -27,6 +27,7 @@ export const OrganizationMapper = {
               }
             : null,
         storageQuotaBytes: byteCount(row.storageQuotaBytes),
+        aiBudgetMicroUsd: BigInt(row.aiBudgetMicroUsd),
         createdAt: row.createdAt,
         updatedAt: row.updatedAt ?? undefined,
       },
@@ -52,6 +53,7 @@ export const OrganizationMapper = {
       platformAppointedAt: org.platformAppointment?.appointedAt ?? null,
       protectedUntil: org.platformAppointment?.protectedUntil ?? null,
       storageQuotaBytes: String(org.storageQuotaBytes),
+      aiBudgetMicroUsd: org.aiBudgetMicroUsd.toString(),
     };
   },
 };

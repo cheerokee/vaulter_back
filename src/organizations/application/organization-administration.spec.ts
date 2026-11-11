@@ -14,6 +14,7 @@ import {
   DomainValidationError,
   NotFoundError,
 } from '../../shared/domain/errors.js';
+import { AiBudgetRaisedHooks } from '../../shared/application/ai-budget-raised-hooks.js';
 import { OrganizationAdministration } from './organization-administration.js';
 
 const PLATFORM: AuditActor = { kind: 'platform', supportRequestId: 'sr-1' };
@@ -21,6 +22,7 @@ const PLATFORM_META = { actor: 'platform', supportRequestId: 'sr-1' };
 
 describe('OrganizationAdministration', () => {
   const kit = makeKit();
+  let raisedHooks = new AiBudgetRaisedHooks();
   const admin = () =>
     new OrganizationAdministration(
       kit.deps.orgs,
@@ -29,6 +31,7 @@ describe('OrganizationAdministration', () => {
       kit.deps.directory,
       kit.deps.audit,
       kit.deps.uow,
+      raisedHooks,
     );
 
   beforeEach(() => {
@@ -246,6 +249,82 @@ describe('OrganizationAdministration', () => {
       }
       expect(kit.mocks.memberships.add).not.toHaveBeenCalled();
       expect(kit.audited()).toEqual([]);
+    });
+  });
+
+  describe('setAiBudget', () => {
+    const FINANCE: AuditActor = {
+      kind: 'platform_staff',
+      staffAction: 'ai_budget_changed',
+    };
+    const raised = vi.fn(async () => {
+      kit.trace.push('hook.raised');
+    });
+    beforeEach(() => {
+      raisedHooks = new AiBudgetRaisedHooks();
+      raisedHooks.register({ name: 't', onAiBudgetRaised: raised });
+      raised.mockClear();
+    });
+
+    it('a raise: locks the organization, saves, audits, then runs the raised hooks inside the unit of work', async () => {
+      await expect(
+        admin().setAiBudget(ORG_ID, 5_000_000n, FINANCE),
+      ).resolves.toEqual({ fromMicroUsd: 0n, toMicroUsd: 5_000_000n });
+      const t = kit.trace;
+      expect(t.indexOf('orgs.lockForUpdate')).toBeLessThan(
+        t.indexOf('orgs.save'),
+      );
+      expect(t.indexOf('orgs.save')).toBeLessThan(t.indexOf('hook.raised'));
+      expect(t).not.toContain('hook.raised@out');
+      const saved = kit.mocks.orgs.save.mock.calls[0]![0] as Organization;
+      expect(saved.aiBudgetMicroUsd).toBe(5_000_000n);
+      expect(raised).toHaveBeenCalledWith({
+        organizationId: ORG_ID,
+        fromMicroUsd: 0n,
+        toMicroUsd: 5_000_000n,
+      });
+      expect(kit.audited()).toEqual([
+        {
+          organizationId: ORG_ID,
+          userId: null,
+          action: 'organization.ai_budget_changed',
+          metadata: {
+            actor: 'platform',
+            staffAction: 'ai_budget_changed',
+            fromMicroUsd: 0,
+            toMicroUsd: 5_000_000,
+          },
+        },
+      ]);
+    });
+
+    it('a cut writes and audits but does not run the raised hooks; the same value writes nothing', async () => {
+      kit.mocks.orgs.lockForUpdate.mockResolvedValueOnce(
+        makeOrganization({ aiBudgetMicroUsd: 9n }),
+      );
+      await admin().setAiBudget(ORG_ID, 0n, FINANCE);
+      expect(kit.mocks.orgs.save).toHaveBeenCalledTimes(1);
+      expect(raised).not.toHaveBeenCalled();
+      kit.mocks.orgs.lockForUpdate.mockResolvedValueOnce(
+        makeOrganization({ aiBudgetMicroUsd: 9n }),
+      );
+      await admin().setAiBudget(ORG_ID, 9n, FINANCE);
+      expect(kit.mocks.orgs.save).toHaveBeenCalledTimes(1);
+      expect(kit.audited()).toHaveLength(1);
+    });
+
+    it('negative budget: 422 ai-budget-invalid; malformed or unknown organization: 404', async () => {
+      await expect(
+        admin().setAiBudget(ORG_ID, -1n, FINANCE),
+      ).rejects.toMatchObject({ code: 'ai-budget-invalid' });
+      await expect(
+        admin().setAiBudget('nope', 1n, FINANCE),
+      ).rejects.toBeInstanceOf(NotFoundError);
+      kit.mocks.orgs.lockForUpdate.mockResolvedValueOnce(null);
+      await expect(
+        admin().setAiBudget(ORG_ID, 1n, FINANCE),
+      ).rejects.toBeInstanceOf(NotFoundError);
+      expect(kit.mocks.orgs.save).not.toHaveBeenCalled();
     });
   });
 

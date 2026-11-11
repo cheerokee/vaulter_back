@@ -116,6 +116,11 @@ export const RATE_LIMITS = {
    */
   cloudTermsAccept: { limit: 30, ttl: HOUR },
   cloudSpaceChange: { limit: 60, ttl: HOUR },
+  /**
+   * Uso de IA da organização (`GET /organizations/:id/ai-usage`, admins): 600/h por usuário, contador próprio (a tela
+   * do admin; cada leitura soma o livro do mês).
+   */
+  aiUsageRead: { limit: 600, ttl: HOUR },
 } as const;
 
 /** Nome do throttler extra, cobrado só nas rotas marcadas com @ThrottleByEmail(). */

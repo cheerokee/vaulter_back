@@ -4,6 +4,7 @@ import {
   cloudManifestObjectId,
   hubManifestObjectId,
 } from '../../src/shared/domain/space-manifest-ids.js';
+import { adminDataSource } from '../setup/test-app.js';
 import { sealSpaceKey } from './client-crypto.js';
 import { sealBackupObject, sha256Hex } from './hub-crypto.js';
 import {
@@ -211,18 +212,45 @@ export function simulatedHub(getApp: () => INestApplication) {
   return { putObject, deleteObject, forSpace };
 }
 
+/** A generous AI budget for tests that are not about the budget (US$ 100). */
+export const TEST_AI_BUDGET_MICRO_USD = 100_000_000;
+
+/** Sets the organization's monthly AI budget directly (the owner login; the route is the platform's finance one). */
+export async function setAiBudgetInDb(
+  orgId: string,
+  microUsd: number,
+): Promise<void> {
+  await (
+    await adminDataSource()
+  ).query(`UPDATE organizations SET ai_budget_micro_usd = $2 WHERE id = $1`, [
+    orgId,
+    microUsd,
+  ]);
+}
+
 /** Switching the cloud on and off through the real routes (term, authorize, activate with every version, deactivate). */
 export function cloudSwitch(getApp: () => INestApplication) {
   const c = identityClient(getApp);
   const auth = (u: KeyedUser) => c.bearer(u.token);
   return {
-    /** Accepts the current term (if needed), authorizes and activates with `keys[i]` = version i + 1. */
+    /**
+     * Accepts the current term (if needed), authorizes and activates with `keys[i]` = version i + 1. An organization
+     * without AI budget gets `TEST_AI_BUDGET_MICRO_USD` first (authorizing needs one).
+     */
     switchOn: async (
       u: KeyedUser,
       orgId: string,
       spaceId: string,
       keys: Uint8Array[],
     ) => {
+      const [{ budget }] = await (
+        await adminDataSource()
+      ).query(
+        `SELECT ai_budget_micro_usd::text AS budget FROM organizations WHERE id = $1`,
+        [orgId],
+      );
+      if (budget === '0')
+        await setAiBudgetInDb(orgId, TEST_AI_BUDGET_MICRO_USD);
       const terms = await expectStatus(
         c.http().get(`/organizations/${orgId}/cloud/terms`).set(auth(u)),
         200,

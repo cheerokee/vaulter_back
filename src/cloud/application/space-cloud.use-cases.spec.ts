@@ -1,4 +1,5 @@
 import type { AuditLog } from '../../organizations/application/audit-log.js';
+import type { OrganizationDirectory } from '../../organizations/application/organization-directory.js';
 import type { OrganizationAccess } from '../../organizations/application/organization-access.js';
 import type { JobQueue } from '../../shared/application/job-queue.js';
 import type { SpaceKeyRotatedHooks } from '../../shared/application/space-key-rotated-hooks.js';
@@ -144,6 +145,9 @@ function setup() {
   const orgAccess = {
     requirePermission: vi.fn(async () => undefined),
   };
+  const directory = {
+    aiBudget: vi.fn(async (): Promise<bigint | null> => 1_000_000n),
+  };
   /** The live cycle returned by the next `lockLive` (keeps the trace). */
   const liveOnce = (a: SpaceActivation) =>
     activations.lockLive.mockImplementationOnce(async () => {
@@ -169,6 +173,7 @@ function setup() {
     chunks,
     uow,
     orgAccess,
+    directory,
     deps: {
       indexing: indexing as unknown as CloudIndexingQueue,
       files: files as unknown as CloudFileRepository,
@@ -183,6 +188,7 @@ function setup() {
       audit: audit as unknown as AuditLog,
       uow: uow as unknown as UnitOfWork,
       orgAccess: orgAccess as unknown as OrganizationAccess,
+      directory: directory as unknown as OrganizationDirectory,
     },
   };
 }
@@ -264,6 +270,7 @@ describe('AuthorizeSpaceCloudUseCase', () => {
       k.deps.activations,
       k.deps.audit,
       k.deps.uow,
+      k.deps.directory,
     );
 
   it('locks the space as decider, then the cycle; records the authorization with the term version', async () => {
@@ -300,8 +307,10 @@ describe('AuthorizeSpaceCloudUseCase', () => {
     ['term not accepted', 'cloud-terms-not-accepted'],
     ['orphan space', 'space-orphaned'],
     ['online LLM not allowed', 'online-llm-not-allowed'],
+    ['no AI budget', 'ai-budget-required'],
   ])('%s: 422, nothing written', async (what, code) => {
     const k = setup();
+    if (what === 'no AI budget') k.directory.aiBudget.mockResolvedValue(0n);
     if (what === 'term not accepted')
       k.acceptances.latest.mockResolvedValue(null);
     if (what === 'orphan space') k.access.memberCount.mockResolvedValue(0);

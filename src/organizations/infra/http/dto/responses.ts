@@ -31,6 +31,14 @@ export function organizationResponse(v: OrganizationView) {
           },
         }
       : {}),
+    ...(v.ai
+      ? {
+          ai: {
+            budgetConfigured: v.ai.budgetConfigured,
+            warningLevel: v.ai.warningLevel,
+          },
+        }
+      : {}),
     createdAt: v.createdAt.toISOString(),
     updatedAt: v.updatedAt.toISOString(),
   };

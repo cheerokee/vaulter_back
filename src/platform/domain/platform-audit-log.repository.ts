@@ -10,7 +10,8 @@ export type PlatformAuditAction =
   | 'platform.lookup.user'
   | 'platform.lookup.hub'
   | 'platform.lookup.organization'
-  | 'platform.organization.storage_quota_changed';
+  | 'platform.organization.storage_quota_changed'
+  | 'platform.organization.ai_budget_changed';
 
 import type {
   CursorPage,

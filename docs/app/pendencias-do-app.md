@@ -46,6 +46,12 @@ código e no `CLAUDE.md`).
   pela mesma pessoa. Espaço órfão não liga (422 `space-orphaned`).
 - [ ] **Desligar** (`POST /spaces/:spaceId/cloud/deactivate`, quem decide ou o Gestor): explicar antes que apaga do
   servidor a cópia da chave e todo o conteúdo legível (o backup cifrado fica).
+- [ ] **Orçamento de IA** (`GET /organizations/:id` -> `ai: { budgetConfigured, warningLevel }`, para todo membro):
+  `budgetConfigured: false` = a IA na nuvem não foi contratada (autorizar dá 422 `ai-budget-required`); `warningLevel`
+  75 / 90 = avisar que o orçamento do mês está acabando; 100 = a nuvem parou de responder e de indexar até o mês virar
+  (`resetsAt`) ou o financeiro aumentar (o Hub segue normal). Respostas e indexação recusadas trazem 422
+  `ai-budget-exceeded` com `resetsAt`. Admins (`org.billing`) veem os valores e o gasto por espaço e tipo em
+  `GET /organizations/:id/ai-usage` (micro-USD: US$ 1 = 1.000.000). Notificação fica para o módulo de notificações.
 
 ## Backup e espaço ocupado
 - [ ] **Espaço quase cheio:** com `storage.usedBytes` acima de **80%** de `storage.quotaBytes` e a lixeira

@@ -35,6 +35,23 @@ export class CloudIndexingQueue {
     );
   }
 
+  /**
+   * The pass that resumes an indexing paused by the AI budget when the month turns (`startAfterSeconds` from now). Its
+   * own `singletonKey`, so it never postpones the normal pass of the space (deletions must still be applied); sent
+   * again while it waits, it only moves.
+   */
+  async enqueueSpaceResume(
+    organizationId: string,
+    spaceId: string,
+    startAfterSeconds: number,
+  ): Promise<void> {
+    await this.jobs.send<IndexSpacePayload>(
+      INDEX_SPACE_QUEUE,
+      { organizationId, spaceId },
+      { singletonKey: `space-resume:${spaceId}`, startAfterSeconds },
+    );
+  }
+
   /** One job per file row, all in ONE statement (a file that already has a waiting job is skipped). */
   async enqueueFiles(
     organizationId: string,

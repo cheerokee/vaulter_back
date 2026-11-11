@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import type { Actor } from '../../identity/application/dto/actor.js';
 import { AuditLog } from '../../organizations/application/audit-log.js';
+import { OrganizationDirectory } from '../../organizations/application/organization-directory.js';
 import { UnitOfWork } from '../../shared/infra/db/unit-of-work.js';
 import { SpaceCloud } from '../../spaces/application/space-cloud.js';
 import type { Space } from '../../spaces/domain/space.js';
@@ -61,7 +62,8 @@ export class GetSpaceCloudUseCase {
 }
 
 // Passo 1 (spec active-cloud §4.1): quem decide autoriza o espaço. Exige o termo ATUAL aceito pela organização,
-// `allow_online_llm` ligado e alguém no espaço para mandar a chave (órfão nunca liga). Espaço já autorizado ou ativo:
+// `allow_online_llm` ligado, alguém no espaço para mandar a chave (órfão nunca liga) e orçamento mensal de IA > 0
+// (422 `ai-budget-required`; leitura sem trava: o orçamento mudar logo depois só faz a nuvem esperar). Espaço já autorizado ou ativo:
 // devolve o estado, sem gravar (idempotente). Travas: espaço FOR UPDATE (lockWithOrgPermission) -> ciclo vivo FOR
 // UPDATE. Auditado `space.cloud.authorized`.
 @Injectable()
@@ -73,6 +75,7 @@ export class AuthorizeSpaceCloudUseCase {
     private readonly activations: SpaceActivationRepository,
     private readonly audit: AuditLog,
     private readonly uow: UnitOfWork,
+    private readonly directory: OrganizationDirectory,
   ) {}
 
   async execute(actor: Actor, spaceId: string): Promise<SpaceCloudStateView> {
@@ -90,7 +93,9 @@ export class AuthorizeSpaceCloudUseCase {
         allowOnlineLlm: space.allowOnlineLlm,
         memberCount: await this.access.memberCount(orgId, space.id),
       });
-      // Task 5 (orçamento de IA): a checagem "orçamento > 0" entra AQUI, depois das regras do espaço e antes de gravar.
+      SpaceActivationRules.assertAiBudgetSet(
+        await this.directory.aiBudget(orgId),
+      );
       const activation = SpaceActivation.authorize({
         organizationId: orgId,
         spaceId: space.id,

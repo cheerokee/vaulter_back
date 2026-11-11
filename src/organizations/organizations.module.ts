@@ -12,6 +12,7 @@ import { ListInvitationsUseCase } from './application/list-invitations.use-case.
 import { ListMembersUseCase } from './application/list-members.use-case.js';
 import { ListMyOrganizationsUseCase } from './application/list-my-organizations.use-case.js';
 import { OrganizationAdministration } from './application/organization-administration.js';
+import { OrganizationAiSpend } from './application/organization-ai-spend.js';
 import { OrganizationDirectory } from './application/organization-directory.js';
 import { OrganizationAccess } from './application/organization-access.js';
 import { PersonalOrganizationRegistrationHook } from './application/personal-organization.registration-hook.js';
@@ -82,6 +83,7 @@ import { UserOrganizationTypeormEntity } from './infra/db/user-organization.enti
     OrganizationAccess,
     OrganizationDirectory,
     OrganizationAdministration,
+    OrganizationAiSpend,
     AuditLog,
     CreateOrganizationUseCase,
     ListMyOrganizationsUseCase,
@@ -104,6 +106,7 @@ import { UserOrganizationTypeormEntity } from './infra/db/user-organization.enti
     OrganizationDirectory,
     // Operações administrativas para o `platform` (o `organizations` não o importa).
     OrganizationAdministration,
+    OrganizationAiSpend,
     AuditLog,
     AcceptInvitationUseCase,
   ],

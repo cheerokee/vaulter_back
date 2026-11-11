@@ -324,6 +324,9 @@ src/organizations/
   422 `organization-storage-quota-exceeded` com `availableBytes`). O reservado (`OrganizationRepository.reservedStorageBytes`)
   é soma de `spaces.storage_quota_bytes` em SQL: **exceção documentada** à fronteira (como a sincronização do Hub).
   `organizations.storage_quota_bytes` padrão 50 GiB; `GET /organizations/:id` traz `storage: { quotaBytes, reservedBytes }`.
+  **Orçamento de IA:** `aiBudget(orgId)` (leitura) e `lockAiBudget(orgId)` (mesma trava folha, para as reservas do `cloud`);
+  `organizations.ai_budget_micro_usd` padrão 0; `GET /organizations/:id` traz `ai: { budgetConfigured, warningLevel }` pela
+  porta `OrganizationAiSpend` (veja "Orçamento de IA" em `cloud`).
 - **`OrganizationAccess` é o padrão para os próximos módulos (spaces, hubs):** `requireMember(orgId, userId)` ->
   **404** para não membro (não revela que a organização existe); `requirePermission(orgId, userId, permissao)` ->
   **403** para membro sem a permissão. Todo caso de uso que toca dado de organização chama um dos dois primeiro;
@@ -670,8 +673,12 @@ ganha acesso a conteúdo (as chaves ficam com os clientes).
   `CreatePlatformRoles`, imutável: mudar o catálogo = nova migration; o e2e confere banco == catálogo; `resetDatabase`
   dos testes restaura o catálogo como faz com o RBAC). Permissões: `platform.roles.manage`, `platform.support.request`,
   `platform.support.approve`, `platform.support.execute_alone`, `platform.audit.read`, `platform.billing.storage_quota`
-  (migration `PlatformStorageQuotaPermission`). Papéis: `platform_admin` (todas), `platform_support` (`support.request`
-  + `audit.read`), `platform_finance` (só `billing.storage_quota`). **Franquia de nuvem:** `PUT /platform/organizations/:orgId/storage-quota`
+  (migration `PlatformStorageQuotaPermission`), `platform.billing.ai_budget` (migration `PlatformAiBudgetPermission`).
+  Papéis: `platform_admin` (todas), `platform_support` (`support.request` + `audit.read`), `platform_finance`
+  (`billing.storage_quota` e `billing.ai_budget`). **Orçamento de IA:** `PUT /platform/organizations/:orgId/ai-budget`
+  `{ budgetMicroUsd (0..2^53-1), reason, currentAuthProof }` (financeiro ou admin; `@ThrottleReauth`):
+  `OrganizationAdministration.setAiBudget` trava a organização, grava, audita `organization.ai_budget_changed` e, num
+  aumento, roda `AiBudgetRaisedHooks`; trilha `platform.organization.ai_budget_changed`. **Franquia de nuvem:** `PUT /platform/organizations/:orgId/storage-quota`
   `{ quotaBytes, reason, currentAuthProof }` (financeiro ou admin; `@ThrottleReauth`): `OrganizationAdministration.setStorageQuota`
   trava a organização, 422 `storage-quota-below-reserved` abaixo do reservado, audita `organization.storage_quota_changed`
   (ator `AuditActor` `platform_staff`, sem pedido de suporte, `user_id` nulo) e `platform.organization.storage_quota_changed`. Conta normal do `identity`
@@ -1162,7 +1169,7 @@ registra a fonte `conversations`), `hubs` (`HubDirectory`: `ownerOf`,
   o mesmo aceite) grava `cloud_term_acceptances` (org, versão, hash, quem, quando, IP; append-only). **Dois passos:**
   `POST /spaces/:spaceId/cloud/authorize` (quem decide, mesmo fora do espaço; termo ATUAL aceito, senão 422
   `cloud-terms-not-accepted`; `allow_online_llm` (422 `online-llm-not-allowed`); órfão 422 `space-orphaned`; o
-  "orçamento > 0" entra na Task 5; já autorizado/ativo devolve o estado) e `POST /spaces/:spaceId/cloud/activate`
+  orçamento de IA da organização > 0, senão 422 `ai-budget-required`; já autorizado/ativo devolve o estado) e `POST /spaces/:spaceId/cloud/activate`
   `{ serverGrants: [{ version, wrappedKey }] }` (o **Gestor**; admin fora do espaço 404; sem autorização 422
   `cloud-not-authorized`; já ativo 409 `cloud-already-active`; todas as versões, 409 `key-versions-mismatch`; cada cópia
   é aberta com a chave do servidor e apagada da memória, 422 `server-copy-invalid`). `POST .../cloud/deactivate` (quem
@@ -1186,8 +1193,8 @@ registra a fonte `conversations`), `hubs` (`HubDirectory`: `ownerOf`,
   unpdf, fflate + htmlparser2 para docx/xlsx com limites contra zip bomb, htmlparser2, UTF-8; tempo/memória/falha =
   `skipped` `unreadable`, terminal até versão nova; formato desconhecido = `skipped` `unsupported-format`; registro só
   de ids, tipo conhecido e motivo, nunca o nome), divide como o Hub (`chunkText`: 800/80, sem sobreposição) e calcula embeddings em lotes de
-  32 pelo `IndexingCostMeter` (porta; hoje `NoopIndexingCostMeter`; a Task 5 liga o orçamento: `beforeBatch` pode parar,
-  `record` recebe tokens e custo `AiPricing`). Tabelas `cloud_files` (nome/tipo/caminho: LEGÍVEIS) e `cloud_chunks`
+  32 pelo `IndexingCostMeter` (porta; `BudgetIndexingCostMeter`: cada lote reserva no orçamento de IA, acerta o custo
+  real ou devolve; recusado = para no lote, arquivo fica `pending`, veja "Orçamento de IA"). Tabelas `cloud_files` (nome/tipo/caminho: LEGÍVEIS) e `cloud_chunks`
   (texto, `embedding vector(768)` com índice HNSW de cosseno criado na migration, `synchronize: false` na entidade, e o
   modelo em cada linha), RLS por organização, DELETE físico. **Review Focus 1:** nenhum trabalho longo segura transação;
   toda gravação legível roda numa transação curta que antes trava o espaço FOR SHARE (`SpaceCloud.lockActiveForWrite`):
@@ -1198,6 +1205,29 @@ registra a fonte `conversations`), `hubs` (`HubDirectory`: `ownerOf`,
 - **Preço** (`AiPricing`, `domain/ai-pricing.ts`): tabela em código, micro-USD por milhão de tokens (`bigint`), conta com
   arredondamento **para cima** por chamada; modelo sem preço = `UnpricedModelError` (falha fechada; o `CloudModule` confere `CLOUD_LLM_MODEL_ID` e `EMBEDDING_MODEL` **na subida**). Valores atuais são
   **provisórios** (Jonas decide); embedding próprio tem custo nominal de US$ 0,02/MTok para a indexação consumir o orçamento.
+- **Orçamento de IA** (spec §4.4; `application/ai-budget.ts`, `domain/ai-usage.ts`): `organizations.ai_budget_micro_usd`
+  (micro-USD, `bigint`, padrão **0**), ajustado só pelo financeiro (`PUT /platform/organizations/:orgId/ai-budget`, veja
+  `platform`). Mês = **mês civil UTC pelo relógio do banco**. Toda chamada que custa passa por `AiBudget`:
+  `reserve({ organizationId, spaceId, kind: 'answer'|'indexing', estimatedMicroUsd })` (transação curta própria:
+  `OrganizationDirectory.lockAiBudget` = linha da organização FOR NO KEY UPDATE, **folha**; reservas vencidas viram
+  `expired`; gasto + reservas vivas do mês lidos em **um comando**; não cabe = 422 `ai-budget-exceeded` com `resetsAt`)
+  -> chamada de rede **fora** de transação -> `settle(reserva, { model, inputTokens, outputTokens, costMicroUsd })` (gasto
+  real, no mês da reserva) ou `release(reserva)` (falhou). **Nunca** chamar `reserve` dentro de um unit of work (lança).
+  Reserva esquecida conta por 15 min (`AI_RESERVATION_TTL_SECONDS`) e depois para; acerto tardio ainda grava. `tryReserve`
+  devolve a recusa e roda um callback **na transação que recusou**, ainda sob a trava. Livro: `cloud_ai_reservations`
+  (uma linha por chamada) e `cloud_ai_usage` (soma do mês por espaço e tipo), RLS por organização, **só ids, tipo,
+  modelo, tokens e custos**; ficam depois de desligar a nuvem. **Indexação (Review Focus 3):** cada lote reserva por cima
+  (`estimateEmbeddingTokens`: 1 token / 2 caracteres); recusado, o job para sem gravar (o arquivo fica `pending`, os lotes
+  já feitos ficam registrados; o arquivo recomeça do zero ao retomar) e a transação que recusou agenda uma passada do
+  espaço para o começo do mês seguinte (`singletonKey` `space-resume:<id>`, separada da passada normal). O **aumento** do
+  orçamento roda `AiBudgetRaisedHooks` (`src/shared/application/`) dentro do unit of work do ajuste, com a organização
+  travada: o `cloud` enfileira na hora a passada de todo espaço com arquivo `pending` (`ix_cloud_files_pending`). Uso:
+  `GET /organizations/:orgId/ai-usage` (`org.billing`: 404 não membro, 403 sem a permissão) -> `{ month, resetsAt,
+  budgetMicroUsd, spentMicroUsd, reservedMicroUsd, remainingMicroUsd, warningLevel, items: [{ spaceId, kind,
+  costMicroUsd, inputTokens, outputTokens, calls }] }`; `GET /organizations/:id` traz `ai: { budgetConfigured,
+  warningLevel }` (0/75/90/100; orçamento 0 = `budgetConfigured: false` e 100) para **todo membro**, sem valores (porta
+  `OrganizationAiSpend` do `organizations`, fonte registrada pelo `cloud`). e2e em `test/cloud/ai-budget.e2e-spec.ts`;
+  nos outros e2e, `cloudSwitch.switchOn` põe US$ 100 numa organização sem orçamento (`setAiBudgetInDb`).
 
 ## Banco de dados (TypeORM + migrations)
 - **Pool:** o do driver `pg`, com tamanho explícito `DB_POOL_MAX_CONNECTIONS` (10 por instância; instâncias × (10 + 1 da conexão LISTEN dos assuntos + 4 do pool do pg-boss, `JOB_QUEUE_POOL_MAX`) abaixo
@@ -1377,7 +1407,7 @@ Os valores do `.env.example` para os segredos são **só de desenvolvimento**; p
   do índice expirada pelo ciclo de vida em 30 dias.
 - Plataforma: quarentena/aviso por e-mail ao dono e aos admins quando a equipe age numa organização ou Hub; leitura da
   auditoria da organização pelo cliente (hoje só se grava); endurecer a aprovação dupla (hoje basta outra pessoa com
-  `platform.support.approve`); demais permissões de financeiro, tickets e chat (o `platform_finance` só tem `platform.billing.storage_quota`).
+  `platform.support.approve`); demais permissões de financeiro, tickets e chat (o `platform_finance` só tem `platform.billing.storage_quota` e `platform.billing.ai_budget`).
 - Recuperação de conta, limites conhecidos: (a) as escritas em `users` são por campo (`updatePasswordMaterial`,
   `updateRecoveryCode`) e a recuperação reconfere a prova sob `FOR UPDATE` (`findByIdForUpdate`), então trocar o código
   durante uma recuperação nunca é desfeito; mas `PUT /me/password` não trava a linha, e um que passou na reautenticação
@@ -1411,7 +1441,7 @@ Os valores do `.env.example` para os segredos são **só de desenvolvimento**; p
   | `POST /auth/login` | 10/min por IP **e** 5/min por e-mail normalizado |
   | `POST /auth/refresh` | 60/min por IP |
   | `POST /auth/recovery/lookup` e `POST /auth/recovery/complete` (públicas) | 10/min por IP, **um orçamento só para as duas** (`THROTTLE_GROUPS.accountRecovery`) **e** 5/min por e-mail normalizado, por rota |
-  | `PUT /me/password`, `PUT /me/recovery-code`, `PUT /organizations/:id/recovery-key`, `POST /spaces/:id/recover`, `POST /spaces/:id/recover/copies`, `POST /spaces/:spaceId/backup/trash/empty`, `POST /spaces/:spaceId/conversations/:id/trash/empty`, `PUT|DELETE /platform/staff/:userId/roles/:roleKey`, `POST /platform/support-requests` e `.../:id/approve|reject` (reautenticação) | 5 por 15 min por usuário, **um orçamento só para todas** |
+  | `PUT /me/password`, `PUT /me/recovery-code`, `PUT /organizations/:id/recovery-key`, `POST /spaces/:id/recover`, `POST /spaces/:id/recover/copies`, `POST /spaces/:spaceId/backup/trash/empty`, `POST /spaces/:spaceId/conversations/:id/trash/empty`, `PUT|DELETE /platform/staff/:userId/roles/:roleKey`, `PUT /platform/organizations/:orgId/storage-quota|ai-budget`, `POST /platform/support-requests` e `.../:id/approve|reject` (reautenticação) | 5 por 15 min por usuário, **um orçamento só para todas** |
   | `POST /invitations/preview` (pública) | 30/min por IP |
   | `POST /invitations/accept` | 10/min por IP |
   | `POST /spaces/:id/keys` (troca da chave do espaço) | 10/h por usuário (`userIdTracker`, contador próprio) |
@@ -1435,6 +1465,7 @@ Os valores do `.env.example` para os segredos são **só de desenvolvimento**; p
   | `POST /hub/conversations/:id/messages/:messageId/ack` | 600/min por Hub |
   | anexo do assunto: intenção, confirmação e apagar (`POST .../:id/attachments`, `POST .../:id/attachments/:attachmentId/confirm`, `DELETE .../:id/attachments/:attachmentId`; a URL de download fica no limite geral) | 120/h por usuário / 600/h por Hub, contador próprio por rota |
   | `POST /organizations/:orgId/cloud/terms/accept` (aceite do termo da nuvem ativa) | 30/h por usuário (`userIdTracker`) |
+  | `GET /organizations/:orgId/ai-usage` (uso de IA do mês, admins) | 600/h por usuário (`userIdTracker`), contador próprio |
   | `POST /spaces/:spaceId/cloud/authorize`, `.../activate`, `.../deactivate` (nuvem ativa) | 60/h por usuário, contador próprio por rota |
   | `GET /conversations/changes` (feed da pessoa) / `GET /hub/conversations/changes` (feed do executor, sondagem longa) | 1200/h por usuário / 1800/h por Hub (ociosa: ~144/h, um pedido a cada 25 s; cada mudança acorda e devolve) |
   Rota com `@Throttle` próprio tem contador próprio (por rota); `@ThrottleGroup(THROTTLE_GROUPS.x, tracker?)`

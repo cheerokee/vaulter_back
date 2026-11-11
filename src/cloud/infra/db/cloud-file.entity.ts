@@ -24,6 +24,10 @@ import type {
 @Index('uq_cloud_files_space_file', ['spaceId', 'fileId'], { unique: true })
 @Index('fk_cloud_files_spaces_idx', ['spaceId', 'organizationId'])
 @Index('fk_cloud_files_organizations_idx', ['organizationId'])
+// Os espaços com indexação por terminar ou parada pelo orçamento de IA (retomada quando o orçamento sobe).
+@Index('ix_cloud_files_pending', ['organizationId', 'spaceId'], {
+  where: `"status" = 'pending'`,
+})
 @Check('ck_cloud_files_status', `"status" IN ('pending', 'indexed', 'skipped')`)
 @Check('ck_cloud_files_manifest', `"manifest" IN ('hub', 'cloud')`)
 @Check(

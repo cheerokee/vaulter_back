@@ -8,6 +8,7 @@ export type AuditAction =
   | 'organization.recovery_key.registered'
   | 'organization.recovery_key.replaced'
   | 'organization.storage_quota_changed'
+  | 'organization.ai_budget_changed'
   | 'organization.cloud_terms.accepted'
   | 'member.joined'
   | 'member.left'

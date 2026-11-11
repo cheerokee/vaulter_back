@@ -20,7 +20,11 @@ import {
 } from '../../domain/indexing-limits.js';
 import { chunkText } from '../../domain/text-chunker.js';
 import { BackupObjectOpenError } from '../ports/backup-object-opener.js';
-import { Embedder, EmbeddingServiceError } from '../ports/embedder.js';
+import {
+  Embedder,
+  EmbeddingServiceError,
+  type EmbeddingResult,
+} from '../ports/embedder.js';
 import { IndexingCostMeter } from '../ports/indexing-cost-meter.js';
 import { TextExtractor } from '../ports/text-extractor.js';
 import { BackupPlaintextReader } from './backup-plaintext-reader.js';
@@ -33,6 +37,17 @@ const EMBEDDING_DIMENSIONS = 768;
 type Outcome =
   | { kind: 'indexed'; model: string; chunks: NewChunk[] }
   | { kind: 'skipped'; reason: CloudFileSkipReason; detail?: string };
+
+/**
+ * The AI budget refused a batch: the job stops without writing (the file stays `pending`); the budget meter already
+ * scheduled the resume. Not an error for pg-boss (caught in `run`).
+ */
+class IndexingPausedError extends Error {
+  constructor() {
+    super('indexing paused: AI budget exhausted');
+    this.name = 'IndexingPausedError';
+  }
+}
 
 /** The job stopped before writing (the worker is shutting down / the job expired): pg-boss retries it later. */
 export class IndexingAbortedError extends Error {
@@ -48,8 +63,10 @@ export class IndexingAbortedError extends Error {
 //    gravou (senão para: outra passada cuida). Tamanho (soma das partes decifradas) até 100 MiB, formato suportado (senão
 //    `skipped` com o motivo e um registro só com ids e o tipo, nunca o nome). Lê cada parte pela versão do índice, abre
 //    com a chave do espaço, junta na ordem; extrai o texto; divide em trechos (`chunkText`); embeddings em lotes de 32,
-//    cada lote passando pelo `IndexingCostMeter` (antes: o orçamento pode parar aqui; depois: o uso e o custo
-//    `AiPricing`). Nenhuma transação nem conexão do pool segurada enquanto isso.
+//    cada lote passando pelo `IndexingCostMeter` (antes: reserva o custo estimado no orçamento de IA, que pode parar
+//    aqui: o arquivo fica `pending`, nada é gravado e a retomada já está agendada (Review Focus 3); depois: acerta o
+//    custo real `AiPricing`, ou devolve a reserva se a chamada falhou). Nenhuma transação nem conexão do pool segurada
+//    enquanto isso (cada reserva/acerto é uma transação curta própria).
 // 2. Uma transação curta (Review Focus 1): espaço FOR SHARE (`lockActiveForWrite`) -> se desligou, NADA é gravado
 //    (desligar trava o espaço FOR UPDATE e apaga arquivos e trechos: ou ele esperou este COMMIT e apaga o que entrou,
 //    ou este job o esperou e vê o espaço desligado) -> o arquivo FOR UPDATE (sumiu, deixou de estar `pending` ou mudou
@@ -94,7 +111,13 @@ export class IndexFileJob {
       if (!v || v.versionId !== p.versionId) return;
       versions.push(v);
     }
-    const outcome = await this.indexOutcome(file, versions, signal);
+    let outcome: Outcome;
+    try {
+      outcome = await this.indexOutcome(file, versions, signal);
+    } catch (error) {
+      if (error instanceof IndexingPausedError) return;
+      throw error;
+    }
     if (signal?.aborted) throw new IndexingAbortedError();
     await this.write(file, outcome);
   }
@@ -194,8 +217,25 @@ export class IndexFileJob {
     for (let i = 0; i < pieces.length; i += EMBEDDING_BATCH) {
       if (signal?.aborted) throw new IndexingAbortedError();
       const batch = pieces.slice(i, i + EMBEDDING_BATCH);
-      await this.costMeter.beforeBatch(scope, batch.length);
-      const result = await this.embedder.embed(batch, 'document');
+      const charge = await this.costMeter.reserve(scope, batch);
+      if (!charge) throw new IndexingPausedError();
+      let result: EmbeddingResult;
+      try {
+        result = await this.embedder.embed(batch, 'document');
+      } catch (error) {
+        await this.costMeter.release(charge);
+        throw error;
+      }
+      // The call was made: its real cost is recorded even if the answer is unusable.
+      const cost = this.pricing.costMicroUsd(
+        { inputTokens: result.inputTokens, outputTokens: 0 },
+        result.model,
+      );
+      await this.costMeter.settle(charge, {
+        model: result.model,
+        inputTokens: result.inputTokens,
+        costMicroUsd: cost,
+      });
       if (
         result.dimensions !== EMBEDDING_DIMENSIONS ||
         result.vectors.length !== batch.length ||
@@ -205,15 +245,6 @@ export class IndexFileJob {
         throw new EmbeddingServiceError(false, 'unexpected-shape');
       }
       model = result.model;
-      const cost = this.pricing.costMicroUsd(
-        { inputTokens: result.inputTokens, outputTokens: 0 },
-        result.model,
-      );
-      await this.costMeter.record(scope, {
-        model: result.model,
-        inputTokens: result.inputTokens,
-        costMicroUsd: cost,
-      });
       inputTokens += result.inputTokens;
       costMicroUsd += cost;
       batch.forEach((text, j) =>
