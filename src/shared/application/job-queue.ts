@@ -48,6 +48,15 @@ export abstract class JobQueue {
   ): Promise<string | null>;
 
   /**
+   * Enqueues many jobs of one queue in ONE statement (in the unit of work, like `send`). A job whose `singletonKey`
+   * already has a waiting job is skipped (not replaced). Returns how many were added.
+   */
+  abstract sendMany<P extends JobPayload>(
+    name: string,
+    jobs: readonly { payload: P; singletonKey?: string }[],
+  ): Promise<number>;
+
+  /**
    * Registers the handler of a queue. Without workers in this process (`JOB_WORKERS_ENABLED=false`, the e2e
    * default) the registration is kept but nothing is fetched. One handler per queue per process.
    */

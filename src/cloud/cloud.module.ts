@@ -27,7 +27,7 @@ import {
   CloudFileTypeormRepository,
 } from './infra/db/cloud-index.typeorm-repositories.js';
 import { SodiumBackupObjectOpener } from './infra/crypto/sodium-backup-object-opener.js';
-import { LibraryTextExtractor } from './infra/extraction/library-text-extractor.js';
+import { WorkerTextExtractor } from './infra/extraction/worker-text-extractor.js';
 import { CloudKeyRotatedHook } from './application/cloud-key-rotated.hook.js';
 import { CloudSpaceAccess } from './application/cloud-space-access.js';
 import { CloudSpaceJobs } from './application/cloud-space-jobs.js';
@@ -138,7 +138,7 @@ export function createLanguageModel(config: ConfigService): LanguageModel {
     { provide: CloudFileRepository, useClass: CloudFileTypeormRepository },
     { provide: CloudChunkRepository, useClass: CloudChunkSqlRepository },
     { provide: BackupObjectOpener, useClass: SodiumBackupObjectOpener },
-    { provide: TextExtractor, useClass: LibraryTextExtractor },
+    { provide: TextExtractor, useClass: WorkerTextExtractor },
     // Task 5 (orçamento de IA) troca pela implementação que confere e registra o gasto.
     { provide: IndexingCostMeter, useClass: NoopIndexingCostMeter },
     CloudIndexingQueue,

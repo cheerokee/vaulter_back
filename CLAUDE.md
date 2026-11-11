@@ -169,7 +169,8 @@ couber (spec de contas, §12).
   `cancelQueued` entram na transação (a tarefa só existe se ela confirmar). Pelo menos uma vez: handler idempotente, que
   reconfere sob trava. `send` com `startAfterSeconds` (atraso) e `singletonKey` (uma tarefa à espera por chave; enviar
   de novo substitui a que espera); `cancelQueued(nome, { spaceId })` apaga as que ainda esperam, num DELETE só guardado
-  pelo estado (nunca uma em execução). Workers (busca,
+  pelo estado (nunca uma em execução); `sendMany(nome, [{ payload, singletonKey }])` enfileira muitas num INSERT só (uma
+  que já espera com a mesma chave é mantida). As filas com handler são criadas na subida (mesmo sem workers). Workers (busca,
   manutenção, cron) só com `JOB_WORKERS_ENABLED` (padrão `true`); **os e2e rodam com `false`** (enfileirar funciona,
   nada roda sozinho) e o teste que precisa liga com `createTestApp({ env: { JOB_WORKERS_ENABLED: 'true' } })`;
   `resetDatabase` apaga `pgboss.job`. **Desligamento:** os workers param (e as tarefas em execução terminam, gracioso,
@@ -1175,11 +1176,16 @@ registra a fonte `conversations`), `hubs` (`HubDirectory`: `ownerOf`,
   `application/indexing/`): duas filas do pg-boss registradas em `CloudSpaceJobs` (`cloud.index-space`, uma por espaço
   com `singletonKey` e 2 s de debounce, enfileirada ao ligar e pelo gancho `BackupObjectsChangedHooks` num espaço
   `active_cloud`; `cloud.index-file`, uma por arquivo). A passada do espaço lê os dois manifestos (do Hub e da nuvem, o
-  do Hub vence por `fileId`), compara as versões das partes com `cloud_files` e marca `pending` só o que mudou
-  (`planIndexSync`); o job do arquivo lê as partes pela versão do índice, decifra (`SpaceKeys`: cópias do servidor
-  abertas sob demanda e apagadas no fim), extrai (`TextExtractor`: unpdf, fflate + htmlparser2 para docx/xlsx com
-  limites contra zip bomb, htmlparser2, UTF-8; formato desconhecido = `skipped` `unsupported-format` com registro só de
-  ids e tipo, nunca o nome), divide como o Hub (`chunkText`: 800/80, sem sobreposição) e calcula embeddings em lotes de
+  do Hub vence por `fileId`; guarda: entradas que compartilham partes são descartadas), compara as versões das partes
+  com `cloud_files` e marca `pending` só o que mudou (`planIndexSync`), **em lotes** de até 500 arquivos / 2000 partes,
+  cada um numa transação curta de comandos em lote (`upsertMany`, `deleteForFiles`, `JobQueue.sendMany`), com
+  `lock_timeout` 10 s e `transaction_timeout` 30 s, travando o espaço FOR SHARE e só as linhas do lote (a trava do
+  espaço nunca fica presa por O(arquivos)); o job do arquivo lê as partes pela versão do índice, decifra (`SpaceKeys`:
+  cópias do servidor abertas sob demanda e apagadas no fim), extrai **numa thread** (`WorkerTextExtractor`, piscina, uma
+  thread, worker `text-extraction.worker.ts` só com TypeScript apagável e sem imports relativos; 60 s e 1 GiB de heap;
+  unpdf, fflate + htmlparser2 para docx/xlsx com limites contra zip bomb, htmlparser2, UTF-8; tempo/memória/falha =
+  `skipped` `unreadable`, terminal até versão nova; formato desconhecido = `skipped` `unsupported-format`; registro só
+  de ids, tipo conhecido e motivo, nunca o nome), divide como o Hub (`chunkText`: 800/80, sem sobreposição) e calcula embeddings em lotes de
   32 pelo `IndexingCostMeter` (porta; hoje `NoopIndexingCostMeter`; a Task 5 liga o orçamento: `beforeBatch` pode parar,
   `record` recebe tokens e custo `AiPricing`). Tabelas `cloud_files` (nome/tipo/caminho: LEGÍVEIS) e `cloud_chunks`
   (texto, `embedding vector(768)` com índice HNSW de cosseno criado na migration, `synchronize: false` na entidade, e o
@@ -1356,6 +1362,9 @@ Os valores do `.env.example` para os segredos são **só de desenvolvimento**; p
   reconectar acorda todos de uma vez (sem jitter); **não funciona atrás de pgbouncer em modo transação** (LISTEN exige
   conexão de sessão). **Pool:** a conexão do LISTEN fica fora do pool, então conte `instâncias × (DB_POOL_MAX_CONNECTIONS
   + 1)` (hoje 10 + 1) ao dimensionar `max_connections` do Postgres.
+- **Nuvem ativa, indexação:** troca do modelo de embedding sem reindexação automática (o modelo fica gravado em cada
+  arquivo e trecho; falta uma passada que marque tudo `pending`); arquivo com falha permanente não terminal (sha256 do
+  bucket diferente do índice, embedding fora do ar) fica `pending` e é tentado de novo a cada passada.
 - **Agendar `npm run conversations:retention`** (1x por dia, fora da aplicação, ANTES do `storage:reconcile`, que
   apaga do bucket o que o `DeleteObjects` dela deixou) até o pg-boss entrar. Sem ela, o conteúdo apagado dos assuntos
   fica para sempre (conta no uso do espaço). **Login:** roda com o dono (`DB_USERNAME`), que só ignora o RLS sendo

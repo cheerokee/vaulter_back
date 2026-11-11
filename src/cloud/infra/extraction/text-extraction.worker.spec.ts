@@ -4,8 +4,25 @@ import {
   pdfBytes,
   xlsxBytes,
 } from '../../testing/document-fixtures.js';
-import { EXTRACTORS, LibraryTextExtractor } from './library-text-extractor.js';
-import { readZipEntries } from './office-text.js';
+import {
+  ZIP_ENTRY_MAX_BYTES,
+  ZIP_MAX_ENTRIES,
+  ZIP_MAX_RATIO,
+  ZIP_TOTAL_MAX_BYTES,
+} from '../../domain/indexing-limits.js';
+import {
+  readZipEntries,
+  SUPPORTED_MEDIA_TYPES,
+} from './text-extraction.worker.js';
+import { WorkerTextExtractor } from './worker-text-extractor.js';
+
+const ZIP_LIMITS = {
+  maxChars: 1000,
+  zipMaxEntries: ZIP_MAX_ENTRIES,
+  zipEntryMaxBytes: ZIP_ENTRY_MAX_BYTES,
+  zipTotalMaxBytes: ZIP_TOTAL_MAX_BYTES,
+  zipMaxRatio: ZIP_MAX_RATIO,
+};
 
 const DOCX =
   'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
@@ -13,11 +30,13 @@ const XLSX =
   'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
 const enc = (s: string) => new TextEncoder().encode(s);
 
-describe('LibraryTextExtractor', () => {
-  const x = new LibraryTextExtractor();
+// Through the real worker thread (piscina loads the .ts worker under Vitest, the .js one in production).
+describe('WorkerTextExtractor', () => {
+  const x = new WorkerTextExtractor();
+  afterAll(() => x.onApplicationShutdown());
 
   it('supports exactly the v1 formats', () => {
-    expect(Object.keys(EXTRACTORS).sort()).toEqual(
+    expect([...SUPPORTED_MEDIA_TYPES].sort()).toEqual(
       [
         'application/pdf',
         DOCX,
@@ -103,6 +122,28 @@ describe('LibraryTextExtractor', () => {
     });
   });
 
+  it('the caller keeps its buffer (a copy goes to the thread)', async () => {
+    const bytes = enc('texto que fica');
+    await x.extract('text/plain', bytes);
+    expect(new TextDecoder().decode(bytes)).toBe('texto que fica');
+  });
+
+  it('past the time limit: unreadable extract-timeout (terminal), and the next file still works', async () => {
+    const slow = new WorkerTextExtractor();
+    slow.timeoutMs = 1;
+    try {
+      expect(
+        await slow.extract('application/pdf', pdfBytes(['uma linha'])),
+      ).toEqual({ kind: 'unreadable', reason: 'extract-timeout' });
+      slow.timeoutMs = 30_000;
+      expect(await slow.extract('text/plain', enc('ok'))).toMatchObject({
+        text: 'ok',
+      });
+    } finally {
+      await slow.onApplicationShutdown();
+    }
+  });
+
   it('bad input never throws: unreadable with a code; unknown type: unsupported', async () => {
     expect(await x.extract('application/pdf', enc('not a pdf'))).toEqual({
       kind: 'unreadable',
@@ -146,7 +187,7 @@ describe('LibraryTextExtractor', () => {
     view.setUint32(cd + 24, 10, true);
     let out: Map<string, Uint8Array> | undefined;
     try {
-      out = readZipEntries(zip, () => true);
+      out = readZipEntries(zip, () => true, ZIP_LIMITS);
     } catch {
       out = undefined; // refused as corrupt: fine too
     }

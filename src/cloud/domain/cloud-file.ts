@@ -74,22 +74,40 @@ const sameMetadata = (row: CloudFile, d: DesiredFile): boolean =>
   (row.modifiedAt?.getTime() ?? null) ===
     (d.entry.modifiedAt?.getTime() ?? null);
 
+export type MergedManifests = {
+  files: { entry: ManifestFile; manifest: ManifestWriter }[];
+  /** Entries dropped because one of their parts is also a part of another file (counted, never logged). */
+  droppedSharedParts: number;
+};
+
 /**
  * Both manifests merged by `fileId`: the Hub's entry wins over the cloud's (a cloud document the Hub already
- * incorporated, before the server removes it from the cloud manifest).
+ * incorporated, before the server removes it from the cloud manifest). Server-side guard of the contract
+ * (docs/hubs/space-manifest.md, "O que nunca entra no manifesto"): a backup object belongs to ONE document, so every
+ * entry whose parts overlap another entry's is dropped (a manifest pointing many entries at shared objects is not
+ * describing documents).
  */
 export function mergeManifests(
   hub: readonly ManifestFile[],
   cloud: readonly ManifestFile[],
-): { entry: ManifestFile; manifest: ManifestWriter }[] {
-  const out = new Map<
+): MergedManifests {
+  const byFileId = new Map<
     string,
     { entry: ManifestFile; manifest: ManifestWriter }
   >();
-  for (const entry of cloud)
-    out.set(entry.fileId, { entry, manifest: 'cloud' });
-  for (const entry of hub) out.set(entry.fileId, { entry, manifest: 'hub' });
-  return [...out.values()];
+  for (const entry of cloud) {
+    byFileId.set(entry.fileId, { entry, manifest: 'cloud' });
+  }
+  for (const entry of hub)
+    byFileId.set(entry.fileId, { entry, manifest: 'hub' });
+  const uses = new Map<string, number>();
+  for (const { entry } of byFileId.values()) {
+    for (const part of entry.parts) uses.set(part, (uses.get(part) ?? 0) + 1);
+  }
+  const files = [...byFileId.values()].filter(({ entry }) =>
+    entry.parts.every((part) => uses.get(part) === 1),
+  );
+  return { files, droppedSharedParts: byFileId.size - files.length };
 }
 
 /**

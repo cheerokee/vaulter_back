@@ -211,6 +211,14 @@ describe('active cloud indexing from the encrypted backup (e2e, workers on)', ()
           enc('PNG...'),
         )
       ).fileId;
+      // A PDF that does not parse: unreadable in the worker thread, terminal until a new version.
+      files.broken = (
+        await sim.addFile(
+          'Quebrado.pdf',
+          'application/pdf',
+          enc('%PDF-1.4 lixo'),
+        )
+      ).fileId;
       // In encrypted_backup nothing is read nor enqueued.
       expect(
         await db(
@@ -225,7 +233,7 @@ describe('active cloud indexing from the encrypted backup (e2e, workers on)', ()
       await cloud.switchOn(ana, orgId, space.spaceId, [space.key]);
       await eventually(async () => {
         const rows = await fileRows(space.spaceId);
-        expect(rows).toHaveLength(5);
+        expect(rows).toHaveLength(6);
         expect(rows.every((r) => r.status !== 'pending')).toBe(true);
       });
       const rows = await fileRows(space.spaceId);
@@ -235,6 +243,7 @@ describe('active cloud indexing from the encrypted backup (e2e, workers on)', ()
         ['Contrato.docx', 'indexed', null, 'fake-embedding'],
         ['Foto secreta da obra.png', 'skipped', 'unsupported-format', null],
         ['Processo de compras.md', 'indexed', null, 'fake-embedding'],
+        ['Quebrado.pdf', 'skipped', 'unreadable', null],
         ['Relatorio.pdf', 'indexed', null, 'fake-embedding'],
         ['Tabela de preços.xlsx', 'indexed', null, 'fake-embedding'],
       ]);
@@ -260,13 +269,14 @@ describe('active cloud indexing from the encrypted backup (e2e, workers on)', ()
         [space.spaceId, files.pdf],
       );
       expect(nearest!.file_id).toBe(files.pdf);
-      // "Ignored with a log line": ids, the type and the reason; never the name.
+      // "Ignored with a log line": ids, the type (only a known one: a free-form type could carry content) and the
+      // reason; never the name.
       const skipped = warn.mock.calls.find(
         (call) => call[1] === 'cloud file not indexed',
       );
       expect(skipped?.[0]).toMatchObject({
         spaceId: space.spaceId,
-        mediaType: 'image/png',
+        mediaType: 'other',
         reason: 'unsupported-format',
       });
       expect(JSON.stringify(warn.mock.calls)).not.toContain('Foto secreta');
@@ -279,6 +289,9 @@ describe('active cloud indexing from the encrypted backup (e2e, workers on)', ()
         .map((ch) => ch.id);
       const mdRow = (await fileRows(space.spaceId)).find(
         (r) => r.file_id === files.md,
+      )!;
+      const brokenRow = (await fileRows(space.spaceId)).find(
+        (r) => r.file_id === files.broken,
       )!;
       const callsBefore = embedder.calls.length;
       await sim.replaceContent(
@@ -307,6 +320,11 @@ describe('active cloud indexing from the encrypted backup (e2e, workers on)', ()
       expect(embedder.calls.slice(callsBefore)).toEqual([
         { count: md.length, kind: 'document' },
       ]);
+      // The unreadable file is not retried by later passes (terminal until a new version).
+      const brokenAfter = (await fileRows(space.spaceId)).find(
+        (r) => r.file_id === files.broken,
+      )!;
+      expect(brokenAfter.indexed_at).toEqual(brokenRow.indexed_at);
     }, 60_000);
 
     it('deleting a file removes its chunks', async () => {

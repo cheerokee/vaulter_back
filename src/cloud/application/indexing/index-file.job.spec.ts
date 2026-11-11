@@ -178,10 +178,16 @@ describe('IndexFileJob', () => {
     const k = setup();
     k.meter.beforeBatch.mockImplementationOnce(async () => {
       k.deactivate();
-      return 0;
+      return k.trace.push('beforeBatch (switched off meanwhile)');
     });
     await k.job.run(PAYLOAD);
-    expect(k.trace).toEqual(['record', 'run', 'lockActiveForWrite', 'commit']);
+    expect(k.trace).toEqual([
+      'beforeBatch (switched off meanwhile)',
+      'record',
+      'run',
+      'lockActiveForWrite',
+      'commit',
+    ]);
     expect(k.files.lockById).not.toHaveBeenCalled();
     expect(k.chunks.replaceForFile).not.toHaveBeenCalled();
     expect(k.files.upsert).not.toHaveBeenCalled();

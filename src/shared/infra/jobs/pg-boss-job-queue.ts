@@ -166,6 +166,29 @@ export class PgBossJobQueue
     });
   }
 
+  async sendMany<P extends JobPayload>(
+    name: string,
+    jobs: readonly { payload: P; singletonKey?: string }[],
+  ): Promise<number> {
+    assertQueueName(name);
+    if (jobs.length === 0) return 0;
+    const rows = jobs.map((j) => {
+      const data = { ...assertIdsOnlyPayload(j.payload) };
+      if (j.singletonKey !== undefined) {
+        assertSendOptions({ singletonKey: j.singletonKey });
+      }
+      return { data, singletonKey: j.singletonKey };
+    });
+    const boss = await this.ready;
+    await this.ensureQueue(boss, name);
+    // One INSERT ... SELECT FROM json_to_recordset (ON CONFLICT DO NOTHING: a waiting singleton is kept).
+    const ids = await boss.insert(name, rows, {
+      db: this.transactionDb(),
+      returnId: true,
+    });
+    return ids?.length ?? 0;
+  }
+
   async work<P extends JobPayload>(
     name: string,
     handler: JobHandler<P>,
@@ -229,14 +252,16 @@ export class PgBossJobQueue
     }
   }
 
-  /** Without workers in this process the handler is only kept (nothing is fetched). */
+  /** Without workers in this process the handler is only kept (nothing is fetched); the queue is created either way. */
   private async subscribe(
     boss: PgBoss,
     name: string,
     handler: JobHandler<JobPayload>,
   ): Promise<void> {
-    if (!this.workersEnabled) return;
+    // The queue exists from the boot (also without workers): `send` inside a unit of work then never creates it on the
+    // pg-boss pool while the transaction holds a TypeORM connection.
     await this.ensureQueue(boss, name);
+    if (!this.workersEnabled) return;
     await boss.work<JobPayload>(
       name,
       { batchSize: 1, pollingIntervalSeconds: JOB_POLLING_INTERVAL_SECONDS },

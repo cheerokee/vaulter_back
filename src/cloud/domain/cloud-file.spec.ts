@@ -182,10 +182,26 @@ describe('mergeManifests', () => {
       [entry('a', { name: 'cloud' }), entry('b')],
     );
     expect(
-      merged.map((m) => [m.entry.fileId, m.manifest, m.entry.name]),
+      merged.files.map((m) => [m.entry.fileId, m.manifest, m.entry.name]),
     ).toEqual([
       ['a', 'hub', 'hub'],
       ['b', 'cloud', 'b.pdf'],
     ]);
+    expect(merged.droppedSharedParts).toBe(0);
+  });
+
+  it('guard: entries whose parts are also parts of another file are all dropped', () => {
+    const merged = mergeManifests(
+      [
+        entry('a', { parts: ['x', 'shared'] }),
+        entry('b', { parts: ['shared'] }),
+        entry('c', { parts: ['y'] }),
+      ],
+      [entry('d', { parts: ['y'] })],
+    );
+    expect(merged.files.map((m) => m.entry.fileId)).toEqual([]);
+    expect(merged.droppedSharedParts).toBe(4);
+    const ok = mergeManifests([entry('a'), entry('b')], []);
+    expect(ok.files).toHaveLength(2);
   });
 });

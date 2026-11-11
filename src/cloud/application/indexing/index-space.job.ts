@@ -16,7 +16,13 @@ import {
   CloudChunkRepository,
   CloudFileRepository,
 } from '../../domain/indexing.repositories.js';
-import { MANIFEST_MAX_BYTES } from '../../domain/indexing-limits.js';
+import {
+  INDEX_SPACE_BATCH_FILES,
+  INDEX_SPACE_BATCH_PARTS,
+  INDEX_SPACE_BATCH_TIMEOUT_MS,
+  INDEX_SPACE_LOCK_TIMEOUT_MS,
+  MANIFEST_MAX_BYTES,
+} from '../../domain/indexing-limits.js';
 import {
   ManifestFormatError,
   parseSpaceManifest,
@@ -36,26 +42,62 @@ type ManifestRead =
   | { kind: 'invalid' }
   | { kind: 'ok'; files: ManifestFile[] };
 
-const sameVersions = (
+/** The same version of every id in `ids` (absent in both counts as the same). */
+const sameVersionsOf = (
+  ids: Iterable<string>,
   a: ReadonlyMap<string, LiveObjectVersion>,
   b: ReadonlyMap<string, LiveObjectVersion>,
-): boolean =>
-  a.size === b.size &&
-  [...a].every(([id, v]) => b.get(id)?.versionId === v.versionId);
+): boolean => {
+  for (const id of ids) {
+    if (a.get(id)?.versionId !== b.get(id)?.versionId) return false;
+  }
+  return true;
+};
+
+type Batch = { fileIds: string[]; partIds: string[] };
+
+/** Every fileId (listed or known) in order, cut in batches of at most N files and M parts. */
+function batchesOf(
+  fileIds: readonly string[],
+  partsOf: (fileId: string) => readonly string[],
+): Batch[] {
+  const batches: Batch[] = [];
+  let current: Batch = { fileIds: [], partIds: [] };
+  for (const fileId of [...new Set(fileIds)].sort()) {
+    const parts = partsOf(fileId);
+    if (
+      current.fileIds.length > 0 &&
+      (current.fileIds.length >= INDEX_SPACE_BATCH_FILES ||
+        current.partIds.length + parts.length > INDEX_SPACE_BATCH_PARTS)
+    ) {
+      batches.push(current);
+      current = { fileIds: [], partIds: [] };
+    }
+    current.fileIds.push(fileId);
+    current.partIds.push(...parts);
+  }
+  if (current.fileIds.length > 0) batches.push(current);
+  return batches;
+}
+
+type BatchOutcome = 'done' | 'switched-off' | 'changed';
 
 // Reindexação de um espaço a partir dos manifestos (spec active-cloud §4.2; contrato em docs/hubs/space-manifest.md),
 // enfileirada ao ligar e a cada mudança do backup do espaço (`BackupObjectsChangedHooks`). Idempotente.
-// 1. Fora de transação: espaço em `active_cloud` (senão nada), versões vivas dos dois manifestos (o do Hub e o da
-//    nuvem), lidas pela versão do índice e abertas com a chave do espaço; um manifesto que não abre ou não segue o
-//    contrato para a passada inteira (o índice fica como estava; registro só com ids e um código). Versões vivas de
-//    todas as partes.
-// 2. Uma transação: espaço FOR SHARE (`lockActiveForWrite`: desligou = nada é gravado) -> arquivos do espaço FOR UPDATE
-//    (serializa com outra passada e com os jobs de arquivo) -> as versões vivas dos manifestos e das partes relidas: se
-//    mudaram desde o passo 1, para (a mudança já enfileirou outra passada, que vê o estado novo; esta nunca regride o
-//    índice). Aplica o plano (`planIndexSync`): apaga o que saiu dos manifestos (com os trechos), tira os trechos de
-//    arquivo com parte faltando, grava os novos/alterados como `pending` e enfileira um `cloud.index-file` por arquivo
-//    pendente, na mesma transação.
-// Nada legível vai para log (só ids e contagens). A chave aberta é apagada no fim.
+// 1. Fora de transação (nenhuma trava): espaço em `active_cloud` (senão nada); versões vivas dos dois manifestos (o do
+//    Hub e o da nuvem), lidas pela versão do índice e abertas com a chave do espaço (um manifesto que não abre ou não
+//    segue o contrato para a passada inteira: o índice fica como estava; registro só com ids e um código); entradas
+//    unidas (`mergeManifests`, com a guarda de partes compartilhadas); versões vivas de todas as partes; os arquivos que
+//    a nuvem já conhece (`listForSpace`, sem trava).
+// 2. Lotes de até 500 arquivos / 2000 partes, cada um numa transação CURTA e de custo fixo (Review do fix round 1: a
+//    trava do espaço nunca fica presa por O(arquivos)): `lock_timeout` 10 s e `transaction_timeout` 30 s -> espaço
+//    FOR SHARE (`lockActiveForWrite`: desligou = para, nada gravado; Review Focus 1) -> versões dos manifestos e das
+//    partes do lote relidas (mudaram desde o passo 1 = para: a mudança já enfileirou outra passada, que vê o estado
+//    novo; esta nunca regride o índice) -> SÓ os arquivos do lote FOR UPDATE (serializa com os jobs de arquivo) ->
+//    plano do lote (`planIndexSync`) aplicado em comandos em lote: apagar o que saiu, tirar os trechos de arquivo com
+//    parte faltando, um upsert de todos os alterados (por `(space_id, file_id)`: duas passadas iguais em instâncias
+//    diferentes gravam o mesmo), um INSERT de todos os `cloud.index-file`. Entre os lotes nada fica travado.
+// Nada legível vai para log (só ids e contagens). A chave aberta é apagada no fim da leitura dos manifestos.
 @Injectable()
 export class IndexSpaceJob {
   private readonly logger = new Logger(IndexSpaceJob.name);
@@ -76,14 +118,14 @@ export class IndexSpaceJob {
     ) {
       return;
     }
-    const manifestIds = {
-      hub: hubManifestObjectId(spaceId),
-      cloud: cloudManifestObjectId(spaceId),
-    };
+    const manifestIds = [
+      hubManifestObjectId(spaceId),
+      cloudManifestObjectId(spaceId),
+    ];
     const manifestVersions = await this.reader.liveVersions(
       organizationId,
       spaceId,
-      [manifestIds.hub, manifestIds.cloud],
+      manifestIds,
     );
     const keys = await this.keyOpener.forSpace(organizationId, spaceId);
     let hub: ManifestRead;
@@ -93,14 +135,14 @@ export class IndexSpaceJob {
         organizationId,
         spaceId,
         'hub',
-        manifestVersions.get(manifestIds.hub),
+        manifestVersions.get(manifestIds[0]!),
         keys,
       );
       cloud = await this.readManifest(
         organizationId,
         spaceId,
         'cloud',
-        manifestVersions.get(manifestIds.cloud),
+        manifestVersions.get(manifestIds[1]!),
         keys,
       );
     } finally {
@@ -112,76 +154,136 @@ export class IndexSpaceJob {
       hub.kind === 'ok' ? hub.files : [],
       cloud.kind === 'ok' ? cloud.files : [],
     );
-    const partIds = merged.flatMap((m) => m.entry.parts);
+    if (merged.droppedSharedParts > 0) {
+      this.logger.warn(
+        {
+          organizationId,
+          spaceId,
+          droppedEntries: merged.droppedSharedParts,
+          reason: 'shared-parts',
+        },
+        'space manifest entries skipped',
+      );
+    }
     const partVersions = await this.reader.liveVersions(
       organizationId,
       spaceId,
-      partIds,
+      merged.files.flatMap((m) => m.entry.parts),
     );
-    const desired: DesiredFile[] = merged.map(({ entry, manifest }) => {
+    const desired = new Map<string, DesiredFile>();
+    for (const { entry, manifest } of merged.files) {
       const parts = entry.parts.map((objectId) => {
         const v = partVersions.get(objectId);
         return v ? { objectId, versionId: v.versionId } : null;
       });
-      return {
+      desired.set(entry.fileId, {
         entry,
         manifest,
         parts: parts.every((p) => p !== null) ? parts : null,
-      };
-    });
+      });
+    }
+    const known = await this.files.listForSpace(organizationId, spaceId);
+    const batches = batchesOf(
+      [...desired.keys(), ...known.map((f) => f.fileId)],
+      (fileId) => desired.get(fileId)?.entry.parts ?? [],
+    );
 
-    await this.uow.run(async () => {
+    const totals = { removed: 0, changed: 0, enqueued: 0 };
+    for (const batch of batches) {
+      const outcome = await this.applyBatch(
+        { organizationId, spaceId },
+        batch,
+        desired,
+        { manifestIds, manifestVersions, partVersions },
+        totals,
+      );
+      if (outcome !== 'done') return;
+    }
+    this.logger.log(
+      {
+        organizationId,
+        spaceId,
+        files: desired.size,
+        batches: batches.length,
+        ...totals,
+      },
+      'cloud space reindexed',
+    );
+  }
+
+  private applyBatch(
+    scope: { organizationId: string; spaceId: string },
+    batch: Batch,
+    desired: ReadonlyMap<string, DesiredFile>,
+    snapshot: {
+      manifestIds: string[];
+      manifestVersions: ReadonlyMap<string, LiveObjectVersion>;
+      partVersions: ReadonlyMap<string, LiveObjectVersion>;
+    },
+    totals: { removed: number; changed: number; enqueued: number },
+  ): Promise<BatchOutcome> {
+    const { organizationId, spaceId } = scope;
+    return this.uow.run(async () => {
+      await this.uow.setLockTimeout(INDEX_SPACE_LOCK_TIMEOUT_MS);
+      await this.uow.limitRemainingTime(INDEX_SPACE_BATCH_TIMEOUT_MS);
       if (
         !(await this.spaceCloud.lockActiveForWrite(organizationId, spaceId))
       ) {
-        return;
+        return 'switched-off';
       }
-      const existing = await this.files.lockForSpace(organizationId, spaceId);
-      // Releitura sob as travas: uma passada mais nova (outra instância) já pode ter gravado um estado mais recente.
       const nowManifests = await this.reader.liveVersions(
         organizationId,
         spaceId,
-        [manifestIds.hub, manifestIds.cloud],
+        snapshot.manifestIds,
       );
       const nowParts = await this.reader.liveVersions(
         organizationId,
         spaceId,
-        partIds,
+        batch.partIds,
       );
       if (
-        !sameVersions(manifestVersions, nowManifests) ||
-        !sameVersions(partVersions, nowParts)
+        !sameVersionsOf(
+          snapshot.manifestIds,
+          snapshot.manifestVersions,
+          nowManifests,
+        ) ||
+        !sameVersionsOf(batch.partIds, snapshot.partVersions, nowParts)
       ) {
-        return;
+        return 'changed';
       }
+      const rows = await this.files.lockByFileIds(
+        organizationId,
+        spaceId,
+        batch.fileIds,
+      );
       const plan = planIndexSync(
-        { organizationId, spaceId },
-        existing,
-        desired,
+        scope,
+        rows,
+        batch.fileIds.flatMap((id) => {
+          const d = desired.get(id);
+          return d ? [d] : [];
+        }),
         newId,
       );
       await this.files.deleteByIds(
         organizationId,
         plan.remove.map((f) => f.id),
       );
-      for (const f of plan.clearChunks) {
-        await this.chunks.deleteForFile(organizationId, f.id);
-      }
-      for (const f of plan.upsert) await this.files.upsert(f);
-      for (const id of plan.enqueue) {
-        await this.queue.enqueueFile(organizationId, spaceId, id);
-      }
-      this.logger.log(
-        {
-          organizationId,
-          spaceId,
-          files: desired.length,
-          removed: plan.remove.length,
-          changed: plan.upsert.length,
-          enqueued: plan.enqueue.length,
-        },
-        'cloud space reindexed',
+      await this.chunks.deleteForFiles(
+        organizationId,
+        plan.clearChunks.map((f) => f.id),
       );
+      const idsByFileId = await this.files.upsertMany(plan.upsert);
+      const upserted = new Map(plan.upsert.map((f) => [f.id, f.fileId]));
+      const enqueue = plan.enqueue.map((id) => {
+        const fileId = upserted.get(id);
+        return (fileId && idsByFileId.get(fileId)) ?? id;
+      });
+      await this.queue.enqueueFiles(organizationId, spaceId, enqueue);
+      totals.removed += plan.remove.length;
+      totals.changed += plan.upsert.length;
+      totals.enqueued += enqueue.length;
+      return 'done';
     });
   }
 

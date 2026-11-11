@@ -35,6 +35,21 @@ export class CloudIndexingQueue {
     );
   }
 
+  /** One job per file row, all in ONE statement (a file that already has a waiting job is skipped). */
+  async enqueueFiles(
+    organizationId: string,
+    spaceId: string,
+    cloudFileIds: readonly string[],
+  ): Promise<void> {
+    await this.jobs.sendMany<IndexFilePayload>(
+      INDEX_FILE_QUEUE,
+      cloudFileIds.map((cloudFileId) => ({
+        payload: { organizationId, spaceId, cloudFileId },
+        singletonKey: `file:${cloudFileId}`,
+      })),
+    );
+  }
+
   /** One waiting job per file row. */
   async enqueueFile(
     organizationId: string,

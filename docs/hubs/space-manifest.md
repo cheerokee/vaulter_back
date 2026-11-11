@@ -120,6 +120,26 @@ não conhece.
 - Nomes, caminhos e tipos existem **só dentro do manifesto cifrado** (e, na nuvem ativa, nas tabelas legíveis da nuvem,
   apagadas ao desligar). Nunca em chave do S3, log ou campo em claro.
 
+## O que nunca entra no manifesto
+
+O manifesto lista **só documentos do espaço**: arquivos (`source.kind = "file"`), espelhos de conector (`"connector"`,
+só em nuvem ativa) e documentos da nuvem (`"cloud"`). **É proibido** listar nele qualquer objeto interno do Hub que
+também vai para o backup: **assuntos (conversas) e suas mensagens/anexos, eventos, pedaços do índice local
+(embeddings, banco vetorial), estado do aparelho, filas, logs, cópias de conflito internas**, ou qualquer objeto que não
+seja o conteúdo de um documento que todos os membros do espaço podem ler. O motivo: num espaço em nuvem ativa a nuvem
+indexa tudo o que o manifesto lista **para todos os membros do espaço**; uma conversa privada listada aqui vazaria pelo
+RAG. Esses objetos internos existem no backup só com o `objectId` deles e **nunca** aparecem no manifesto.
+
+Guardas do servidor (a nuvem não depende só do Hub; nenhuma delas substitui a regra acima):
+- só `source.kind` `file`, `connector` ou `cloud` são aceitos; qualquer outro valor derruba a entrada;
+- cada parte tem de ser um objeto comum **vivo deste espaço** no índice do backup (UUID v7; os ids dos manifestos não são
+  partes; objeto de outro espaço, apagado ou não confirmado deixa o arquivo fora do índice);
+- **um objeto pertence a um documento só**: entradas (dos dois manifestos juntos, depois da união por `fileId`) que
+  compartilham qualquer parte com outra entrada são **todas** descartadas (registro só com a contagem);
+- só os tipos da tabela "Formatos indexados" têm o texto extraído; qualquer outro tipo fica fora do índice;
+- os anexos e mensagens dos assuntos ficam num índice próprio (`conversation_attachments`, corpo cifrado nas mensagens),
+  fora do índice do backup: não podem ser parte de um arquivo do manifesto.
+
 ## Partes e ordem
 
 - Arquivo até 5 GiB cifrado: **uma parte** (o objeto do arquivo). Maior: o Hub divide o arquivo **em claro** em pedaços
@@ -182,7 +202,10 @@ entram exportados para um destes tipos.
   partes não mudaram fica como está (renomear só atualiza o nome); arquivo que saiu dos manifestos perde os trechos.
 - Ligar a nuvem indexa tudo; desligar **apaga** de verdade os trechos, os embeddings, os nomes e a cópia da chave do
   servidor (o backup cifrado não muda).
-- **Conversas (assuntos) nunca entram** no índice do espaço (são privadas de quem participa).
+- **Conversas (assuntos) nunca entram** no índice do espaço (são privadas de quem participa): veja "O que nunca entra
+  no manifesto".
+- Extração numa thread separada, com limite de tempo (60 s por arquivo) e de memória (1 GiB de heap): arquivo que
+  estoura, não abre ou não parseia fica `unreadable` e **não é tentado de novo** até chegar uma versão nova dele.
 
 ## Manifesto da nuvem e incorporação pelo Hub
 
@@ -199,7 +222,8 @@ para não haver dois escritores no mesmo manifesto:
    (a origem do documento) ou passar a `file`.
 3. Envia o manifesto do Hub atualizado.
 4. O servidor, ao ver o `fileId` no manifesto do Hub, **tira a entrada do manifesto da nuvem** (o Hub nunca escreve
-   nele). Enquanto as duas listas têm o `fileId`, vale a do Hub.
+   nele). Enquanto as duas listas têm o `fileId`, vale a do Hub. (A escrita do manifesto da nuvem, inclusive este
+   passo, entra junto com os documentos gravados pela nuvem; até lá o manifesto da nuvem não existe.)
 
 Daí em diante o arquivo é do Hub como outro qualquer (editar, mover, apagar). Se o Hub nunca voltar (roubado), o
 manifesto da nuvem continua listando os documentos e nada some numa reindexação.

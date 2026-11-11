@@ -271,7 +271,9 @@ O Hub envia as mudanças dos espaços **a cada 5 min**, na mesma passada da sinc
 objeto). O backend guarda só o índice (ids, tamanho, sha256 do blob, versão da chave), nunca nome de arquivo. O que é
 cada objeto (nome, tipo, origem, partes em ordem) fica no **manifesto do espaço**, um objeto cifrado com `objectId`
 fixo (UUID v5 do `spaceId`), no formato de `docs/hubs/space-manifest.md`: a nuvem ativa depende dele para indexar o
-espaço, e nos espaços em nuvem ativa os espelhos de conector também entram no backup (mesmo documento). Além de UUID v7,
+espaço, e nos espaços em nuvem ativa os espelhos de conector também entram no backup (mesmo documento). **O manifesto
+lista só documentos**: assuntos, eventos, pedaços do índice local e qualquer outro objeto interno do Hub **nunca** entram
+nele (a nuvem indexaria o que estiver listado para todos os membros; veja "O que nunca entra no manifesto"). Além de UUID v7,
 o backend aceita só o id do manifesto do Hub daquele espaço (outro UUID: 422 `object-id-invalid`); o id do manifesto da
 nuvem é reservado ao servidor (enviar ou apagar com ele: 422 `object-id-reserved`).
 

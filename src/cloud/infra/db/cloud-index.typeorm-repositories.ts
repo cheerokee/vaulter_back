@@ -10,6 +10,9 @@ import {
 } from '../../domain/indexing.repositories.js';
 import { CloudFileTypeormEntity } from './cloud-file.entity.js';
 
+/** Rows per page when listing the files of a space. */
+const LIST_PAGE = 1000;
+
 function requireUnitOfWork(dataSource: DataSource, method: string): void {
   if (!currentManager(dataSource).queryRunner?.isTransactionActive) {
     throw new Error(
@@ -79,11 +82,39 @@ export class CloudFileTypeormRepository extends CloudFileRepository {
     return row ? toFile(row) : null;
   }
 
-  async lockForSpace(orgId: string, spaceId: string): Promise<CloudFile[]> {
-    requireUnitOfWork(this.dataSource, 'CloudFileRepository.lockForSpace');
+  async listForSpace(orgId: string, spaceId: string): Promise<CloudFile[]> {
+    const out: CloudFile[] = [];
+    let after: string | null = null;
+    for (;;) {
+      const page = await runInOrganizationScope(this.dataSource, orgId, (m) =>
+        m
+          .getRepository(CloudFileTypeormEntity)
+          .createQueryBuilder('f')
+          .where('f.organization_id = :orgId AND f.space_id = :spaceId', {
+            orgId,
+            spaceId,
+          })
+          .andWhere(after ? 'f.id > :after' : '1 = 1', { after })
+          .orderBy('f.id', 'ASC')
+          .take(LIST_PAGE)
+          .getMany(),
+      );
+      out.push(...page.map(toFile));
+      if (page.length < LIST_PAGE) return out;
+      after = page[page.length - 1]!.id;
+    }
+  }
+
+  async lockByFileIds(
+    orgId: string,
+    spaceId: string,
+    fileIds: readonly string[],
+  ): Promise<CloudFile[]> {
+    requireUnitOfWork(this.dataSource, 'CloudFileRepository.lockByFileIds');
+    if (fileIds.length === 0) return [];
     const rows = await runInOrganizationScope(this.dataSource, orgId, (m) =>
       m.getRepository(CloudFileTypeormEntity).find({
-        where: { organizationId: orgId, spaceId },
+        where: { organizationId: orgId, spaceId, fileId: In([...fileIds]) },
         order: { id: 'ASC' },
         lock: { mode: 'pessimistic_write' },
       }),
@@ -108,6 +139,58 @@ export class CloudFileTypeormRepository extends CloudFileRepository {
         .getRepository(CloudFileTypeormEntity)
         .upsert(toRow(file), { conflictPaths: ['id'] }),
     );
+  }
+
+  async upsertMany(files: readonly CloudFile[]): Promise<Map<string, string>> {
+    const first = files[0];
+    if (!first) return new Map();
+    const records = files.map((f) => ({
+      id: f.id,
+      organization_id: f.organizationId,
+      space_id: f.spaceId,
+      file_id: f.fileId,
+      manifest: f.manifest,
+      name: f.name,
+      path: f.path,
+      media_type: f.mediaType,
+      source_kind: f.source.kind,
+      connector: f.source.kind === 'connector' ? f.source.connector : null,
+      modified_at: f.modifiedAt?.toISOString() ?? null,
+      part_object_ids: f.parts.map((p) => p.objectId),
+      part_version_ids: f.parts.map((p) => p.versionId),
+      status: f.status,
+      skip_reason: f.skipReason,
+      embedding_model: f.embeddingModel,
+      chunk_count: f.chunkCount,
+      indexed_at: f.indexedAt?.toISOString() ?? null,
+    }));
+    const rows: { id: string; file_id: string }[] =
+      await runInOrganizationScope(this.dataSource, first.organizationId, (m) =>
+        m.query(
+          `INSERT INTO cloud_files
+             (id, organization_id, space_id, file_id, manifest, name, path, media_type, source_kind, connector,
+              modified_at, part_object_ids, part_version_ids, status, skip_reason, embedding_model, chunk_count,
+              indexed_at)
+           SELECT id, organization_id, space_id, file_id, manifest, name, path, media_type, source_kind, connector,
+                  modified_at, part_object_ids, part_version_ids, status, skip_reason, embedding_model, chunk_count,
+                  indexed_at
+             FROM jsonb_to_recordset($1::jsonb) AS r(
+               id uuid, organization_id uuid, space_id uuid, file_id uuid, manifest varchar, name varchar,
+               path varchar, media_type varchar, source_kind varchar, connector varchar, modified_at timestamptz,
+               part_object_ids uuid[], part_version_ids uuid[], status varchar, skip_reason varchar,
+               embedding_model varchar, chunk_count integer, indexed_at timestamptz)
+           ON CONFLICT (space_id, file_id) DO UPDATE SET
+             manifest = EXCLUDED.manifest, name = EXCLUDED.name, path = EXCLUDED.path,
+             media_type = EXCLUDED.media_type, source_kind = EXCLUDED.source_kind, connector = EXCLUDED.connector,
+             modified_at = EXCLUDED.modified_at, part_object_ids = EXCLUDED.part_object_ids,
+             part_version_ids = EXCLUDED.part_version_ids, status = EXCLUDED.status,
+             skip_reason = EXCLUDED.skip_reason, embedding_model = EXCLUDED.embedding_model,
+             chunk_count = EXCLUDED.chunk_count, indexed_at = EXCLUDED.indexed_at, updated_at = now()
+           RETURNING id, file_id`,
+          [JSON.stringify(records)],
+        ),
+      );
+    return new Map(rows.map((r) => [r.file_id, r.id]));
   }
 
   async deleteByIds(orgId: string, ids: readonly string[]): Promise<void> {
@@ -187,6 +270,19 @@ export class CloudChunkSqlRepository extends CloudChunkRepository {
       m.query(
         `DELETE FROM cloud_chunks WHERE organization_id = $1 AND cloud_file_id = $2`,
         [orgId, cloudFileId],
+      ),
+    );
+  }
+
+  async deleteForFiles(
+    orgId: string,
+    cloudFileIds: readonly string[],
+  ): Promise<void> {
+    if (cloudFileIds.length === 0) return;
+    await runInOrganizationScope(this.dataSource, orgId, (m) =>
+      m.query(
+        `DELETE FROM cloud_chunks WHERE organization_id = $1 AND cloud_file_id = ANY($2::uuid[])`,
+        [orgId, [...cloudFileIds]],
       ),
     );
   }

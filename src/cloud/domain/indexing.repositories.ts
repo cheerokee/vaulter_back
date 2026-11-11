@@ -13,12 +13,28 @@ export type NewChunk = {
  */
 export abstract class CloudFileRepository {
   abstract findById(orgId: string, id: string): Promise<CloudFile | null>;
-  /** Every file of the space `FOR UPDATE`, in id order. REQUIRES a unit of work; lock order: after the space row. */
-  abstract lockForSpace(orgId: string, spaceId: string): Promise<CloudFile[]>;
+  /** Every file of the space, without a lock (read in pages of ids). */
+  abstract listForSpace(orgId: string, spaceId: string): Promise<CloudFile[]>;
+  /**
+   * The files of the space with these `fileId`s, `FOR UPDATE` in id order (one statement). REQUIRES a unit of work;
+   * lock order: after the space row.
+   */
+  abstract lockByFileIds(
+    orgId: string,
+    spaceId: string,
+    fileIds: readonly string[],
+  ): Promise<CloudFile[]>;
   /** One file `FOR UPDATE` (null if gone). REQUIRES a unit of work; lock order: after the space row. */
   abstract lockById(orgId: string, id: string): Promise<CloudFile | null>;
   /** Inserts or updates by id. */
   abstract upsert(file: CloudFile): Promise<void>;
+  /**
+   * Inserts or updates many files of ONE space in one statement, by `(space_id, file_id)`; returns the row id of each
+   * `fileId` (an existing row keeps its id).
+   */
+  abstract upsertMany(
+    files: readonly CloudFile[],
+  ): Promise<Map<string, string>>;
   /** Physical DELETE (the chunks go with them: FK ON DELETE CASCADE). */
   abstract deleteByIds(orgId: string, ids: readonly string[]): Promise<void>;
   /** Physical DELETE of every file of the space; returns how many. */
@@ -34,6 +50,11 @@ export abstract class CloudChunkRepository {
     chunks: readonly NewChunk[],
   ): Promise<void>;
   abstract deleteForFile(orgId: string, cloudFileId: string): Promise<void>;
+  /** The chunks of many files, in one statement. */
+  abstract deleteForFiles(
+    orgId: string,
+    cloudFileIds: readonly string[],
+  ): Promise<void>;
   /** Physical DELETE of every chunk of the space; returns how many. */
   abstract deleteForSpace(orgId: string, spaceId: string): Promise<number>;
 }

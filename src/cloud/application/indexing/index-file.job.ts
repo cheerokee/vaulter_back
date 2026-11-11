@@ -274,7 +274,10 @@ export class IndexFileJob {
           organizationId: file.organizationId,
           spaceId: file.spaceId,
           cloudFileId: file.id,
-          mediaType: file.mediaType,
+          // Only a supported (fixed) type is logged: a free-form one from the manifest could carry content.
+          mediaType: this.extractor.supports(file.mediaType)
+            ? file.mediaType
+            : 'other',
           reason: outcome.reason,
           ...(outcome.detail ? { detail: outcome.detail } : {}),
         },
