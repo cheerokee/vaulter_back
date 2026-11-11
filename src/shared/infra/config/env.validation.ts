@@ -296,5 +296,11 @@ export function validateEnv(
       .join('\n');
     throw new Error(`Invalid environment configuration:\n${details}`);
   }
+  // The canned fake model must never answer real customers.
+  if (env.CLOUD_LLM_DRIVER === 'fake' && config.NODE_ENV === 'production') {
+    throw new Error(
+      'Invalid environment configuration:\nCLOUD_LLM_DRIVER: the fake driver is not allowed when NODE_ENV=production',
+    );
+  }
   return env;
 }

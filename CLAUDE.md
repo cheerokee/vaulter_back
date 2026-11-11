@@ -1120,7 +1120,7 @@ registra a fonte `conversations`), `hubs` (`HubDirectory`: `ownerOf`,
 - **Embeddings** (`Embedder`, `application/ports/embedder.ts`; `OllamaEmbedder` em `infra/embeddings/`): serviço `embeddings` do
   compose (`ollama/ollama:0.40.16`, modelo `nomic-embed-text:v1.5` = id `0a109f422b47`, o mesmo `nomic-embed-text:latest` do Hub; baixado
   na primeira subida para `.docker/ollama/models`, ~274 MB; `.docker/ollama/start.sh`). `embed(textos, 'document'|'query')` ->
-  `{ vectors (768), model, dimensions, inputTokens }`, em lotes de 32 por `POST /api/embed`. **Sem prefixo de tarefa, de propósito:**
+  `{ vectors (768), model, dimensions, inputTokens }`, em lotes de 32 por `POST /api/embed` (`truncate: false`: texto longo demais é 400, nunca cortado em silêncio). Falha = `EmbeddingServiceError` (porta) com `retryable` (rede, timeout, 5xx, 429: sim; 4xx e resposta fora do formato: não). **Sem prefixo de tarefa, de propósito:**
   o Hub (`index_docs.py`) embute sem prefixo; usar `search_document:`/`search_query:` é mudança **conjunta com o Hub + reindexação
   completa dos dois lados** (o `kind` existe na porta para esse dia). O Hub usa o `/api/embeddings` antigo (sem normalizar);
   o `/api/embed` normaliza: mesma direção (cosseno 1,0 medido), e só usamos cosseno. Teste contra o serviço real:
@@ -1129,11 +1129,12 @@ registra a fonte `conversations`), `hubs` (`HubDirectory`: `ownerOf`,
 - **Modelo de linguagem** (`LanguageModel`, `application/ports/language-model.ts`): `complete({ system, messages, tools?, maxTokens })` ->
   `{ text, toolCalls, stopReason, usage, model }`, um turno por chamada (com `toolCalls` o chamador roda e chama de novo).
   `BedrockLanguageModel` (`infra/bedrock/`, Converse API, `us-east-1`, papel IAM, sem endpoint do LocalStack) escolhido por
-  `CLOUD_LLM_DRIVER` (`bedrock`|`fake`); `CLOUD_LLM_MODEL_ID` precisa ter preço. Falha = `LanguageModelError` (`retryable`), só
-  o nome do erro, nunca o prompt. Falsos determinísticos em `src/cloud/testing/` (`FakeEmbedder` bag-of-words 768 dim;
+  `CLOUD_LLM_DRIVER` (`bedrock`|`fake`); `CLOUD_LLM_MODEL_ID` precisa ter preço. Falha = `LanguageModelError` (`retryable`: throttling, 5xx, erro de rede), só
+  o nome do erro, nunca o prompt. Histórico com blocos de ferramenta exige repassar `tools` em todo turno (Converse recusa sem
+  `toolConfig`): sem elas, `LanguageModelError` não retentável antes de chamar. `fake` é recusado com `NODE_ENV=production` (env e módulo). Falsos determinísticos em `src/cloud/testing/` (`FakeEmbedder` bag-of-words 768 dim;
   `FakeLanguageModel` com turnos roteirizados `enqueue({ toolCalls })` e uso computado), trocados por DI nos e2e.
 - **Preço** (`AiPricing`, `domain/ai-pricing.ts`): tabela em código, micro-USD por milhão de tokens (`bigint`), conta com
-  arredondamento **para cima** por chamada; modelo sem preço = `UnpricedModelError` (falha fechada). Valores atuais são
+  arredondamento **para cima** por chamada; modelo sem preço = `UnpricedModelError` (falha fechada; o `CloudModule` confere `CLOUD_LLM_MODEL_ID` e `EMBEDDING_MODEL` **na subida**). Valores atuais são
   **provisórios** (Jonas decide); embedding próprio tem custo nominal de US$ 0,02/MTok para a indexação consumir o orçamento.
 
 ## Banco de dados (TypeORM + migrations)

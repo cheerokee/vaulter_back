@@ -1,8 +1,8 @@
 import { ConfigService } from '@nestjs/config';
+import { EmbeddingServiceError } from '../../application/ports/embedder.js';
 import {
   EMBEDDING_BATCH_SIZE,
   EMBEDDING_DIMENSIONS,
-  EmbeddingServiceError,
   OllamaEmbedder,
 } from './ollama-embedder.js';
 
@@ -43,6 +43,7 @@ describe('OllamaEmbedder', () => {
     expect(JSON.parse(f.mock.calls[0]![1]!.body as string)).toEqual({
       model: 'nomic-embed-text:v1.5',
       input: ['a', 'b'],
+      truncate: false,
     });
     expect(out).toMatchObject({
       model: 'nomic-embed-text:v1.5',
@@ -101,6 +102,34 @@ describe('OllamaEmbedder', () => {
         .catch((e: unknown) => e);
       expect(err).toBeInstanceOf(EmbeddingServiceError);
       expect((err as Error).message).not.toContain(secret);
+    }
+  });
+
+  it('classifies failures: network, 5xx and 429 are retryable; 4xx, bad shape and non-JSON are not', async () => {
+    const cases: [typeof fetch, boolean][] = [
+      [
+        vi.fn(async () => {
+          throw new TypeError('fetch failed');
+        }) as unknown as typeof fetch,
+        true,
+      ],
+      [fakeFetch(() => ({}), 503), true],
+      [fakeFetch(() => ({}), 429), true],
+      [fakeFetch(() => ({}), 400), false],
+      [fakeFetch(() => ({ embeddings: [[1]] })), false],
+      [
+        vi.fn(
+          async () => new Response('<html>', { status: 200 }),
+        ) as unknown as typeof fetch,
+        false,
+      ],
+    ];
+    for (const [f, retryable] of cases) {
+      const err = await embedderWith(f)
+        .embed(['x'], 'document')
+        .catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(EmbeddingServiceError);
+      expect((err as EmbeddingServiceError).retryable).toBe(retryable);
     }
   });
 });

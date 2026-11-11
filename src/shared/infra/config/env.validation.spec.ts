@@ -235,6 +235,16 @@ describe('validateEnv cloud and jobs', () => {
     ).toThrow(/CLOUD_LLM_DRIVER/);
   });
 
+  it('refuses the fake language model driver in production only', () => {
+    const base = { ...validConfig(), CLOUD_LLM_DRIVER: 'fake' };
+    expect(() => validateEnv({ ...base, NODE_ENV: 'production' })).toThrow(
+      /CLOUD_LLM_DRIVER/,
+    );
+    expect(
+      validateEnv({ ...base, NODE_ENV: 'development' }).CLOUD_LLM_DRIVER,
+    ).toBe('fake');
+  });
+
   it('requires CLOUD_KMS_KEY_ID', () => {
     const config = validConfig();
     delete config.CLOUD_KMS_KEY_ID;

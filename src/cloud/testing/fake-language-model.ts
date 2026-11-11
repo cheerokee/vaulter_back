@@ -38,7 +38,6 @@ export class FakeLanguageModel extends LanguageModel {
     this.script.length = 0;
   }
 
-  // eslint-disable-next-line @typescript-eslint/require-await
   async complete(input: LlmInput): Promise<LlmResult> {
     this.calls.push(structuredClone(input));
     const turn = this.script.shift();

@@ -16,7 +16,6 @@ export const FAKE_EMBEDDING_DIMENSIONS = 768;
 export class FakeEmbedder extends Embedder {
   readonly calls: { count: number; kind: EmbeddingKind }[] = [];
 
-  // eslint-disable-next-line @typescript-eslint/require-await
   async embed(
     texts: readonly string[],
     kind: EmbeddingKind,

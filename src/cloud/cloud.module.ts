@@ -14,6 +14,17 @@ import { CloudServerKeyTypeormEntity } from './infra/db/server-key.entity.js';
 import { ServerKeyTypeormStore } from './infra/db/server-key.store.js';
 import { CloudServerKeyController } from './infra/http/cloud-server-key.controller.js';
 
+export function createLanguageModel(config: ConfigService): LanguageModel {
+  if (config.get<string>('CLOUD_LLM_DRIVER') !== 'fake') {
+    return new BedrockLanguageModel(config);
+  }
+  // Second line of defense (env validation refuses it first): canned answers never reach real customers.
+  if (config.get<string>('NODE_ENV') === 'production') {
+    throw new Error('CLOUD_LLM_DRIVER=fake is not allowed in production');
+  }
+  return new FakeLanguageModel();
+}
+
 /**
  * Active cloud (spec 2026-11-10-active-cloud-design): the cloud reads a space only when it is in `active_cloud`.
  * Depends on the other modules only through what they export; no module imports `cloud`. Task 1: the server key
@@ -31,12 +42,21 @@ import { CloudServerKeyController } from './infra/http/cloud-server-key.controll
       // Driver chosen by CLOUD_LLM_DRIVER: `fake` only for development without Bedrock (e2e override by DI).
       provide: LanguageModel,
       inject: [ConfigService],
-      useFactory: (config: ConfigService): LanguageModel =>
-        config.get<string>('CLOUD_LLM_DRIVER') === 'fake'
-          ? new FakeLanguageModel()
-          : new BedrockLanguageModel(config),
+      useFactory: createLanguageModel,
     },
-    { provide: AiPricing, useFactory: () => new AiPricing() },
+    {
+      // Boot check: every model we may call has a price (an unpriced one would fail only after a billed call).
+      provide: AiPricing,
+      inject: [ConfigService, LanguageModel],
+      useFactory: (config: ConfigService, llm: LanguageModel): AiPricing => {
+        const pricing = new AiPricing();
+        pricing.assertPriced(
+          llm.model,
+          config.getOrThrow<string>('EMBEDDING_MODEL'),
+        );
+        return pricing;
+      },
+    },
   ],
 })
 export class CloudModule {}

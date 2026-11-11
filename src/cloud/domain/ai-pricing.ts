@@ -69,8 +69,19 @@ export class AiPricing {
     > = DEFAULT_PRICE_TABLE,
   ) {}
 
+  has(model: string): boolean {
+    return Object.hasOwn(this.table, model);
+  }
+
+  /** Boot check: a model without a price must stop the app, not fail after a billed call. */
+  assertPriced(...models: string[]): void {
+    for (const m of models) if (!this.has(m)) throw new UnpricedModelError(m);
+  }
+
   private priceOf(model: string): ModelPrice {
-    const price = this.table[model];
+    const price = Object.hasOwn(this.table, model)
+      ? this.table[model]
+      : undefined;
     if (!price) throw new UnpricedModelError(model);
     return price;
   }

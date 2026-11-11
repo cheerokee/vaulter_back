@@ -11,6 +11,21 @@ export interface EmbeddingResult {
 }
 
 /**
+ * The embedding service failed or answered something unusable. `retryable`: worth retrying later (network error,
+ * timeout, 5xx, 429); false for a bad request or an answer that does not match what we asked (wrong shape or
+ * dimensions). Never carries the texts.
+ */
+export class EmbeddingServiceError extends Error {
+  constructor(
+    readonly retryable: boolean,
+    readonly reason: string,
+  ) {
+    super(`embedding service failed: ${reason}`);
+    this.name = 'EmbeddingServiceError';
+  }
+}
+
+/**
  * Text embeddings for the active cloud (same model as the Hub: `nomic-embed-text`, 768 dimensions).
  *
  * `kind` says whether a text is a chunk to index or a search query. TODAY BOTH KINDS GET THE SAME TREATMENT: the Hub

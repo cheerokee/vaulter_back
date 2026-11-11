@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import {
   Embedder,
+  EmbeddingServiceError,
   type EmbeddingKind,
   type EmbeddingResult,
 } from '../../application/ports/embedder.js';
@@ -10,14 +11,6 @@ export const EMBEDDING_DIMENSIONS = 768;
 /** Texts per request to the service (chunks are ~800 chars; keeps a request small and its failure cheap to retry). */
 export const EMBEDDING_BATCH_SIZE = 32;
 export const EMBEDDING_TIMEOUT_MS = 120_000;
-
-/** The embedding service failed or answered something unusable. Never carries the texts. */
-export class EmbeddingServiceError extends Error {
-  constructor(reason: string) {
-    super(`embedding service failed: ${reason}`);
-    this.name = 'EmbeddingServiceError';
-  }
-}
 
 /**
  * `Embedder` over Ollama's `POST /api/embed` (service `embeddings` of the compose; version and model pinned there).
@@ -70,21 +63,33 @@ export class OllamaEmbedder extends Embedder {
       response = await this.fetchFn(`${this.baseUrl}/api/embed`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ model: this.model, input: batch }),
+        // truncate: false -> an over-long text is a 400 (permanent), never silently cut.
+        body: JSON.stringify({
+          model: this.model,
+          input: batch,
+          truncate: false,
+        }),
         signal: AbortSignal.timeout(EMBEDDING_TIMEOUT_MS),
       });
     } catch (err) {
+      // Network error, abort or timeout: the service may just be starting or busy.
       throw new EmbeddingServiceError(
+        true,
         err instanceof Error ? err.name : 'request failed',
       );
     }
     if (!response.ok) {
-      throw new EmbeddingServiceError(`status ${response.status}`);
+      throw new EmbeddingServiceError(
+        response.status >= 500 || response.status === 429,
+        `status ${response.status}`,
+      );
     }
-    const body = (await response.json()) as {
-      embeddings?: unknown;
-      prompt_eval_count?: unknown;
-    };
+    let body: { embeddings?: unknown; prompt_eval_count?: unknown };
+    try {
+      body = (await response.json()) as typeof body;
+    } catch {
+      throw new EmbeddingServiceError(false, 'response is not JSON');
+    }
     const vectors = body.embeddings;
     if (
       !Array.isArray(vectors) ||
@@ -96,7 +101,7 @@ export class OllamaEmbedder extends Embedder {
           v.every((x) => typeof x === 'number' && Number.isFinite(x)),
       )
     ) {
-      throw new EmbeddingServiceError('unexpected response shape');
+      throw new EmbeddingServiceError(false, 'unexpected response shape');
     }
     const reported = body.prompt_eval_count;
     const inputTokens =

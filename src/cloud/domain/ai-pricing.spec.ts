@@ -48,4 +48,18 @@ describe('AiPricing', () => {
       pricing.costMicroUsd({ inputTokens: 1.5, outputTokens: 0 }, 'm'),
     ).toThrow(RangeError);
   });
+
+  it('only knows own entries (no prototype lookups) and asserts at boot', () => {
+    expect(pricing.has('m')).toBe(true);
+    for (const k of ['constructor', '__proto__', 'toString']) {
+      expect(pricing.has(k)).toBe(false);
+      expect(() =>
+        pricing.costMicroUsd({ inputTokens: 1, outputTokens: 0 }, k),
+      ).toThrow(UnpricedModelError);
+    }
+    expect(() => pricing.assertPriced('m')).not.toThrow();
+    expect(() => pricing.assertPriced('m', 'other')).toThrow(
+      UnpricedModelError,
+    );
+  });
 });

@@ -166,4 +166,54 @@ describe('BedrockLanguageModel', () => {
       expect(out.usage).toEqual({ inputTokens: 0, outputTokens: 0 });
     }
   });
+
+  it('refuses a history with tool blocks when no tools are passed, before any call', async () => {
+    const { llm, client } = model(() => ({}));
+    const err = await llm
+      .complete({
+        system: 's',
+        messages: [
+          {
+            role: 'user',
+            content: [{ type: 'tool_result', toolUseId: 't', content: 'ok' }],
+          },
+        ],
+        maxTokens: 1,
+      })
+      .catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(LanguageModelError);
+    expect((err as LanguageModelError).retryable).toBe(false);
+    expect(client.send).not.toHaveBeenCalled();
+  });
+
+  it('omits an empty system prompt', async () => {
+    const { llm, client } = model(() => ({
+      output: { message: { role: 'assistant', content: [] } },
+      usage: {},
+    }));
+    await llm.complete({
+      system: '',
+      messages: [{ role: 'user', content: 'oi' }],
+      maxTokens: 1,
+    });
+    expect(client.send.mock.calls[0]![0].input.system).toBeUndefined();
+  });
+
+  it('treats network errors and 5xx as retryable', async () => {
+    const make = (props: Record<string, unknown>) => () => {
+      throw Object.assign(new Error('x'), props);
+    };
+    for (const [props, retryable] of [
+      [{ code: 'ECONNRESET' }, true],
+      [{ name: 'NetworkingError' }, true],
+      [{ $metadata: { httpStatusCode: 503 } }, true],
+      [{ $metadata: { httpStatusCode: 400 } }, false],
+    ] as const) {
+      const { llm } = model(make(props));
+      const err = await llm
+        .complete({ system: 's', messages: [], maxTokens: 1 })
+        .catch((e: unknown) => e);
+      expect((err as LanguageModelError).retryable).toBe(retryable);
+    }
+  });
 });

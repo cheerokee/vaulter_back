@@ -17,7 +17,18 @@ import {
   type LlmStopReason,
 } from '../../application/ports/language-model.js';
 
+const RETRYABLE_CODES = new Set([
+  'ECONNRESET',
+  'ECONNREFUSED',
+  'ETIMEDOUT',
+  'EPIPE',
+  'EAI_AGAIN',
+  'ENOTFOUND',
+]);
+
 const RETRYABLE_ERRORS = new Set([
+  'NetworkingError',
+  'RequestTimeout',
   'ThrottlingException',
   'ServiceUnavailableException',
   'InternalServerException',
@@ -45,6 +56,8 @@ export class BedrockLanguageModel
       client ??
       new BedrockRuntimeClient({
         region: config.getOrThrow<string>('AWS_REGION'),
+        // A hung socket must not hold a job worker forever.
+        requestHandler: { requestTimeout: 120_000, connectionTimeout: 10_000 },
         // No AWS_ENDPOINT_URL: that one points at LocalStack, which has no Bedrock. Default credential chain (IAM
         // role in production; AWS_* variables of the process in a dev who tries the real model).
       });
@@ -55,12 +68,17 @@ export class BedrockLanguageModel
   }
 
   async complete(input: LlmInput): Promise<LlmResult> {
+    const hasTools = (input.tools?.length ?? 0) > 0;
+    // Converse rejects tool blocks in the history without a `toolConfig`: the caller repeats the tools on every turn.
+    if (!hasTools && input.messages.some(hasToolBlocks)) {
+      throw new LanguageModelError(false, 'tool-history-requires-tools');
+    }
     let out: ConverseCommandOutput;
     try {
       out = (await this.client.send(
         new ConverseCommand({
           modelId: this.model,
-          system: [{ text: input.system }],
+          system: input.system ? [{ text: input.system }] : undefined,
           messages: input.messages.map(toBedrockMessage),
           inferenceConfig: { maxTokens: input.maxTokens },
           toolConfig:
@@ -82,7 +100,7 @@ export class BedrockLanguageModel
     } catch (err) {
       // Only the error class name: the message of a failed call can echo request details.
       const name = err instanceof Error ? err.name : 'UnknownError';
-      throw new LanguageModelError(RETRYABLE_ERRORS.has(name), name);
+      throw new LanguageModelError(isRetryable(err, name), name);
     }
 
     const blocks = out.output?.message?.content ?? [];
@@ -157,4 +175,22 @@ function toBedrockBlock(block: LlmContentBlock): ContentBlock {
         },
       };
   }
+}
+
+function hasToolBlocks(message: LlmMessage): boolean {
+  return (
+    typeof message.content !== 'string' &&
+    message.content.some((b) => b.type !== 'text')
+  );
+}
+
+function isRetryable(err: unknown, name: string): boolean {
+  if (RETRYABLE_ERRORS.has(name)) return true;
+  const e = err as {
+    code?: unknown;
+    $metadata?: { httpStatusCode?: number };
+  } | null;
+  if (typeof e?.code === 'string' && RETRYABLE_CODES.has(e.code)) return true;
+  const status = e?.$metadata?.httpStatusCode;
+  return typeof status === 'number' && (status >= 500 || status === 429);
 }
