@@ -28,6 +28,7 @@ import {
 import {
   ANSWER_TEXT_MAX_BYTES,
   answerIdFor,
+  CLOUD_GIVE_UP_RETRY_AFTER_MS,
   budgetNoticeIdFor,
   DOCUMENT_MAX_BYTES,
   DOCUMENT_TITLE_MAX_CHARS,
@@ -54,6 +55,7 @@ import {
   type LlmToolCall,
 } from '../ports/language-model.js';
 import { ServerKeyring } from '../ports/server-keyring.js';
+import type { JobContext } from '../../../shared/application/job-queue.js';
 import {
   ANTARES_CLOUD_PROMPT_VERSION,
   antaresCloudSystemPrompt,
@@ -135,12 +137,51 @@ export class AnswerConversationJob {
     private readonly clock: ResponderClock,
   ) {}
 
-  async run(payload: AnswerConversationPayload): Promise<void> {
-    for (let n = 0; n < RESPONDER_MAX_MESSAGES_PER_RUN; n++) {
-      if ((await this.step(payload)) === 'stop') return;
+  /**
+   * `job.lastAttempt`: no pg-boss retry follows a failure of this run. A retryable failure (embeddings, model, KMS...)
+   * then gives the message the cloud holds back (`CloudConversationExecutor.release`: pending again, the Hub's 30 s
+   * restart and its ack works) and schedules a fresh look at the conversation in `CLOUD_GIVE_UP_RETRY_AFTER_MS`; the
+   * error still fails this job.
+   */
+  async run(
+    payload: AnswerConversationPayload,
+    job?: Pick<JobContext, 'lastAttempt'>,
+  ): Promise<void> {
+    try {
+      for (let n = 0; n < RESPONDER_MAX_MESSAGES_PER_RUN; n++) {
+        if ((await this.step(payload)) === 'stop') return;
+      }
+      // More to do: a fresh job (keeps one run bounded).
+      await this.queue.now(payload);
+    } catch (error) {
+      if (job?.lastAttempt) await this.giveUp(payload);
+      throw error;
     }
-    // More to do: a fresh job (keeps one run bounded).
-    await this.queue.now(payload);
+  }
+
+  /** Retries exhausted: the held message goes back to pending and the conversation is looked at again later. */
+  private async giveUp(p: AnswerConversationPayload): Promise<void> {
+    try {
+      const released = await this.executor.release(
+        p.organizationId,
+        p.spaceId,
+        p.conversationId,
+      );
+      await this.queue.later(p, CLOUD_GIVE_UP_RETRY_AFTER_MS / 1000);
+      this.logger.warn(
+        { ...p, released: released.length },
+        'cloud answer given up: message back to pending',
+      );
+    } catch (error) {
+      // The original failure is what the job reports; this one only by its type (never a message).
+      this.logger.warn(
+        {
+          ...p,
+          error: error instanceof DomainError ? error.code : 'unknown',
+        },
+        'cloud answer: give-up failed',
+      );
+    }
   }
 
   private async step(p: AnswerConversationPayload): Promise<StepOutcome> {

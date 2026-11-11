@@ -992,7 +992,9 @@ registra a fonte `conversations`), `hubs` (`HubDirectory`: `ownerOf`,
   sem resposta, para o job que caiu entre o ack e a resposta retomar, `send` como autor nuvem) e o sinal
   `CloudReservePendingHooks` (mensagem `pending` num assunto com reserva: enviada, devolvida à fila, reserva ligada,
   troca de chave feita, "responder pela nuvem" ligado; `immediate` = sem os 30 s do Hub), emitido dentro do unit of
-  work. O ack do Hub numa mensagem já pega pela nuvem: 404 `message-not-found`. O Hub lê a pública do servidor em
+  work. O ack do Hub numa mensagem já pega pela nuvem: 404 `message-not-found`, até a nuvem devolvê-la
+  (`CloudConversationExecutor.release`: tentativas da resposta esgotadas -> `requeueAckedBy` da nuvem, `pending` com
+  `requeued_at` novo, o Hub ganha de novo os 30 s e o ack dele volta a valer). O Hub lê a pública do servidor em
   `GET /hub/cloud/server-key`. "Respondida pela nuvem" = mensagem da nuvem depois do **ack da nuvem** (`acked_at`; a nuvem
   responde uma de cada vez), não depois do `sent_at` (como no Hub): vale para o ack idempotente e para o `requeueAckedBy`.
   `send(..., answering)` reconfere sob a trava do assunto que a pergunta ainda é da nuvem (409 `cloud-answer-not-owned`).
@@ -1226,8 +1228,12 @@ registra a fonte `conversations`), `hubs` (`HubDirectory`: `ownerOf`,
   (**folha**, numa transação curta própria; acerto = reserva -> uso do mês, sem a organização); resposta = a do
   `CloudConversationExecutor` (espaço `FOR SHARE` -> assunto `FOR NO KEY UPDATE`); documento = as travas do backup
   (`ServerBackupWriter`, guarda sob a trava do espaço). **Nenhuma chamada de rede (KMS na abertura fria, embeddings,
-  Bedrock, S3 de leitura) segura transação**, exceto a abertura da cópia ao ligar/trocar a chave (KMS só num processo
-  frio, com o espaço travado; aceito).
+  Bedrock, S3 de leitura) segura transação.** As cópias para a chave do servidor conferidas sob trava (ligar, troca de
+  chave do espaço, criar/trocar a chave/ligar a reserva de um assunto) abrem da memória: o caso de uso chama
+  `ServerKeyring.prepare()` (ou `ServerKeyCopyCheck.prepare()`, de fora do `cloud`) **antes** do `uow.run`, e o KMS roda
+  ali. Exceção residual (aceita, documentada no `KmsServerKeyring`): uma chave criada/aposentada por outra instância entre
+  o `prepare` e a transação faz a abertura reler as linhas na conexão de quem chama e chamar o KMS sob a transação, uma
+  vez por chave e processo.
 - **RLS e contextos:** tabelas da nuvem por `app.organization_id`; a nuvem como executor dos assuntos usa o contexto
   `app.cloud_executor` = UM espaço (ator `{ kind: 'cloud', spaceId }`; veja "Nuvem de reserva" em `conversations`); a
   busca no índice e a leitura do backup rodam no escopo da organização do espaço, sempre filtradas pelo `spaceId`.
@@ -1239,14 +1245,17 @@ registra a fonte `conversations`), `hubs` (`HubDirectory`: `ownerOf`,
   sob trava e não grava. Retentativas do padrão do `JobQueue` (3, de 30 s até 600 s, 15 min de expiração).
 - **Chave do servidor** (`ServerKeyring`, `application/ports/server-keyring.ts`; `KmsServerKeyring` em `infra/crypto/`):
   par X25519 numa linha de `cloud_server_keys` (dado do servidor: sem organização nem RLS), privada **só cifrada pelo
-  KMS** (`CLOUD_KMS_KEY_ID`, contexto `{ purpose: 'server-x25519-private-key-v1', publicKey }`), gerada no primeiro uso
-  (advisory lock entre instâncias), aberta em memória num campo privado, conferida contra a pública e apagada
+  KMS** (`CLOUD_KMS_KEY_ID`, contexto `{ purpose: 'server-x25519-private-key-v1', publicKey }`), **criada só por
+  `publicKey()` fora de unit of work** (a rota `GET /cloud/server-key`), numa transação curta própria confirmada ANTES de
+  ser entregue ou guardada em memória (advisory lock entre instâncias; dentro de um `uow.run` criar lança erro de
+  programação: nunca uma chave "fantasma" de uma transação desfeita, nem uma segunda conexão do pool). `openSealed` e
+  `prepare` **nunca criam** chave (uma cópia só pode ter sido selada para uma chave já entregue). Aberta em memória num campo privado, conferida contra a pública e apagada
   (`memzero`) no `onApplicationShutdown`. KMS que recusa = erro, **nunca** um par novo. O runtime só pode mudar `retired_at`.
   `openSealed(copy)` abre `0x01 ‖ crypto_box_seal` (108 chars; atual, depois as aposentadas) e devolve os 32 bytes (quem
   chama apaga); malformada ou que não abre: o mesmo 422 `server-copy-invalid`. **Rotação** (vale com várias instâncias rodando): material
   da chave KMS = rotação automática do KMS (transparente); par novo = `retired_at` na linha atual. Cada instância relê qual
-  é a atual a cada `SERVER_KEY_CURRENT_TTL_MS` (60 s; a primeira a reler cria o par novo, sob o advisory lock), então em
-  até 60 s todas entregam a pública nova; uma cópia que não abre com as chaves em memória relê as linhas e abre as que
+  é a atual a cada `SERVER_KEY_CURRENT_TTL_MS` (60 s; o próximo `GET /cloud/server-key` numa instância que releu cria o
+  par novo, sob o advisory lock), então em até 60 s todas entregam a pública nova; uma cópia que não abre com as chaves em memória relê as linhas e abre as que
   faltam, então a cópia selada para o par novo abre na hora em qualquer instância. As cópias do par aposentado continuam
   abrindo até a nuvem reselar para a pública nova. `GET /cloud/server-key` -> `{ publicKey }` (qualquer
   usuário autenticado). e2e em `test/cloud/` (KMS do LocalStack).
@@ -1285,7 +1294,10 @@ registra a fonte `conversations`), `hubs` (`HubDirectory`: `ownerOf`,
   fila é registrada ali; `cancelQueued(fila, { spaceId })`), encerra o ciclo (lápide em `cloud_space_activations`, com
   quem desligou), volta a `encrypted_backup` e roda `SpaceCloudDeactivatedHooks` (os assuntos do espaço perdem a nuvem
   de reserva: veja "Nuvem de reserva" no módulo `conversations`). `GET /spaces/:spaceId/cloud` (membro ou quem decide) -> `state`
-  `off|authorized|active`. Auditoria: `organization.cloud_terms.accepted`, `space.cloud.authorized|activated|deactivated`
+  `off|authorized|active`. **Sessão aberta por um Hub** (`POST /hub/user-sessions`, `hubId` no `AuthContext`) nunca
+  decide: aceitar o termo, autorizar, ligar e desligar dão o mesmo 404 de quem está fora (`organization-not-found` /
+  `space-not-found`, `refuseHubSession`, antes de qualquer leitura; o padrão dos assuntos para o que a sessão de Hub não
+  alcança); ler o estado e o termo continua permitido. Auditoria: `organization.cloud_terms.accepted`, `space.cloud.authorized|activated|deactivated`
   (só ids, versões e contagens). Travas: espaço `FOR UPDATE` -> ciclo vivo `FOR UPDATE` -> cópias -> trechos -> arquivos.
 - **Indexação** (spec §4.2; contrato do manifesto `docs/hubs/space-manifest.md`, com o vetor do UUID v5;
   `application/indexing/`): duas filas do pg-boss registradas em `CloudSpaceJobs` (`cloud.index-space`, uma por espaço
@@ -1299,7 +1311,8 @@ registra a fonte `conversations`), `hubs` (`HubDirectory`: `ownerOf`,
   cópias do servidor abertas sob demanda e apagadas no fim), extrai **numa thread** (`WorkerTextExtractor`, piscina, uma
   thread, worker `text-extraction.worker.ts` só com TypeScript apagável e sem imports relativos; 60 s e 1 GiB de heap;
   unpdf, fflate + htmlparser2 para docx/xlsx com limites contra zip bomb, htmlparser2, UTF-8; tempo/memória/falha =
-  `skipped` `unreadable`, terminal até versão nova; formato desconhecido = `skipped` `unsupported-format`; registro só
+  `skipped` `unreadable`, terminal até versão nova; cortada pelo processo (pool destruído no desligamento, sinal do job
+  abortado) = `TextExtractionAbortedError` -> `IndexingAbortedError`, o arquivo fica `pending` e é tentado de novo; formato desconhecido = `skipped` `unsupported-format`; registro só
   de ids, tipo conhecido e motivo, nunca o nome), divide como o Hub (`chunkText`: 800/80, sem sobreposição) e calcula embeddings em lotes de
   32 pelo `IndexingCostMeter` (porta; `BudgetIndexingCostMeter`: cada arquivo reserva o custo do arquivo inteiro antes do
   primeiro lote, renova a cada lote e acerta uma vez; recusado = o arquivo não começa e fica `pending`, veja "Orçamento de IA"). Tabelas `cloud_files` (nome/tipo/caminho: LEGÍVEIS) e `cloud_chunks`
@@ -1344,6 +1357,11 @@ registra a fonte `conversations`), `hubs` (`HubDirectory`: `ownerOf`,
   pelo sinal `CloudReservePendingHooks` (mensagem nova ou devolvida à fila: 30 s, `CLOUD_FALLBACK_AFTER_MS`, contados do
   `sentAt` ou do `requeuedAt`, no relógio do BANCO; "responder pela nuvem", sem Hub executor ou outro motivo: olha na
   hora). Aviso ou resposta que não sai (espaço cheio...) = a execução para (nunca laço; o próximo sinal tenta uma vez).
+  **Tentativas esgotadas** (falha retentável: embeddings, modelo, KMS; o pg-boss tenta 3 vezes): na última
+  (`JobContext.lastAttempt`) a nuvem **devolve** a mensagem que segurava (`CloudConversationExecutor.release`: volta a
+  `pending`, `requeued_at` = agora, o Hub ganha de novo os 30 s e o ack dele vale) e agenda outra olhada no assunto em
+  `CLOUD_GIVE_UP_RETRY_AFTER_MS` (10 min); a tarefa ainda falha (registro só com o tipo do erro). Nunca fica presa
+  como da nuvem: ou o Hub pega, ou a nuvem tenta de novo depois da janela dele.
   `AnswerConversationJob` responde **em ordem** (`nextResponderStep`: termina antes a que a própria nuvem pegou; uma
   mensagem ainda do Hub = reagenda para a hora certa): leitura curta (`CloudConversationExecutor.read`) -> orçamento
   (`AiBudget.tryReserve`; recusado = a mensagem fica `pending` para o Hub e o assunto recebe UM aviso fixo por fila,
@@ -1543,12 +1561,12 @@ Os valores do `.env.example` para os segredos são **só de desenvolvimento**; p
   - **Limites conhecidos:** troca do modelo de embedding sem reindexação automática (o modelo fica gravado em cada
     arquivo e trecho; falta uma passada que marque tudo `pending`); arquivo com falha permanente não terminal (sha256 do
     bucket diferente do índice, embedding fora do ar) fica `pending` e é tentado de novo a cada passada; a passada
-    inicial de um espaço enorme enfileira um job por arquivo; um arquivo em extração no desligamento do processo pode
-    virar `unreadable` até a próxima versão; resposta que não pode ser entregue por motivo permanente depois de o modelo
-    rodar (ex.: espaço cheio) é paga de novo a cada sinal seguinte do assunto (uma tentativa por sinal, sem laço);
-    instância que cai segurando uma tarefa com chave bloqueia a chave até a expiração (15 min); sessões abertas por um Hub
-    ainda conseguem aceitar o termo e autorizar/ligar/desligar (decisão: devem ser recusadas, falta a trava); não há rota
-    para mudar `spaces.allow_online_llm` (padrão `true`; autorizar exige `true`); a confirmação do documento por texto
+    inicial de um espaço enorme enfileira um job por arquivo; resposta que não pode ser entregue por motivo permanente
+    depois de o modelo rodar (ex.: espaço cheio) é paga de novo a cada sinal seguinte do assunto (uma tentativa por
+    sinal, sem laço); instância que cai segurando uma tarefa com chave bloqueia a chave até a expiração (15 min); com
+    embeddings/modelo fora do ar por muito tempo, a nuvem devolve a mensagem e olha de novo a cada 10 min (cada rodada
+    são 3 tentativas; as que chegam ao modelo são pagas); o desligar roda todos os assuntos do espaço numa transação e o
+    COMMIT dela segura o advisory lock dos assuntos (mesmo custo das cascatas documentadas); não há rota para mudar `spaces.allow_online_llm` (padrão `true`; autorizar exige `true`); a confirmação do documento por texto
     livre depende do julgamento do modelo (o botão `documentDecision` é a forma segura); o documento grava só no espaço
     do assunto (gravar num espaço mais restrito é conselho, a pessoa faz).
 - **Agendar `npm run conversations:retention`** (1x por dia, fora da aplicação, ANTES do `storage:reconcile`, que

@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import type { Actor } from '../../identity/application/dto/actor.js';
 import { AuditLog } from '../../organizations/application/audit-log.js';
+import { ServerKeyCopyCheck } from '../../shared/application/server-key-copy-check.js';
 import { SpaceKeyRotatedHooks } from '../../shared/application/space-key-rotated-hooks.js';
 import { UnitOfWork } from '../../shared/infra/db/unit-of-work.js';
 import { KeyRotationRules } from '../domain/key-rotation.js';
@@ -50,6 +51,7 @@ export class RotateSpaceKeyUseCase {
     private readonly audit: AuditLog,
     private readonly rotated: SpaceKeyRotatedHooks,
     private readonly uow: UnitOfWork,
+    private readonly serverCopies: ServerKeyCopyCheck,
   ) {}
 
   async execute(
@@ -65,6 +67,8 @@ export class RotateSpaceKeyUseCase {
       ...input.grants.map((g) => g.wrappedKey),
       ...input.hubGrants.map((g) => g.wrappedKey),
     ]);
+    // The `cloud` hook checks the server copy under the space lock: load the server keys (KMS) before it.
+    if (serverWrappedKey !== null) await this.serverCopies.prepare();
     return this.uow.run(async () => {
       const { space, roleKey } = await this.access.lockAsMember(
         spaceId,

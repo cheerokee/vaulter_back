@@ -16,6 +16,8 @@ const BASE_KEYS = [
   'newKdfParams',
   'wrappedKey',
   'recoveryWrappedKey',
+  'serverWrappedKey',
+  'hubWrappedKey',
   'accessToken',
   'refreshToken',
   'authorization',

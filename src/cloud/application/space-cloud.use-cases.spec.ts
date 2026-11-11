@@ -121,6 +121,7 @@ function setup() {
   };
   const keyring = {
     publicKey: vi.fn(),
+    prepare: vi.fn(t('keyring.prepare', async () => undefined)),
     openSealed: vi.fn(async (c: string) => {
       if (c === 'x'.repeat(108)) throw sealedCopyInvalid();
       const key = new Uint8Array(32).fill(7);
@@ -364,7 +365,9 @@ describe('ActivateSpaceCloudUseCase', () => {
       keyVersion: 2,
       wrappedKey: copy(2),
     });
-    expect(k.trace.slice(0, 2)).toEqual([
+    // The server keys are loaded (KMS) before the unit of work, never under the space lock.
+    expect(k.trace.slice(0, 3)).toEqual([
+      'keyring.prepare',
       'access.lockAsManager',
       'activations.lockLive',
     ]);
@@ -594,5 +597,80 @@ describe('CloudSpaceJobs', () => {
       ['cloud.b', { spaceId: SPACE }],
     ]);
     expect(() => k.jobs.register('Bad Name')).toThrow();
+  });
+});
+
+describe('a session opened through a Hub never decides about the cloud', () => {
+  const hubActor = (userId: string) => ({
+    userId,
+    sessionId: 's',
+    hubId: '019a0000-0000-7000-8000-0000000000d1',
+  });
+
+  it('accepting the term: the same 404 as a non-member, nothing read or written', async () => {
+    const k = setup();
+    const uc = new AcceptCloudTermsUseCase(
+      k.deps.orgAccess,
+      k.deps.terms,
+      k.deps.acceptances,
+      k.deps.audit,
+      k.deps.uow,
+    );
+    await expect(
+      uc.execute(hubActor(ADMIN), ORG, { version: 1, hash: HASH, ip: null }),
+    ).rejects.toMatchObject({ code: 'organization-not-found' });
+    expect(k.orgAccess.requirePermission).not.toHaveBeenCalled();
+    expect(k.acceptances.acceptOnce).not.toHaveBeenCalled();
+  });
+
+  it('authorize, activate and switch off: the same 404 space-not-found, before any lock', async () => {
+    const k = setup();
+    const authorize = new AuthorizeSpaceCloudUseCase(
+      k.deps.access,
+      k.deps.terms,
+      k.deps.acceptances,
+      k.deps.activations,
+      k.deps.audit,
+      k.deps.uow,
+      k.deps.directory,
+    );
+    const activate = new ActivateSpaceCloudUseCase(
+      k.deps.access,
+      k.deps.spaceCloud,
+      k.deps.terms,
+      k.deps.acceptances,
+      k.deps.activations,
+      k.deps.grants,
+      k.deps.keyring,
+      k.deps.audit,
+      k.deps.uow,
+      k.deps.indexing,
+    );
+    const deactivate = new DeactivateSpaceCloudUseCase(
+      k.deps.access,
+      k.deps.spaceCloud,
+      k.deps.activations,
+      k.deps.grants,
+      k.jobs,
+      k.deps.audit,
+      k.deps.uow,
+      k.deps.files,
+      k.deps.chunks,
+      new SpaceCloudDeactivatedHooks(),
+    );
+    const notFound = { code: 'space-not-found' };
+    await expect(
+      authorize.execute(hubActor(ADMIN), SPACE),
+    ).rejects.toMatchObject(notFound);
+    await expect(
+      activate.execute(hubActor(MANAGER), SPACE, {
+        serverGrants: [{ version: 1, wrappedKey: copy(1) }],
+      }),
+    ).rejects.toMatchObject(notFound);
+    await expect(
+      deactivate.execute(hubActor(MANAGER), SPACE),
+    ).rejects.toMatchObject(notFound);
+    expect(k.trace).toEqual([]);
+    expect(k.uow.run).not.toHaveBeenCalled();
   });
 });

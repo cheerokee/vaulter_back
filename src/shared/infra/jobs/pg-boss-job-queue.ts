@@ -271,6 +271,8 @@ export class PgBossJobQueue
       await handler(job.data, {
         id: job.id,
         retryCount: job.retryCount,
+        // Every queue is created with JOB_QUEUE_DEFAULTS (ensureQueue): its retry limit is that one.
+        lastAttempt: job.retryCount >= (JOB_QUEUE_DEFAULTS.retryLimit ?? 0),
         signal: job.signal,
       });
     } catch (error) {
@@ -313,7 +315,7 @@ export class PgBossJobQueue
       const policy = this.keyed.has(name) ? 'stately' : 'standard';
       // Idempotent (ON CONFLICT DO NOTHING); autocommit on the pg-boss pool, outside any unit of work. The policy is
       // fixed at creation (pg-boss refuses to change it): a queue created with another one fails loudly (a migration
-      // moves existing queues, e.g. ConversationCloudAnswer for the cloud's keyed queues).
+      // moves existing queues, e.g. CloudKeyedJobQueues for the cloud's keyed queues).
       created = (async () => {
         await boss.createQueue(name, { ...JOB_QUEUE_DEFAULTS, policy });
         const queue = await boss.getQueue(name);

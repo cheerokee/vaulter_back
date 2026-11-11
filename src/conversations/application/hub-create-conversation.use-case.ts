@@ -85,7 +85,7 @@ export class HubCreateConversationUseCase {
     private readonly reserve: ConversationCloudReserve,
   ) {}
 
-  execute(
+  async execute(
     hub: HubAuthContext,
     input: HubCreateConversationInput,
   ): Promise<{ view: ConversationView; created: boolean }> {
@@ -111,6 +111,10 @@ export class HubCreateConversationUseCase {
       );
     }
     assertParticipantCapacity(0, participantIds.length);
+    // KMS (server keys) before the transaction, never under its locks.
+    await this.reserve.prepareServerCopies(
+      serverWrappedKey !== null ? [serverWrappedKey] : [],
+    );
     return this.uow.run(async () => {
       await this.uow.setContext({ hubId });
       const organizationId = await this.hubs.installedSpaceOrganization(

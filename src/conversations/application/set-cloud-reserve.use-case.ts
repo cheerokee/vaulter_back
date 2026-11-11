@@ -46,7 +46,7 @@ export class SetCloudReserveUseCase {
     private readonly uow: UnitOfWork,
   ) {}
 
-  execute(
+  async execute(
     actor: Actor,
     spaceId: string,
     conversationId: string,
@@ -62,6 +62,10 @@ export class SetCloudReserveUseCase {
     for (const g of input.serverGrants) {
       assertWrappedConversationKey(g.wrappedKey);
     }
+    // KMS (server keys) before the transaction, never under its locks.
+    await this.reserve.prepareServerCopies(
+      input.serverGrants.map((g) => g.wrappedKey),
+    );
     return this.uow.run(async () => {
       await this.uow.setContext({ userId });
       const scope = await this.access.userScope(spaceId, actor);

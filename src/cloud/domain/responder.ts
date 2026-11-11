@@ -57,6 +57,13 @@ export function derivedV7(base: string, label: string): string {
   return stringify(out);
 }
 
+/**
+ * When an answer job runs out of retries (embeddings or model down), the cloud gives the message back (`pending`, the
+ * Hub's 30 s window restarts) and looks at the conversation again this much later: eventual completion by the Hub or
+ * by the cloud, never a message stuck as the cloud's.
+ */
+export const CLOUD_GIVE_UP_RETRY_AFTER_MS = 10 * 60_000;
+
 /** The cloud's answer to a person's message. */
 export const answerIdFor = (messageId: string) =>
   derivedV7(messageId, 'cloud-answer');

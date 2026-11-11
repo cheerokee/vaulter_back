@@ -40,6 +40,8 @@ export interface JobContext {
   readonly id: string;
   /** 0 on the first attempt. */
   readonly retryCount: number;
+  /** No retry follows if this attempt fails (retries exhausted): a handler that holds something gives it back. */
+  readonly lastAttempt: boolean;
   /** Aborted when the job expires or the worker stops: long handlers should stop early. */
   readonly signal: AbortSignal;
 }

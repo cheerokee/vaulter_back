@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import type { Actor } from '../../identity/application/dto/actor.js';
 import {
   NotFoundError,
   PermissionDeniedError,
@@ -13,6 +14,25 @@ import type { Space } from '../../spaces/domain/space.js';
  * manager (`space.members.manage`, the Gestor, who has the key) sends the server copy and may switch it off too.
  */
 export const CLOUD_DECIDER_PERMISSION = 'org.members.manage' as const;
+
+/**
+ * A session opened through a Hub (`POST /hub/user-sessions`, `actor.hubId` set: a kiosk on someone's shelf) never
+ * decides about the cloud: accepting the term, authorizing, activating and switching off a space's cloud are refused
+ * with the SAME 404 an outsider gets (`organization-not-found` / `space-not-found`), as the conversations do with what
+ * a Hub session cannot reach. Checked first, before any read. Reading the state stays allowed.
+ */
+export function refuseHubSession(actor: Actor, notFound: () => Error): void {
+  if (actor.hubId) throw notFound();
+}
+
+export const spaceNotFound = (): Error =>
+  new NotFoundError('space-not-found', 'The space was not found.');
+
+export const organizationNotFound = (): Error =>
+  new NotFoundError(
+    'organization-not-found',
+    'The organization was not found.',
+  );
 
 // Acesso do módulo `cloud` a um espaço, por cima do `SpaceAccess` (exportado pelo `spaces`). As mutações rodam dentro
 // do UnitOfWork.run e saem com a linha do espaço `FOR UPDATE` (o primeiro lock de toda operação da nuvem num espaço,

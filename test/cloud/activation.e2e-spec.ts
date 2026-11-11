@@ -10,6 +10,7 @@ import {
   resetDatabase,
 } from '../setup/test-app.js';
 import { generateSpaceKey, sealSpaceKey } from '../support/client-crypto.js';
+import { hubClient } from '../support/hub-client.js';
 import {
   setAiBudgetInDb,
   TEST_AI_BUDGET_MICRO_USD,
@@ -26,6 +27,7 @@ const TEST_QUEUE = 'cloud.test-space-job';
 describe('active cloud: term, authorize, switch on, switch off (e2e, real client crypto)', () => {
   let app: INestApplication;
   const c = identityClient(() => app);
+  const h = hubClient(() => app);
   const auth = (u: KeyedUser) => c.bearer(u.token);
 
   /** Every version (keys[i] = version i + 1) sealed for the server key, as the manager's app does. */
@@ -262,6 +264,53 @@ describe('active cloud: term, authorize, switch on, switch off (e2e, real client
         [spaceId],
       );
       expect(n).toBe(0);
+    });
+
+    it('a session opened through a Hub never decides: accept, authorize, switch on and off are the 404 of an outsider', async () => {
+      // Ana (admin and manager of the space) logs in on her own Hub: a kiosk session bound to it.
+      const hub = await h.onboard(ana.token, 'Hub da Ana');
+      const hubToken = await h.authenticate(hub);
+      const kiosk = (
+        await expectStatus(
+          h.loginPerson(hubToken, ana.email, ana.account.authProof),
+          200,
+        )
+      ).body.session as { accessToken: string };
+      const viaHub: KeyedUser = { ...ana, token: kiosk.accessToken };
+      const cur = (await expectStatus(terms(viaHub, orgId), 200)).body.current;
+
+      const refused = async (
+        res: Promise<{ status: number; body: { type?: string } }>,
+        code: string,
+      ) => {
+        const r = await res;
+        expect(r.status).toBe(404);
+        expect(String(r.body.type)).toMatch(new RegExp(`/${code}$`));
+      };
+      await refused(
+        accept(viaHub, orgId, cur.version, cur.hash),
+        'organization-not-found',
+      );
+      await refused(authorize(viaHub, spaceId), 'space-not-found');
+      await refused(
+        activate(viaHub, spaceId, await serverGrants(ana, keys)),
+        'space-not-found',
+      );
+      await refused(deactivate(viaHub, spaceId), 'space-not-found');
+
+      // Nothing changed: still authorized (not active, not cancelled), nothing audited, no server copy.
+      expect(
+        (await expectStatus(cloudState(ana, spaceId), 200)).body.state,
+      ).toBe('authorized');
+      expect(await auditActions(orgId)).toEqual([
+        'organization.cloud_terms.accepted',
+        'space.cloud.authorized',
+      ]);
+      expect(
+        await db(`SELECT 1 FROM cloud_space_key_grants WHERE space_id = $1`, [
+          spaceId,
+        ]),
+      ).toEqual([]);
     });
 
     it('the manager switches on: the server holds a copy that opens to the space key; every member sees the cloud', async () => {

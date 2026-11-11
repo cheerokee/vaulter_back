@@ -11,6 +11,11 @@ function activeManager(dataSource: DataSource): EntityManager | undefined {
   return manager?.connection === dataSource ? manager : undefined;
 }
 
+/** Whether a unit of work (`run`) is open on this DataSource in the current async context. */
+export function hasActiveTransaction(dataSource: DataSource): boolean {
+  return activeManager(dataSource) !== undefined;
+}
+
 // Manager que os repositórios devem usar em cada operação: o da transação ativa, se houver, ou o
 // `dataSource.manager` (cada comando em autocommit, como antes). Nunca guardar o Repository em campo.
 export function currentManager(dataSource: DataSource): EntityManager {

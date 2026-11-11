@@ -1,6 +1,7 @@
 import type { INestApplication } from '@nestjs/common';
 import sodium from 'libsodium-wrappers-sumo';
 import { ServerKeyring } from '../../src/cloud/application/ports/server-keyring.js';
+import { UnitOfWork } from '../../src/shared/infra/db/unit-of-work.js';
 import {
   adminDataSource,
   createTestApp,
@@ -34,6 +35,59 @@ describe('cloud server key (e2e, KMS on LocalStack)', () => {
 
   it('GET /cloud/server-key needs a user token', async () => {
     await c.http().get('/cloud/server-key').expect(401);
+  });
+
+  it('no phantom key: a first use inside a unit of work that rolls back creates nothing; the route hands out a persisted key', async () => {
+    const admin = await adminDataSource();
+    const count = async () =>
+      (
+        (await admin.query(
+          `SELECT count(*)::int AS n FROM cloud_server_keys`,
+        )) as { n: number }[]
+      )[0]!.n;
+    expect(await count()).toBe(0);
+    const keyring = app.get(ServerKeyring);
+    const other = sodium.crypto_box_keypair();
+    const foreign = sealForServer(
+      sodium.randombytes_buf(32),
+      Buffer.from(other.publicKey).toString('base64url'),
+    );
+    await expect(
+      app.get(UnitOfWork).run(async () => {
+        // A copy checked under a request's transaction (activation, rotation, conversation create) never creates
+        // the key, and neither does asking for it there.
+        await expect(keyring.openSealed(foreign)).rejects.toMatchObject({
+          code: 'server-copy-invalid',
+        });
+        await expect(keyring.publicKey()).rejects.toThrow(
+          /never created inside a unit of work/,
+        );
+        await expect(keyring.prepare()).rejects.toThrow(
+          /before the unit of work/,
+        );
+        throw new Error('the request fails');
+      }),
+    ).rejects.toThrow('the request fails');
+    expect(await count()).toBe(0);
+
+    const ana = await c.spaces.signUpKeyed('kiosk-free@example.com');
+    const res = await c
+      .http()
+      .get('/cloud/server-key')
+      .set({ Authorization: `Bearer ${ana.token}` })
+      .expect(200);
+    const rows: { public_key: string }[] = await admin.query(
+      `SELECT public_key FROM cloud_server_keys WHERE retired_at IS NULL`,
+    );
+    expect(rows.map((r) => r.public_key)).toEqual([res.body.publicKey]);
+    // Prepared outside, a copy sealed to it opens inside a unit of work (from memory).
+    await keyring.prepare();
+    const key = sodium.randombytes_buf(32);
+    const copy = sealForServer(key, res.body.publicKey);
+    const opened = await app
+      .get(UnitOfWork)
+      .run(() => keyring.openSealed(copy));
+    expect(Buffer.from(opened).equals(Buffer.from(key))).toBe(true);
   });
 
   it('returns only the public key, and a copy sealed to it opens to the same 32 bytes', async () => {

@@ -195,6 +195,35 @@ export class CloudConversationExecutor {
   }
 
   /**
+   * The cloud gives back what it acknowledged and could not answer (its job ran out of retries: embeddings or model
+   * down): the message returns to `pending` with `requeued_at` = now (database clock), exactly like the acks of an
+   * executor Hub that stops being the executor (`requeueAckedBy`). The executor Hub then gets a fresh 30 s window and
+   * its ack works again (it was 404 while the cloud held the message); the cloud only takes it back after that window.
+   * Same locks as the ack (space FOR SHARE, still active -> conversation FOR NO KEY UPDATE). Out of reach (space off,
+   * reserve off: those paths already requeued) = nothing. Returns the ids put back.
+   */
+  release(
+    organizationId: string,
+    spaceId: string,
+    conversationId: string,
+  ): Promise<string[]> {
+    return this.uow.run(async () => {
+      await this.uow.setContext({ cloudExecutorSpaceId: spaceId });
+      const c = await this.lockConversation(
+        organizationId,
+        spaceId,
+        conversationId,
+      );
+      if (!c) return [];
+      return this.messages.requeueAckedBy(
+        scopeOf(organizationId, spaceId),
+        c.id,
+        { kind: 'cloud' },
+      );
+    });
+  }
+
+  /**
    * The cloud's answer, encrypted with the CURRENT conversation key (the job seals it with the key opened from the
    * server copy): born acknowledged, `authorCloud`. Same rules and errors as any executor message (409
    * `conversation-key-version-stale` / `conversation-key-rotation-required`, 422 `space-storage-full`, idempotent by id);

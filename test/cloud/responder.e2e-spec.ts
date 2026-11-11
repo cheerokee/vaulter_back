@@ -1,6 +1,9 @@
 import type { INestApplication } from '@nestjs/common';
 import request from 'supertest';
-import { Embedder } from '../../src/cloud/application/ports/embedder.js';
+import {
+  Embedder,
+  EmbeddingServiceError,
+} from '../../src/cloud/application/ports/embedder.js';
 import { LanguageModel } from '../../src/cloud/application/ports/language-model.js';
 import {
   AnswerConversationJob,
@@ -9,6 +12,7 @@ import {
 import { ResponderClock } from '../../src/cloud/application/responder/responder-clock.js';
 import {
   answerIdFor,
+  CLOUD_GIVE_UP_RETRY_AFTER_MS,
   documentObjectIdFor,
 } from '../../src/cloud/domain/responder.js';
 import { FakeEmbedder } from '../../src/cloud/testing/fake-embedder.js';
@@ -458,6 +462,93 @@ describe(
         expect(llm.calls.length).toBe(calls);
         expect(await answerReservations()).toBe(reservations);
         expect(await cloudMessages(olivia, conv)).toEqual([]);
+      });
+    });
+
+    describe('retries exhausted (embeddings down): the cloud gives the message back', () => {
+      const failingEmbedder = () =>
+        vi
+          .spyOn(embedder, 'embed')
+          .mockRejectedValue(new EmbeddingServiceError(true, 'unavailable'));
+      const runAttempt = (conversationId: string, lastAttempt: boolean) =>
+        app
+          .get(AnswerConversationJob)
+          .run(
+            { organizationId: orgId, spaceId: active, conversationId },
+            { lastAttempt },
+          );
+
+      it('a failing attempt keeps it (the Hub ack is 404); the last one puts it back to pending for the Hub (its ack works)', async () => {
+        const conv = await conversation(olivia, { executor: true });
+        const question = await send(olivia, conv, 'qual o horario da loja?');
+        clock.offsetMs = 31_000;
+        const spy = failingEmbedder();
+        try {
+          await expect(runAttempt(conv.id, false)).rejects.toThrow();
+          let row = (await messageRows(conv.id)).find(
+            (m) => m.id === question,
+          )!;
+          expect(row.pending).toBe(false); // the cloud's, for the retry
+          expect((await k.hubAck(casaToken, conv.id, question)).status).toBe(
+            404,
+          );
+
+          // The job of the message (30 s) is the one running in production: drop its waiting twin here.
+          await db(
+            `DELETE FROM pgboss.job WHERE name = 'cloud.answer-conversation' AND data->>'conversationId' = $1 AND state = 'created'`,
+            [conv.id],
+          );
+          await expect(runAttempt(conv.id, true)).rejects.toThrow();
+          row = (await messageRows(conv.id)).find((m) => m.id === question)!;
+          expect(row.pending).toBe(true);
+          const [back] = await db<{
+            acked_by_cloud: boolean;
+            requeued_at: Date | null;
+          }>(
+            `SELECT acked_by_cloud, requeued_at FROM conversation_messages WHERE id = $1`,
+            [question],
+          );
+          expect(back).toMatchObject({ acked_by_cloud: false });
+          expect(back!.requeued_at).not.toBeNull();
+          // The conversation is looked at again later (one waiting job, 10 min away).
+          const jobs = await waitingJobs(conv.id);
+          expect(jobs).toHaveLength(1);
+          expect(jobs[0]!.delay).toBeGreaterThan(
+            CLOUD_GIVE_UP_RETRY_AFTER_MS / 1000 - 5,
+          );
+          expect(await cloudMessages(olivia, conv)).toEqual([]);
+        } finally {
+          spy.mockRestore();
+        }
+        // The Hub's turn again: its ack works now.
+        await expectStatus(k.hubAck(casaToken, conv.id, question), 200);
+      });
+
+      it('nobody takes it meanwhile: after the Hub’s new window the cloud answers it (eventual completion)', async () => {
+        const conv = await conversation(olivia, { executor: true });
+        const question = await send(olivia, conv, 'onde fica o estoque?');
+        clock.offsetMs = 31_000;
+        const spy = failingEmbedder();
+        try {
+          await expect(runAttempt(conv.id, true)).rejects.toThrow();
+        } finally {
+          spy.mockRestore();
+        }
+        const [row] = await db<{ requeued_at: Date; now: Date }>(
+          `SELECT requeued_at, clock_timestamp() AS now FROM conversation_messages WHERE id = $1`,
+          [question],
+        );
+        // Inside the Hub's fresh 30 s: still not the cloud's.
+        clock.offsetMs =
+          row!.requeued_at.getTime() + 20_000 - row!.now.getTime();
+        await runJob(conv.id);
+        expect(await cloudMessages(olivia, conv)).toEqual([]);
+        clock.offsetMs =
+          row!.requeued_at.getTime() + 31_000 - row!.now.getTime();
+        await runJob(conv.id);
+        expect((await cloudMessages(olivia, conv)).map((m) => m.id)).toEqual([
+          answerIdFor(question),
+        ]);
       });
     });
 

@@ -31,6 +31,7 @@ import { RewrapRecoveryUseCase } from './rewrap-recovery.use-case.js';
 import { RotateSpaceKeyUseCase } from './rotate-space-key.use-case.js';
 import type { SpaceRoleKey } from '../domain/space-membership.js';
 import { Space } from '../domain/space.js';
+import { ServerKeyCopyCheck } from '../../shared/application/server-key-copy-check.js';
 
 const kit = makeSpaceKit();
 const d = kit.deps;
@@ -83,6 +84,7 @@ describe('RotateSpaceKeyUseCase', () => {
       d.audit,
       d.spaceKeyRotatedHooks,
       d.uow,
+      new ServerKeyCopyCheck(),
     );
   const allGrants = [MANAGER, EDITOR, READER].map((userId, i) => ({
     userId,

@@ -26,7 +26,10 @@ import {
   type IndexingCharge,
   type IndexingUsage,
 } from '../ports/indexing-cost-meter.js';
-import { TextExtractor } from '../ports/text-extractor.js';
+import {
+  TextExtractionAbortedError,
+  TextExtractor,
+} from '../ports/text-extractor.js';
 import { BackupPlaintextReader } from './backup-plaintext-reader.js';
 import type { IndexFilePayload } from './cloud-indexing-queue.js';
 import { SpaceKeyOpener } from './space-keys.js';
@@ -142,7 +145,15 @@ export class IndexFileJob {
     if (!plaintext) return { kind: 'skipped', reason: 'unreadable' };
     let text: string;
     try {
-      const extracted = await this.extractor.extract(file.mediaType, plaintext);
+      const extracted = await this.extractor
+        .extract(file.mediaType, plaintext, signal)
+        .catch((error: unknown) => {
+          // Shutdown / job stopping: the file stays pending (nothing written) and pg-boss retries it.
+          if (error instanceof TextExtractionAbortedError) {
+            throw new IndexingAbortedError();
+          }
+          throw error;
+        });
       if (extracted.kind === 'unsupported') {
         return { kind: 'skipped', reason: 'unsupported-format' };
       }

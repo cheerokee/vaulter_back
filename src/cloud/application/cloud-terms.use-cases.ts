@@ -8,7 +8,11 @@ import {
   CloudTermAcceptanceRepository,
   CloudTermRepository,
 } from '../domain/cloud.repositories.js';
-import { CLOUD_DECIDER_PERMISSION } from './cloud-space-access.js';
+import {
+  CLOUD_DECIDER_PERMISSION,
+  organizationNotFound,
+  refuseHubSession,
+} from './cloud-space-access.js';
 import { toAcceptanceView, type CloudTermsView } from './dto/cloud-views.js';
 
 // O termo atual e o último aceite da organização, para todo membro (o app mostra o texto a quem decide e o aviso a
@@ -33,6 +37,7 @@ export class GetCloudTermsUseCase {
 
 // Aceite do termo pela organização (spec active-cloud §4.1): quem decide (`org.members.manage`; na pessoal, a própria
 // pessoa), uma vez por versão, com a versão E o hash do texto mostrado (tela velha: 422 `cloud-terms-outdated`).
+// Sessão aberta por um Hub: o mesmo 404 de quem não é membro (`refuseHubSession`).
 // Aceitar de novo a mesma versão devolve o aceite que já existe (sem gravar nem auditar). Auditado
 // `organization.cloud_terms.accepted` (versão e hash; o IP fica só na linha do aceite).
 @Injectable()
@@ -50,6 +55,7 @@ export class AcceptCloudTermsUseCase {
     orgId: string,
     input: { version: number; hash: string; ip: string | null },
   ): Promise<NonNullable<CloudTermsView['accepted']>> {
+    refuseHubSession(actor, organizationNotFound);
     await this.access.requirePermission(
       orgId,
       actor.userId,

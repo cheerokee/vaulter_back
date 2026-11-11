@@ -36,6 +36,10 @@ describe('scrubSensitive', () => {
         'invite_token',
         'recoveryWrappedKey',
         'recovery_wrapped_key',
+        'serverWrappedKey',
+        'server_wrapped_key',
+        'hubWrappedKey',
+        'hub_wrapped_key',
       ]),
     );
     expect(

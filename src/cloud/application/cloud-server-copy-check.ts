@@ -24,6 +24,7 @@ export class CloudServerCopyCheck implements OnModuleInit, OnModuleDestroy {
     this.check.register({
       name: NAME,
       assertOpens: (copy) => assertOpensWithServerKey(this.keyring, copy),
+      prepare: () => this.keyring.prepare(),
     });
   }
 

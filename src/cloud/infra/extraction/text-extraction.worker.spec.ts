@@ -14,6 +14,7 @@ import {
   readZipEntries,
   SUPPORTED_MEDIA_TYPES,
 } from './text-extraction.worker.js';
+import { TextExtractionAbortedError } from '../../application/ports/text-extractor.js';
 import { WorkerTextExtractor } from './worker-text-extractor.js';
 
 const ZIP_LIMITS = {
@@ -141,6 +142,39 @@ describe('WorkerTextExtractor', () => {
       });
     } finally {
       await slow.onApplicationShutdown();
+    }
+  });
+
+  it('cut by a shutdown (pool destroyed mid-extraction) or by the job stopping: a retryable throw, never unreadable', async () => {
+    const dying = new WorkerTextExtractor();
+    const running = expect(
+      dying.extract('application/pdf', pdfBytes(['documento longo'])),
+    ).rejects.toBeInstanceOf(TextExtractionAbortedError);
+    await dying.onApplicationShutdown();
+    await running;
+    // Already destroyed: the same retryable throw, before any thread.
+    await expect(
+      dying.extract('text/plain', enc('depois')),
+    ).rejects.toBeInstanceOf(TextExtractionAbortedError);
+
+    const stopping = new WorkerTextExtractor();
+    try {
+      const job = new AbortController();
+      const cut = expect(
+        stopping.extract(
+          'application/pdf',
+          pdfBytes(['outro documento']),
+          job.signal,
+        ),
+      ).rejects.toBeInstanceOf(TextExtractionAbortedError);
+      job.abort();
+      await cut;
+      // The extractor itself is fine: the next file (no abort) is read.
+      expect(await stopping.extract('text/plain', enc('ok'))).toMatchObject({
+        text: 'ok',
+      });
+    } finally {
+      await stopping.onApplicationShutdown();
     }
   });
 

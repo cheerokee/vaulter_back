@@ -18,7 +18,11 @@ import {
   SpaceActivation,
   SpaceActivationRules,
 } from '../domain/space-activation.js';
-import { CloudSpaceAccess } from './cloud-space-access.js';
+import {
+  CloudSpaceAccess,
+  refuseHubSession,
+  spaceNotFound,
+} from './cloud-space-access.js';
 import { CloudSpaceJobs } from './cloud-space-jobs.js';
 import {
   CloudChunkRepository,
@@ -62,6 +66,9 @@ export class GetSpaceCloudUseCase {
   }
 }
 
+// Autorizar, ligar e desligar: uma sessão aberta por um Hub recebe o mesmo 404 `space-not-found` de quem está fora
+// (`refuseHubSession`), antes de qualquer leitura.
+
 // Passo 1 (spec active-cloud §4.1): quem decide autoriza o espaço. Exige o termo ATUAL aceito pela organização,
 // `allow_online_llm` ligado, alguém no espaço para mandar a chave (órfão nunca liga) e orçamento mensal de IA > 0
 // (422 `ai-budget-required`; leitura sem trava: o orçamento mudar logo depois só faz a nuvem esperar). Espaço já autorizado ou ativo:
@@ -80,6 +87,7 @@ export class AuthorizeSpaceCloudUseCase {
   ) {}
 
   async execute(actor: Actor, spaceId: string): Promise<SpaceCloudStateView> {
+    refuseHubSession(actor, spaceNotFound);
     return this.uow.run(async () => {
       const space = await this.access.lockAsDecider(spaceId, actor.userId);
       const orgId = space.organizationId;
@@ -147,7 +155,10 @@ export class ActivateSpaceCloudUseCase {
     spaceId: string,
     input: ActivateSpaceCloudInput,
   ): Promise<SpaceCloudStateView> {
+    refuseHubSession(actor, spaceNotFound);
     for (const g of input.serverGrants) parseSealedCopy(g.wrappedKey);
+    // KMS (server keys) before the transaction: the copies are opened under the space lock, from memory.
+    await this.keyring.prepare();
     return this.uow.run(async () => {
       const space = await this.access.lockAsManager(spaceId, actor.userId);
       const orgId = space.organizationId;
@@ -217,6 +228,7 @@ export class DeactivateSpaceCloudUseCase {
   ) {}
 
   async execute(actor: Actor, spaceId: string): Promise<void> {
+    refuseHubSession(actor, spaceNotFound);
     await this.uow.run(async () => {
       const space = await this.access.lockAsManagerOrDecider(
         spaceId,

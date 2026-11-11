@@ -2,6 +2,7 @@ import { existsSync } from 'node:fs';
 import { Injectable, type OnApplicationShutdown } from '@nestjs/common';
 import { Piscina } from 'piscina';
 import {
+  TextExtractionAbortedError,
   TextExtractor,
   type ExtractionResult,
 } from '../../application/ports/text-extractor.js';
@@ -41,7 +42,9 @@ const LIMITS: ExtractionJob['limits'] = {
 // criada sob demanda e encerrada ociosa; limite de tempo (`EXTRACTION_TIMEOUT_MS`: o piscina encerra a thread) e de
 // heap (`EXTRACTION_WORKER_HEAP_MB`: o V8 derruba a thread). Tempo esgotado, memória esgotada ou a thread caindo viram
 // `unreadable` com um código (`extract-timeout`, `extract-memory`, `extract-crashed`): terminal até uma versão nova do
-// arquivo. Os bytes vão para a thread transferidos (uma cópia; quem chama apaga o original, a thread apaga a cópia).
+// arquivo. Cortada pelo processo (o pool destruído no desligamento, o sinal do job abortado) NÃO é `unreadable`:
+// `TextExtractionAbortedError`, e o arquivo fica `pending` para a próxima tentativa (um deploy durante uma extração
+// longa — 60 s contra os 20 s de espera do desligamento — nunca tira um documento do índice). Os bytes vão para a thread transferidos (uma cópia; quem chama apaga o original, a thread apaga a cópia).
 @Injectable()
 export class WorkerTextExtractor
   extends TextExtractor
@@ -59,16 +62,26 @@ export class WorkerTextExtractor
   async extract(
     mediaType: string,
     bytes: Uint8Array,
+    signal?: AbortSignal,
   ): Promise<ExtractionResult> {
     if (!this.supports(mediaType)) return { kind: 'unsupported' };
+    if (this.destroyed || signal?.aborted) {
+      throw new TextExtractionAbortedError();
+    }
     const copy = new Uint8Array(bytes);
     const job: ExtractionJob = { mediaType, bytes: copy, limits: LIMITS };
     try {
+      const timeout = AbortSignal.timeout(this.timeoutMs);
       return (await this.getPool().run(job, {
-        signal: AbortSignal.timeout(this.timeoutMs),
+        signal: signal ? AbortSignal.any([timeout, signal]) : timeout,
         transferList: [copy.buffer as ArrayBuffer],
       })) as WorkerExtractionResult;
     } catch (error) {
+      // Cut by the process (pool destroyed on shutdown, the job stopping), not by the file: retryable, never
+      // `unreadable` (which is terminal until a new version of the file).
+      if (this.destroyed || signal?.aborted) {
+        throw new TextExtractionAbortedError();
+      }
       return { kind: 'unreadable', reason: failureReason(error) };
     } finally {
       // Transferred: detached here (the worker wipes it); if the run never started, wipe it now.

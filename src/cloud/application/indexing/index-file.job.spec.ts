@@ -9,7 +9,10 @@ import type {
 import { FakeEmbedder } from '../../testing/fake-embedder.js';
 import { BackupObjectOpenError } from '../ports/backup-object-opener.js';
 import type { IndexingCostMeter } from '../ports/indexing-cost-meter.js';
-import type { TextExtractor } from '../ports/text-extractor.js';
+import {
+  TextExtractionAbortedError,
+  type TextExtractor,
+} from '../ports/text-extractor.js';
 import type { BackupPlaintextReader } from './backup-plaintext-reader.js';
 import { IndexFileJob, IndexingAbortedError } from './index-file.job.js';
 import type { SpaceKeyOpener } from './space-keys.js';
@@ -366,5 +369,16 @@ describe('IndexFileJob', () => {
     k2.spaceCloud.modeOf.mockResolvedValueOnce('encrypted_backup');
     await k2.job.run(PAYLOAD);
     expect(k2.reader.liveVersions).not.toHaveBeenCalled();
+  });
+
+  it('an extraction cut by a shutdown: retryable (IndexingAbortedError), the file stays pending, nothing written', async () => {
+    const k = setup();
+    k.extractor.extract.mockRejectedValueOnce(new TextExtractionAbortedError());
+    await expect(k.job.run(PAYLOAD)).rejects.toBeInstanceOf(
+      IndexingAbortedError,
+    );
+    expect(k.files.upsert).not.toHaveBeenCalled();
+    expect(k.chunks.deleteForFile).not.toHaveBeenCalled();
+    expect(k.embedder.calls).toEqual([]);
   });
 });

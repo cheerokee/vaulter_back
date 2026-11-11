@@ -87,7 +87,7 @@ export class CreateConversationUseCase {
     private readonly reserve: ConversationCloudReserve,
   ) {}
 
-  execute(
+  async execute(
     actor: Actor,
     spaceId: string,
     input: CreateConversationInput,
@@ -99,6 +99,10 @@ export class CreateConversationUseCase {
     if (serverWrappedKey !== null) {
       assertWrappedConversationKey(serverWrappedKey);
     }
+    // KMS (server keys) before the transaction, never under its locks.
+    await this.reserve.prepareServerCopies(
+      serverWrappedKey !== null ? [serverWrappedKey] : [],
+    );
     return this.uow.run(async () => {
       await this.uow.setContext({ userId });
       const { space } = await this.spaces.requireSpacePermission(

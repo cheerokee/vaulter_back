@@ -42,7 +42,9 @@ function memoryStore(retired: StoredServerKey[] = []) {
       current ??= await generate();
       return current;
     }),
+    current: vi.fn(async () => current),
     retired: vi.fn(async () => retired),
+    inTransaction: vi.fn(() => false),
     get stored() {
       return current;
     },
@@ -63,7 +65,9 @@ function sharedTable() {
           return created;
         },
       ),
+      current: vi.fn(async () => rows.find((r) => !r.retired) ?? null),
       retired: vi.fn(async () => rows.filter((r) => r.retired).reverse()),
+      inTransaction: vi.fn(() => false),
     }) as unknown as ServerKeyTypeormStore;
   return {
     store,
@@ -73,6 +77,13 @@ function sharedTable() {
     rows,
   };
 }
+
+/** The store's methods as the mocks they are (no unbound-method reference to the class). */
+const spies = (store: ServerKeyTypeormStore) =>
+  store as unknown as Record<
+    'currentOrCreate' | 'current' | 'retired' | 'inTransaction',
+    ReturnType<typeof vi.fn>
+  >;
 
 const seal = (key: Uint8Array, publicKey: Uint8Array) =>
   Buffer.concat([
@@ -155,13 +166,16 @@ describe('KmsServerKeyring', () => {
       purpose: SERVER_KEY_CONTEXT_PURPOSE,
       publicKey: pk,
     });
+    const row = {
+      publicKey: pk,
+      encryptedPrivateKey: sealed.ciphertext,
+      kmsKeyArn: sealed.keyArn,
+    };
     const store = {
-      currentOrCreate: vi.fn(async () => ({
-        publicKey: pk,
-        encryptedPrivateKey: sealed.ciphertext,
-        kmsKeyArn: sealed.keyArn,
-      })),
+      currentOrCreate: vi.fn(async () => row),
+      current: vi.fn(async () => row),
       retired: vi.fn(async () => []),
+      inTransaction: vi.fn(() => false),
     } as unknown as ServerKeyTypeormStore;
     const keyring = new KmsServerKeyring(store, envelope);
     await expect(keyring.publicKey()).rejects.toThrow(/does not match/);
@@ -259,6 +273,81 @@ describe('KmsServerKeyring', () => {
       await expect(
         keyring.openSealed(seal(sodium.randombytes_buf(32), other.publicKey)),
       ).rejects.toMatchObject({ code: 'server-copy-invalid' });
+    });
+  });
+  describe('inside a unit of work (no phantom key, no KMS under the transaction)', () => {
+    it('openSealed never creates a key: with no key at all it is the same 422', async () => {
+      const store = memoryStore();
+      const keyring = new KmsServerKeyring(store, fakeEnvelope());
+      const other = sodium.crypto_box_keypair();
+      await expect(
+        keyring.openSealed(seal(sodium.randombytes_buf(32), other.publicKey)),
+      ).rejects.toMatchObject({ code: 'server-copy-invalid' });
+      expect(spies(store).currentOrCreate).not.toHaveBeenCalled();
+      expect(store.stored).toBeNull();
+    });
+
+    it('a miss after a retirement reloads the rows but never creates the next key', async () => {
+      vi.useFakeTimers({ toFake: ['Date'] });
+      try {
+        const table = sharedTable();
+        const envelope = fakeEnvelope();
+        const keyring = new KmsServerKeyring(table.store(), envelope);
+        const k1 = await keyring.publicKey();
+        table.retireCurrent();
+        vi.advanceTimersByTime(SERVER_KEY_CURRENT_TTL_MS);
+        const old = sodium.randombytes_buf(32);
+        expect(
+          Buffer.from(
+            await keyring.openSealed(seal(old, Buffer.from(k1, 'base64url'))),
+          ),
+        ).toEqual(Buffer.from(old));
+        const other = sodium.crypto_box_keypair();
+        await expect(
+          keyring.openSealed(seal(sodium.randombytes_buf(32), other.publicKey)),
+        ).rejects.toMatchObject({ code: 'server-copy-invalid' });
+        expect(table.rows).toHaveLength(1); // still only the retired K1
+        expect(envelope.seal).toHaveBeenCalledTimes(1);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('publicKey() refuses to create a key inside a unit of work; prepare() refuses to run there', async () => {
+      const store = memoryStore();
+      spies(store).inTransaction.mockReturnValue(true);
+      const keyring = new KmsServerKeyring(store, fakeEnvelope());
+      await expect(keyring.publicKey()).rejects.toThrow(
+        /never created inside a unit of work/,
+      );
+      await expect(keyring.prepare()).rejects.toThrow(
+        /before the unit of work/,
+      );
+      expect(spies(store).currentOrCreate).not.toHaveBeenCalled();
+    });
+
+    it('after prepare(), opening inside a unit of work calls neither KMS nor the table', async () => {
+      const table = sharedTable();
+      const envelope = fakeEnvelope();
+      const creator = new KmsServerKeyring(table.store(), envelope);
+      const k1 = await creator.publicKey();
+      table.retireCurrent();
+
+      const store = table.store();
+      const keyring = new KmsServerKeyring(store, envelope);
+      await keyring.prepare(); // opens the retired K1 (no current row now)
+      const opens = envelope.open.mock.calls.length;
+      const reads = spies(store).current.mock.calls.length;
+      spies(store).inTransaction.mockReturnValue(true);
+      const key = sodium.randombytes_buf(32);
+      expect(
+        Buffer.from(
+          await keyring.openSealed(seal(key, Buffer.from(k1, 'base64url'))),
+        ),
+      ).toEqual(Buffer.from(key));
+      expect(envelope.open.mock.calls.length).toBe(opens);
+      expect(spies(store).current.mock.calls.length).toBe(reads);
+      expect(spies(store).currentOrCreate).not.toHaveBeenCalled();
     });
   });
 });

@@ -2,7 +2,10 @@ import { DomainValidationError } from '../../../shared/domain/errors.js';
 import { newId } from '../../../shared/domain/id.js';
 import type { CloudConversationExecutor } from '../../../conversations/application/cloud-conversation-executor.js';
 import { AiPricing } from '../../domain/ai-pricing.js';
-import { answerIdFor } from '../../domain/responder.js';
+import {
+  answerIdFor,
+  CLOUD_GIVE_UP_RETRY_AFTER_MS,
+} from '../../domain/responder.js';
 import { FakeEmbedder } from '../../testing/fake-embedder.js';
 import { FakeLanguageModel } from '../../testing/fake-language-model.js';
 import type { AiBudget } from '../ai-budget.js';
@@ -34,6 +37,7 @@ function setup(messages: Record<string, unknown>[]) {
       messages,
     }),
     ack: vi.fn().mockResolvedValue('acked'),
+    release: vi.fn().mockResolvedValue([]),
     send: vi.fn().mockRejectedValue(
       new DomainValidationError('space-storage-full', 'full', {
         missingBytes: 10,
@@ -133,5 +137,45 @@ describe('AnswerConversationJob (termination)', () => {
     expect(executor.read).toHaveBeenCalledTimes(1);
     expect(budget.settle).toHaveBeenCalledTimes(1);
     expect(queue.now).not.toHaveBeenCalled();
+  });
+});
+
+describe('AnswerConversationJob (retries exhausted)', () => {
+  const payload = { organizationId: ORG, spaceId: SPACE, conversationId: CONV };
+  const failingRead = () => {
+    const k = setup([]);
+    k.executor.read.mockRejectedValue(new Error('embeddings down'));
+    return k;
+  };
+
+  it('a failure with retries left: rethrown, nothing given back (the retry resumes the held message)', async () => {
+    const { job, executor, queue } = failingRead();
+    await expect(job.run(payload, { lastAttempt: false })).rejects.toThrow(
+      'embeddings down',
+    );
+    expect(executor.release).not.toHaveBeenCalled();
+    expect(queue.later).not.toHaveBeenCalled();
+  });
+
+  it('the last attempt fails: the held message goes back to pending and the conversation is looked at later', async () => {
+    const { job, executor, queue } = failingRead();
+    const held = newId();
+    executor.release.mockResolvedValue([held]);
+    await expect(job.run(payload, { lastAttempt: true })).rejects.toThrow(
+      'embeddings down',
+    );
+    expect(executor.release).toHaveBeenCalledWith(ORG, SPACE, CONV);
+    expect(queue.later).toHaveBeenCalledWith(
+      payload,
+      CLOUD_GIVE_UP_RETRY_AFTER_MS / 1000,
+    );
+  });
+
+  it('a failing give-up never hides the original error', async () => {
+    const { job, executor } = failingRead();
+    executor.release.mockRejectedValue(new Error('db down'));
+    await expect(job.run(payload, { lastAttempt: true })).rejects.toThrow(
+      'embeddings down',
+    );
   });
 });

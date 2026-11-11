@@ -88,7 +88,9 @@ describe('create conversation: the same id racing', () => {
     as<SpaceStorage>(spaceStorage),
     as<SpaceStorageUsage>(usage),
     as<SpaceCloud>({ modeOf: vi.fn(async () => 'encrypted_backup') }),
-    as<ConversationCloudReserve>({}),
+    as<ConversationCloudReserve>({
+      prepareServerCopies: async () => undefined,
+    }),
   );
   const hub = new HubCreateConversationUseCase(
     as<HubDirectory>({
@@ -105,7 +107,9 @@ describe('create conversation: the same id racing', () => {
     as<SpaceStorage>(spaceStorage),
     as<SpaceStorageUsage>(usage),
     as<SpaceCloud>({ modeOf: vi.fn(async () => 'encrypted_backup') }),
-    as<ConversationCloudReserve>({}),
+    as<ConversationCloudReserve>({
+      prepareServerCopies: async () => undefined,
+    }),
   );
   const userInput = {
     id: ID,

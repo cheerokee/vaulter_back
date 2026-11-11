@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { DataSource, IsNull, Not } from 'typeorm';
 import {
   currentManager,
+  hasActiveTransaction,
   runInTransaction,
 } from '../../../shared/infra/db/unit-of-work.js';
 import { CloudServerKeyTypeormEntity } from './server-key.entity.js';
@@ -22,15 +23,22 @@ export class ServerKeyTypeormStore {
   constructor(private readonly dataSource: DataSource) {}
 
   /**
-   * The current key, or the one `generate` produces when there is none (in a transaction holding the generation
-   * lock; the check is repeated under it). `generate` runs at most once per database lifetime in normal operation.
-   * `generate` calls KMS inside the transaction, holding the lock and a connection: a documented exception to
-   * "external calls after the run", because the row must be created under the lock that keeps a single current key;
-   * it happens once per key (first boot, rotation) and KMS answers in milliseconds.
+   * The current key, or the one `generate` produces when there is none, in a transaction of its OWN (holding the
+   * generation lock; the check is repeated under it) that is COMMITTED before this returns: the caller only ever sees
+   * (and caches) a key that exists in the table. Refused inside an open unit of work: joining the caller's transaction
+   * would let a rollback erase a key already handed out (a "phantom" key), and a transaction of its own there would
+   * need a second pool connection while the caller holds one. `generate` calls KMS inside this short transaction,
+   * holding the lock and a connection: a documented exception to "external calls after the run", because the row must
+   * be created under the lock that keeps a single current key; it happens once per key (first use, rotation).
    */
   async currentOrCreate(
     generate: () => Promise<StoredServerKey>,
   ): Promise<StoredServerKey> {
+    if (this.inTransaction()) {
+      throw new Error(
+        'server key: a key is never created inside a unit of work (call publicKey() outside UnitOfWork.run).',
+      );
+    }
     const existing = await this.current();
     if (existing) return existing;
     return runInTransaction(this.dataSource, async (manager) => {
@@ -46,6 +54,11 @@ export class ServerKeyTypeormStore {
     });
   }
 
+  /** Whether the caller runs inside an open unit of work (reads then use its connection; nothing is created). */
+  inTransaction(): boolean {
+    return hasActiveTransaction(this.dataSource);
+  }
+
   /** Retired keys, newest first (to open copies sealed before a rotation). */
   async retired(): Promise<StoredServerKey[]> {
     const rows = await currentManager(this.dataSource)
@@ -54,7 +67,8 @@ export class ServerKeyTypeormStore {
     return rows.map(toStored);
   }
 
-  private async current(): Promise<StoredServerKey | null> {
+  /** The current key, or null (read only: never creates). */
+  async current(): Promise<StoredServerKey | null> {
     const row = await currentManager(this.dataSource)
       .getRepository(CloudServerKeyTypeormEntity)
       .findOne({ where: { retiredAt: IsNull() } });

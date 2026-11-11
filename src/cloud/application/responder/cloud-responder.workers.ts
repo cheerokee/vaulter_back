@@ -37,7 +37,7 @@ export class CloudResponderWorkers implements OnModuleInit, OnModuleDestroy {
     });
     await this.jobs.work<AnswerConversationPayload>(
       ANSWER_CONVERSATION_QUEUE,
-      (payload) => this.job.run(payload),
+      (payload, job) => this.job.run(payload, job),
       // One waiting + at most ONE running job per conversation, across instances: two runs of a conversation never
       // overlap (no answer paid twice, no notice racing an answer).
       { oneJobPerKey: true },

@@ -588,7 +588,10 @@ active-cloud §4.3). O Hub continua sendo o executor principal; a nuvem só cobr
    feed mostra `pending: false`, `ackedByCloud: true`. Vale também quando o Hub volta **no meio** da resposta da nuvem:
    ela já é da nuvem; a resposta chega depois como `authorCloud: true`. Se a reserva cair antes da resposta, a mensagem
    volta a `pending` e é do Hub (a nuvem confere, sob a trava do assunto, que a mensagem ainda é dela antes de gravar a
-   resposta; senão não grava nada).
+   resposta; senão não grava nada). **A nuvem também devolve** o que pegou e não conseguiu responder depois de esgotar
+   as tentativas (embeddings ou modelo fora do ar): a mensagem volta a `pending` com `requeuedAt` novo, o Hub ganha de
+   novo os 30 s e o ack dele volta a valer (200); a nuvem só olha o assunto de novo uns 10 min depois. Para o Hub é o
+   mesmo caso de uma mensagem devolvida à fila por troca de executor: `pending` no feed = trabalho dele.
 4. **Ordem:** a nuvem responde as mensagens de um assunto **em ordem**, uma de cada vez (só pega a próxima depois de
    responder a anterior); o id da resposta é derivado do id da pergunta (uma resposta por pergunta, mesmo com
    repetição).

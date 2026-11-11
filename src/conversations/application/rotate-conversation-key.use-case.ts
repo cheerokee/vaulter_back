@@ -55,13 +55,14 @@ export class RotateConversationKeyUseCase {
     private readonly messages: ConversationMessageRepository,
   ) {}
 
-  byUser(
+  async byUser(
     actor: Actor,
     spaceId: string,
     conversationId: string,
     input: RotateConversationKeyInput,
   ): Promise<ConversationView> {
     validate(input);
+    await this.prepareServerCopy(input);
     return this.uow.run(async () => {
       await this.uow.setContext({ userId: actor.userId });
       return this.rotate(
@@ -71,12 +72,13 @@ export class RotateConversationKeyUseCase {
     });
   }
 
-  byHub(
+  async byHub(
     hub: HubAuthContext,
     conversationId: string,
     input: RotateConversationKeyInput,
   ): Promise<ConversationView> {
     validate(input);
+    await this.prepareServerCopy(input);
     return this.uow.run(async () => {
       await this.uow.setContext({ hubId: hub.hubId });
       return this.rotate(
@@ -84,6 +86,13 @@ export class RotateConversationKeyUseCase {
         input,
       );
     });
+  }
+
+  /** KMS (server keys) before the transaction, never under its locks. */
+  private prepareServerCopy(input: RotateConversationKeyInput): Promise<void> {
+    return this.reserve.prepareServerCopies(
+      input.serverWrappedKey ? [input.serverWrappedKey] : [],
+    );
   }
 
   private async rotate(

@@ -27,6 +27,14 @@ export class ConversationCloudReserve {
     private readonly pending: CloudReservePendingHooks,
   ) {}
 
+  /**
+   * Before the unit of work of a request that carries server copies: loads the server keys (KMS) outside the
+   * transaction, so `assertServerCopies` under the locks works from memory. No copy: nothing to do.
+   */
+  async prepareServerCopies(copies: readonly string[]): Promise<void> {
+    if (copies.length > 0) await this.serverCopies.prepare();
+  }
+
   /** Every copy opens with the server key (else 422 `server-copy-invalid`); nothing is written here. */
   async assertServerCopies(copies: readonly string[]): Promise<void> {
     for (const copy of copies) await this.serverCopies.assertOpens(copy);
