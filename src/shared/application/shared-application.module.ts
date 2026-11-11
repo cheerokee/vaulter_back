@@ -4,6 +4,7 @@ import { InvitationHooks } from './invitation-hooks.js';
 import { MemberRemovedHooks } from './member-removed-hooks.js';
 import { RegistrationHooks } from './registration-hooks.js';
 import { SpaceMemberLeftHooks } from './space-member-left-hooks.js';
+import { SpaceKeyRotatedHooks } from './space-key-rotated-hooks.js';
 import { SpaceQuotaHooks } from './space-quota-hooks.js';
 import { StorageReconcileHooks } from './storage-reconcile-hooks.js';
 
@@ -15,6 +16,7 @@ import { StorageReconcileHooks } from './storage-reconcile-hooks.js';
     InvitationHooks,
     SpaceMemberLeftHooks,
     SpaceQuotaHooks,
+    SpaceKeyRotatedHooks,
     HubExecutorLostHooks,
     StorageReconcileHooks,
   ],
@@ -24,6 +26,7 @@ import { StorageReconcileHooks } from './storage-reconcile-hooks.js';
     InvitationHooks,
     SpaceMemberLeftHooks,
     SpaceQuotaHooks,
+    SpaceKeyRotatedHooks,
     HubExecutorLostHooks,
     StorageReconcileHooks,
   ],

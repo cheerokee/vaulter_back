@@ -2,7 +2,7 @@ import type {
   CursorPage,
   CursorPageRequest,
 } from '../../shared/domain/pagination.js';
-import type { Space } from './space.js';
+import type { CloudMode, Space } from './space.js';
 import type { SpaceRoleKey } from './space-membership.js';
 
 export type SpaceListItem = {
@@ -32,6 +32,16 @@ export abstract class SpaceRepository {
   abstract create(space: Space): Promise<void>;
   abstract save(space: Space): Promise<void>;
   abstract findById(orgId: string, spaceId: string): Promise<Space | null>;
+  /**
+   * The only write of `cloud_mode`/`cloud_activated_at` (the `save` never touches them): `activatedAt` is set with
+   * `active_cloud` and null with `encrypted_backup` (CHECK). The caller holds the space row `FOR UPDATE`.
+   */
+  abstract setCloudMode(
+    orgId: string,
+    spaceId: string,
+    mode: CloudMode,
+    activatedAt: Date | null,
+  ): Promise<void>;
   /**
    * Reads the space with `SELECT ... FOR UPDATE`. REQUIRES an active unit of work: key rotation and adding
    * members must serialize on it so nobody is left out of a new key version.

@@ -278,9 +278,24 @@ describe('GetSpaceUseCase', () => {
       keyRotationRequired: true,
       recoveryRewrapRequired: true,
       roomHubs: [],
+      cloud: { mode: 'encrypted_backup', activatedAt: null },
       storage: { quotaBytes: 10_737_418_240, usedBytes: 0, trashBytes: 0 },
       createdAt: new Date('2026-10-01T00:00:00Z'),
       updatedAt: null,
+    });
+  });
+
+  it('every member sees the active cloud and since when (the permanent notice)', async () => {
+    kit.addSpace(SPACE_ID, ORG_ID, [[READER, 'space_reader']], {
+      activeCloud: true,
+    });
+    await expect(
+      useCase().execute(actor(READER), SPACE_ID),
+    ).resolves.toMatchObject({
+      cloud: {
+        mode: 'active_cloud',
+        activatedAt: new Date('2026-11-01T00:00:00Z'),
+      },
     });
   });
 

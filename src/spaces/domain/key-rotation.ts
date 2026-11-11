@@ -87,6 +87,25 @@ export const KeyRotationRules = {
   },
 
   /**
+   * Rotation of a space in `active_cloud`: the new version must also be sealed for the server key (like a Room hub);
+   * outside the active cloud, a server copy is refused (nobody would keep it). The 409 carries `missingServer: true`
+   * or `unexpectedServer: true`; the app reloads `GET /spaces/:id` -> `cloud.mode` and `GET /cloud/server-key`.
+   */
+  assertServerGrantMatchesCloud(
+    serverGrantSent: boolean,
+    activeCloud: boolean,
+  ): void {
+    if (serverGrantSent === activeCloud) return;
+    throw new ConflictError(
+      'key-rotation-mismatch',
+      activeCloud
+        ? 'The space is in the active cloud: the new version must also be sealed for the server key.'
+        : 'The space is not in the active cloud: no copy for the server key is expected.',
+      activeCloud ? { missingServer: true } : { unexpectedServer: true },
+    );
+  },
+
+  /**
    * Adding a member: grants must cover every existing key version (1..current), no duplicates. The 409 carries
    * `details: { expectedVersions, missingVersions, unexpectedVersions, duplicatedVersions }`.
    */

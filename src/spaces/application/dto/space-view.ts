@@ -1,4 +1,4 @@
-import type { Space } from '../../domain/space.js';
+import type { CloudMode, Space } from '../../domain/space.js';
 import type { SpaceRoleKey } from '../../domain/space-membership.js';
 
 /**
@@ -33,11 +33,18 @@ export type SpaceView = {
 export type RoomHubView = { hubId: string; roleKey: SpaceRoleKey };
 
 /**
- * `GET /spaces/:id`: the details, the Room hubs (every member: rotating the key needs one copy per Room hub) and,
- * for managers only, the open pending grants count.
+ * Cloud mode of the space, for every member: in `active_cloud` the app shows a permanent notice that the server reads
+ * the space, and a key rotation must include the server copy. `activatedAt` is null in `encrypted_backup`.
+ */
+export type SpaceCloudView = { mode: CloudMode; activatedAt: Date | null };
+
+/**
+ * `GET /spaces/:id`: the details, the Room hubs (every member: rotating the key needs one copy per Room hub), the
+ * cloud mode and, for managers only, the open pending grants count.
  */
 export type SpaceDetailsView = SpaceView & {
   roomHubs: RoomHubView[];
+  cloud: SpaceCloudView;
   pendingGrants?: number;
 };
 

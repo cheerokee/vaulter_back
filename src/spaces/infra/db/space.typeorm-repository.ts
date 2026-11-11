@@ -7,7 +7,7 @@ import {
   type CursorPageRequest,
 } from '../../../shared/domain/pagination.js';
 import { runInOrganizationScope } from '../../../shared/infra/db/organization-scope.js';
-import type { Space } from '../../domain/space.js';
+import type { CloudMode, Space } from '../../domain/space.js';
 import type { SpaceRoleKey } from '../../domain/space-membership.js';
 import {
   SpaceRepository,
@@ -51,6 +51,22 @@ export class SpaceTypeormRepository extends SpaceRepository {
       m
         .getRepository(SpaceTypeormEntity)
         .update({ id: id!, organizationId: organizationId! }, rest),
+    );
+  }
+
+  async setCloudMode(
+    orgId: string,
+    spaceId: string,
+    mode: CloudMode,
+    activatedAt: Date | null,
+  ): Promise<void> {
+    await runInOrganizationScope(this.dataSource, orgId, (m) =>
+      m
+        .getRepository(SpaceTypeormEntity)
+        .update(
+          { id: spaceId, organizationId: orgId },
+          { cloudMode: mode, cloudActivatedAt: activatedAt },
+        ),
     );
   }
 

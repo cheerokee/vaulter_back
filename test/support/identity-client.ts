@@ -95,7 +95,22 @@ export function identityClient(getApp: () => INestApplication) {
     );
   };
 
+  /** The server's X25519 public key, as the app reads it before sealing a copy for the cloud. */
+  const serverPublicKey = async (token: string): Promise<string> =>
+    (await expectStatus(http().get('/cloud/server-key').set(auth(token)), 200))
+      .body.publicKey as string;
+
+  /** `GET /spaces/:id` -> `cloud.mode` (false for a caller who cannot read the space). */
+  const isActiveCloud = async (
+    token: string,
+    spaceId: string,
+  ): Promise<boolean> => {
+    const res = await http().get(`/spaces/${spaceId}`).set(auth(token));
+    return res.status === 200 && res.body.cloud?.mode === 'active_cloud';
+  };
+
   const spaces = {
+    serverPublicKey,
     signUpKeyed: async (
       email: string,
       name = 'Ana',
@@ -205,8 +220,10 @@ export function identityClient(getApp: () => INestApplication) {
     },
     roomHubRecipients,
     /**
-     * New key version sealed for exactly `recipients`, the kit and the Room hubs. The Room hubs are discovered from
-     * the API like the app does (`roomHubRecipients`); pass `hubs` only to send a deliberately wrong set.
+     * New key version sealed for exactly `recipients`, the kit, the Room hubs and, in an `active_cloud` space, the
+     * server key. The Room hubs and the server are discovered from the API like the app does (`roomHubRecipients`;
+     * `GET /spaces/:id` -> `cloud.mode`, then `GET /cloud/server-key`); pass `hubs` / `server` only to send a
+     * deliberately wrong set.
      */
     rotate: async (
       token: string,
@@ -217,9 +234,15 @@ export function identityClient(getApp: () => INestApplication) {
         recipients: Recipient[];
         kitPublicKey: string;
         hubs?: HubRecipient[];
+        /** Seal the new version for the server key (default: when the space is in `active_cloud`). */
+        server?: boolean;
       },
     ) => {
       const hubs = input.hubs ?? (await roomHubRecipients(token, spaceId));
+      const server = input.server ?? (await isActiveCloud(token, spaceId));
+      const serverWrappedKey = server
+        ? await sealSpaceKey(input.key, await serverPublicKey(token))
+        : undefined;
       return http()
         .post(`/spaces/${spaceId}/keys`)
         .set(auth(token))
@@ -239,6 +262,7 @@ export function identityClient(getApp: () => INestApplication) {
               wrappedKey: await sealSpaceKey(input.key, h.publicKey),
             })),
           ),
+          ...(serverWrappedKey ? { serverWrappedKey } : {}),
         });
     },
     /** Re-seals the given versions (keys[i] = version i + 1) for the kit. */

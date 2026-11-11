@@ -4,6 +4,7 @@ import {
   ArrayMinSize,
   IsArray,
   IsInt,
+  IsOptional,
   IsString,
   IsUUID,
   Matches,
@@ -81,6 +82,15 @@ export class RotateSpaceKeyDto {
   @ValidateNested({ each: true })
   @Type(() => HubGrantDto)
   hubGrants!: HubGrantDto[];
+
+  /**
+   * The new version sealed for the server key (`GET /cloud/server-key`): required exactly when the space is in
+   * `active_cloud` (else 409 key-rotation-mismatch with `missingServer` / `unexpectedServer`).
+   */
+  @IsOptional()
+  @IsString()
+  @Matches(WRAPPED_KEY)
+  serverWrappedKey?: string;
 }
 
 export class RewrapRecoveryDto {

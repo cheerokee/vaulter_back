@@ -81,6 +81,7 @@ describe('RotateSpaceKeyUseCase', () => {
       d.roles,
       d.room,
       d.audit,
+      d.spaceKeyRotatedHooks,
       d.uow,
     );
   const allGrants = [MANAGER, EDITOR, READER].map((userId, i) => ({
@@ -193,6 +194,81 @@ describe('RotateSpaceKeyUseCase', () => {
     ]);
     for (const n of [10, 11, 12, 20])
       expect(kit.auditDump()).not.toContain(wk(n));
+  });
+
+  it('hands the new version to the rotated hooks (no server copy outside the active cloud)', async () => {
+    await useCase().execute(actor(READER), SPACE_ID, input);
+    expect(m.spaceKeyRotatedHooks.run).toHaveBeenCalledWith({
+      organizationId: ORG_ID,
+      spaceId: SPACE_ID,
+      spaceKeyId: kId(2),
+      version: 2,
+      serverWrappedKey: null,
+      actorUserId: READER,
+    });
+  });
+
+  it('active cloud without the server copy: 409 key-rotation-mismatch with missingServer, nothing written', async () => {
+    kit.addSpace(SPACE_ID, ORG_ID, members, {
+      rotation: true,
+      activeCloud: true,
+    });
+    const err = await useCase()
+      .execute(actor(READER), SPACE_ID, input)
+      .catch((e: unknown) => e);
+    expect(err).toMatchObject({
+      constructor: ConflictError,
+      code: 'key-rotation-mismatch',
+      details: { missingServer: true },
+    });
+    expect(m.keys.addVersion).not.toHaveBeenCalled();
+    expect(m.grants.upsert).not.toHaveBeenCalled();
+    expect(m.spaces.save).not.toHaveBeenCalled();
+    expect(m.spaceKeyRotatedHooks.run).not.toHaveBeenCalled();
+  });
+
+  it('active cloud with the server copy: delivered to the hooks after the writes, under the lock', async () => {
+    kit.addSpace(SPACE_ID, ORG_ID, members, {
+      rotation: true,
+      activeCloud: true,
+    });
+    m.spaceKeyRotatedHooks.run.mockImplementation(async () => {
+      kit.trace.push('hooks.rotated');
+    });
+    await useCase().execute(actor(READER), SPACE_ID, {
+      ...input,
+      serverWrappedKey: wk(30),
+    });
+    expect(m.spaceKeyRotatedHooks.run).toHaveBeenCalledWith(
+      expect.objectContaining({ serverWrappedKey: wk(30), version: 2 }),
+    );
+    expect(kit.trace.indexOf('hooks.rotated')).toBeGreaterThan(
+      kit.trace.indexOf('keys.addVersion'),
+    );
+    expect(kit.auditDump()).not.toContain(wk(30));
+  });
+
+  it('a server copy outside the active cloud: 409 with unexpectedServer, nothing written', async () => {
+    await expect(
+      useCase().execute(actor(READER), SPACE_ID, {
+        ...input,
+        serverWrappedKey: wk(30),
+      }),
+    ).rejects.toMatchObject({
+      code: 'key-rotation-mismatch',
+      details: { unexpectedServer: true },
+    });
+    expect(m.keys.addVersion).not.toHaveBeenCalled();
+  });
+
+  it('a malformed server copy: 422 before any lock', async () => {
+    await expect(
+      useCase().execute(actor(READER), SPACE_ID, {
+        ...input,
+        serverWrappedKey: BAD_WK,
+      }),
+    ).rejects.toBeInstanceOf(DomainValidationError);
+    expect(m.spaces.lockForUpdate).not.toHaveBeenCalled();
   });
 
   it('version must be current + 1 (409 key-rotation-mismatch)', async () => {

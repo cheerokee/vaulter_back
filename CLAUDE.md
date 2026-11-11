@@ -383,7 +383,8 @@ src/organizations/
 - **Auditoria (`audit_logs`):** *append-only* — o papel de runtime tem só `INSERT`/`SELECT` (sem `UPDATE`/`DELETE`),
   via `AuditLog.record` dentro da mesma transação da ação. Ações: `organization.created`, `organization.updated`,
   `organization.recovery_key.registered|replaced`, `member.joined`, `member.left`, `member.removed`,
-  `member.role_changed`, `invitation.created`, `invitation.revoked` e as `space.*` do módulo `spaces` (inclusive
+  `member.role_changed`, `invitation.created`, `invitation.revoked`, `organization.cloud_terms.accepted` e
+  `space.cloud.*` (módulo `cloud`), as `space.*` do módulo `spaces` (inclusive
   `space.recovery_copies_read`, quando um admin lê as cópias do kit de um espaço órfão) e `space.backup.trash_emptied`
   (do `storage`, quando o Gestor esvazia a lixeira do backup). `metadata`
   nunca leva segredo/token/cópia trancada.
@@ -482,8 +483,18 @@ exportam); nenhum dos dois importa `spaces`.
 - **Ordem de locks** (sempre nesta ordem, para não dar deadlock): linha de vínculo do alvo (`user_organization`, `FOR SHARE`)
   -> linha do espaço (`FOR UPDATE`) -> atribuições de Gestor (`lockSpaceManagers`, em ordem de id). O gancho de saída
   trava vários espaços em ordem de id. Mutações do módulo passam por `SpaceAccess.lockAsMember` /
-  `lockWithOrgPermission`.
-- **Pendências (não feito ainda):** nuvem ativa (`cloud_mode = active_cloud`, só o campo existe); excluir espaço; papéis próprios de
+  `lockWithOrgPermission`. As tabelas da nuvem ativa (`cloud_space_activations` -> `cloud_space_key_grants`) vêm
+  **depois** da linha do espaço: ligar, desligar e a troca de chave (gancho `SpaceKeyRotatedHooks`) travam o espaço
+  `FOR UPDATE` primeiro.
+- **Nuvem ativa** (o fluxo é do módulo `cloud`): `spaces.cloud_mode` + `spaces.cloud_activated_at` (CHECK: só juntos)
+  mudam **só** por `SpaceCloud` (exportado; `markActive`/`markEncryptedBackup` com o espaço travado, `keyVersions`), que
+  grava por `SpaceRepository.setCloudMode` (o `save` nunca regrava essas colunas). `GET /spaces/:id` traz
+  `cloud: { mode, activatedAt }` para todo membro (o app mostra o aviso permanente). **Troca de chave** num espaço
+  `active_cloud` leva `serverWrappedKey` (a versão nova selada para `GET /cloud/server-key`): sem ela 409
+  `key-rotation-mismatch` com `missingServer: true`; com ela fora da nuvem ativa, `unexpectedServer: true`; nada gravado.
+  A cópia vai ao `cloud` pelo gancho global `SpaceKeyRotatedHooks` (`src/shared/application/`, roda no unit of work da
+  troca, depois das gravações; o `cloud` confere que abre e guarda; erro desfaz a troca).
+- **Pendências (não feito ainda):** excluir espaço; papéis próprios de
   espaço (só os de fábrica); notificações (pendência e troca de chave hoje só aparecem por consulta).
 - **e2e com a cripto real do cliente:** os helpers de espaço ficam em `test/support/identity-client.ts`
   (`c.spaces`: criar com kit, pôr membro selando todas as versões, trocar a chave, retrancar, abrir as cópias) e
@@ -1133,6 +1144,26 @@ registra a fonte `conversations`), `hubs` (`HubDirectory`: `ownerOf`,
   o nome do erro, nunca o prompt. Histórico com blocos de ferramenta exige repassar `tools` em todo turno (Converse recusa sem
   `toolConfig`): sem elas, `LanguageModelError` não retentável antes de chamar. `fake` é recusado com `NODE_ENV=production` (env e módulo). Falsos determinísticos em `src/cloud/testing/` (`FakeEmbedder` bag-of-words 768 dim;
   `FakeLanguageModel` com turnos roteirizados `enqueue({ toolCalls })` e uso computado), trocados por DI nos e2e.
+- **Termo, autorizar, ligar e desligar** (spec §4.1; `application/cloud-terms.use-cases.ts`,
+  `space-cloud.use-cases.ts`). Quem **decide** = `org.members.manage` (`CLOUD_DECIDER_PERMISSION`, a permissão do kit,
+  a outra forma de ler todos os espaços; na pessoal, a própria pessoa). **Termo:** `cloud_terms` (versão, texto pt-BR,
+  `hash` = SHA-256 hex do texto em UTF-8), publicado **só por migration** (o runtime só lê; o reset dos e2e o trata como
+  catálogo); atual = maior versão; a v1 é **rascunho provisório** (texto final do Jonas entra como versão nova).
+  `GET /organizations/:orgId/cloud/terms` (todo membro) -> `{ current, accepted }`;
+  `POST .../cloud/terms/accept` `{ version, hash }` (quem decide; tela velha 422 `cloud-terms-outdated`; repetir devolve
+  o mesmo aceite) grava `cloud_term_acceptances` (org, versão, hash, quem, quando, IP; append-only). **Dois passos:**
+  `POST /spaces/:spaceId/cloud/authorize` (quem decide, mesmo fora do espaço; termo ATUAL aceito, senão 422
+  `cloud-terms-not-accepted`; `allow_online_llm` (422 `online-llm-not-allowed`); órfão 422 `space-orphaned`; o
+  "orçamento > 0" entra na Task 5; já autorizado/ativo devolve o estado) e `POST /spaces/:spaceId/cloud/activate`
+  `{ serverGrants: [{ version, wrappedKey }] }` (o **Gestor**; admin fora do espaço 404; sem autorização 422
+  `cloud-not-authorized`; já ativo 409 `cloud-already-active`; todas as versões, 409 `key-versions-mismatch`; cada cópia
+  é aberta com a chave do servidor e apagada da memória, 422 `server-copy-invalid`). `POST .../cloud/deactivate` (quem
+  decide ou o Gestor, 204, idempotente) **apaga de verdade** as cópias (`cloud_space_key_grants`, DELETE físico),
+  cancela as tarefas que esperam (`CloudSpaceJobs`: toda tarefa da nuvem sobre um espaço leva `spaceId` no payload e a
+  fila é registrada ali; `cancelQueued(fila, { spaceId })`), encerra o ciclo (lápide em `cloud_space_activations`, com
+  quem desligou) e volta a `encrypted_backup`. `GET /spaces/:spaceId/cloud` (membro ou quem decide) -> `state`
+  `off|authorized|active`. Auditoria: `organization.cloud_terms.accepted`, `space.cloud.authorized|activated|deactivated`
+  (só ids, versões e contagens). Travas: espaço `FOR UPDATE` -> ciclo vivo `FOR UPDATE` -> cópias.
 - **Preço** (`AiPricing`, `domain/ai-pricing.ts`): tabela em código, micro-USD por milhão de tokens (`bigint`), conta com
   arredondamento **para cima** por chamada; modelo sem preço = `UnpricedModelError` (falha fechada; o `CloudModule` confere `CLOUD_LLM_MODEL_ID` e `EMBEDDING_MODEL` **na subida**). Valores atuais são
   **provisórios** (Jonas decide); embedding próprio tem custo nominal de US$ 0,02/MTok para a indexação consumir o orçamento.
@@ -1155,7 +1186,8 @@ registra a fonte `conversations`), `hubs` (`HubDirectory`: `ownerOf`,
 - **Dois logins no Postgres:**
   - **runtime** (`DB_APP_USERNAME`/`DB_APP_PASSWORD`, padrão `vaulter_app`): o que a API usa. Sem superusuário,
     sem `BYPASSRLS`, membro do papel de grupo `app_runtime`, que tem só `SELECT, INSERT, UPDATE` — **sem
-    `DELETE`** (reforça o soft delete; a limpeza de lápides decide isso depois). As permissões vêm das migrations;
+    `DELETE`** (reforça o soft delete; a limpeza de lápides decide isso depois). Exceções documentadas: `rate_limit_hits`
+    (contador técnico) e as tabelas legíveis da nuvem ativa (`cloud_space_key_grants`; desligar apaga de verdade). As permissões vêm das migrations;
     o login é criado por `.docker/postgres/init/02-app-role.sh` (idempotente);
   - **dono** (`DB_USERNAME`): migrations, CLI, compose, pgAdmin e a preparação do banco de teste.
   - Em banco **já existente** (criado antes do script), rodar uma vez:
@@ -1367,6 +1399,8 @@ Os valores do `.env.example` para os segredos são **só de desenvolvimento**; p
   | mandar e apagar mensagem do assunto (`POST .../:id/messages`, `DELETE .../:id/messages/:messageId`) | 60/min por usuário / 300/min por Hub, contador próprio por rota |
   | `POST /hub/conversations/:id/messages/:messageId/ack` | 600/min por Hub |
   | anexo do assunto: intenção, confirmação e apagar (`POST .../:id/attachments`, `POST .../:id/attachments/:attachmentId/confirm`, `DELETE .../:id/attachments/:attachmentId`; a URL de download fica no limite geral) | 120/h por usuário / 600/h por Hub, contador próprio por rota |
+  | `POST /organizations/:orgId/cloud/terms/accept` (aceite do termo da nuvem ativa) | 30/h por usuário (`userIdTracker`) |
+  | `POST /spaces/:spaceId/cloud/authorize`, `.../activate`, `.../deactivate` (nuvem ativa) | 60/h por usuário, contador próprio por rota |
   | `GET /conversations/changes` (feed da pessoa) / `GET /hub/conversations/changes` (feed do executor, sondagem longa) | 1200/h por usuário / 1800/h por Hub (ociosa: ~144/h, um pedido a cada 25 s; cada mudança acorda e devolve) |
   Rota com `@Throttle` próprio tem contador próprio (por rota); `@ThrottleGroup(THROTTLE_GROUPS.x, tracker?)`
   (`throttling.decorators.ts`) faz rotas dividirem um contador (chave = grupo + tracker, sem a rota); cada grupo é

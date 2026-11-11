@@ -11,7 +11,7 @@ import { SpaceStorageUsage } from './space-storage-usage.js';
 // Detalhes do espaço, só para membro (o admin fora do espaço recebe 404), com as flags, os Hubs da Sala (`roomHubs`:
 // todo membro pode precisar fazer a troca de chave, que exige uma cópia para cada um; a chave de cifra de cada Hub
 // vem de `GET /hubs/:id`, que todo membro do espaço lê, porque a Sala só existe com vínculo aprovado da
-// organização), o tamanho reservado, o uso e a parte dele na lixeira (`trashBytes`, para o app avisar o Gestor) e, para o Gestor, a contagem de pendências de trancar (como na lista).
+// organização), o modo de nuvem (`cloud`, para o aviso permanente da nuvem ativa), o tamanho reservado, o uso e a parte dele na lixeira (`trashBytes`, para o app avisar o Gestor) e, para o Gestor, a contagem de pendências de trancar (como na lista).
 @Injectable()
 export class GetSpaceUseCase {
   constructor(
@@ -42,6 +42,7 @@ export class GetSpaceUseCase {
         trashBytes: await this.usage.trashBytes(space.organizationId, space.id),
       },
       roomHubs: await this.room.roomHubs(space.organizationId, space.id),
+      cloud: { mode: space.cloudMode, activatedAt: space.cloudActivatedAt },
     };
     if (roleKey !== 'space_manager') return view;
     return {

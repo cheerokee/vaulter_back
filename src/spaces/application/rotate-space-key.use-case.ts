@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import type { Actor } from '../../identity/application/dto/actor.js';
 import { AuditLog } from '../../organizations/application/audit-log.js';
+import { SpaceKeyRotatedHooks } from '../../shared/application/space-key-rotated-hooks.js';
 import { UnitOfWork } from '../../shared/infra/db/unit-of-work.js';
 import { KeyRotationRules } from '../domain/key-rotation.js';
 import { assertRecoveryPublicKey } from '../domain/recovery-public-key.js';
@@ -22,6 +23,8 @@ export type RotateSpaceKeyInput = {
   grants: { userId: string; wrappedKey: string }[];
   /** Exactly one copy per hub with the space open in its Room (empty when there is none). */
   hubGrants: { hubId: string; wrappedKey: string }[];
+  /** The new version sealed for the server key: required exactly when the space is in `active_cloud`. */
+  serverWrappedKey?: string | null;
 };
 
 // Nova versão da chave (decisão 6). Com troca pendente (`keyRotationRequired`), qualquer membro ativo; sem ela,
@@ -30,7 +33,10 @@ export type RotateSpaceKeyInput = {
 // versão = atual + 1 e o conjunto de destinatários = exatamente os membros ativos lidos sob o lock (quem saiu
 // não recebe a versão nova; quem entrou no meio não fica de fora), e o mesmo para os Hubs da Sala (spec hubs
 // §6: um Hub tirado da Sala não recebe a versão nova). Divergência: 409 `key-rotation-mismatch`, para o app
-// recarregar. A auditoria leva só a versão.
+// recarregar. Espaço em nuvem ativa: a troca leva também a cópia para a chave do servidor (sem ela, 409
+// `key-rotation-mismatch` com `missingServer: true`; fora da nuvem ativa, `unexpectedServer: true`), entregue ao
+// `cloud` pelo gancho `SpaceKeyRotatedHooks` na mesma transação (ele confere que abre e a guarda; erro desfaz tudo).
+// A auditoria leva só a versão.
 @Injectable()
 export class RotateSpaceKeyUseCase {
   constructor(
@@ -42,6 +48,7 @@ export class RotateSpaceKeyUseCase {
     private readonly roles: SpaceRoleRepository,
     private readonly room: SpaceRoomRepository,
     private readonly audit: AuditLog,
+    private readonly rotated: SpaceKeyRotatedHooks,
     private readonly uow: UnitOfWork,
   ) {}
 
@@ -51,8 +58,10 @@ export class RotateSpaceKeyUseCase {
     input: RotateSpaceKeyInput,
   ): Promise<{ currentVersion: number }> {
     assertRecoveryPublicKey(input.recoveryPublicKey);
+    const serverWrappedKey = input.serverWrappedKey ?? null;
     assertWrappedKeys([
       input.recoveryWrappedKey,
+      ...(serverWrappedKey !== null ? [serverWrappedKey] : []),
       ...input.grants.map((g) => g.wrappedKey),
       ...input.hubGrants.map((g) => g.wrappedKey),
     ]);
@@ -78,6 +87,11 @@ export class RotateSpaceKeyUseCase {
         input.hubGrants.map((g) => g.hubId),
         await this.room.roomHubIds(orgId, space.id),
       );
+      // Lido sob o lock: ligar/desligar a nuvem trava o mesmo espaço FOR UPDATE.
+      KeyRotationRules.assertServerGrantMatchesCloud(
+        serverWrappedKey !== null,
+        space.cloudMode === 'active_cloud',
+      );
       const key = await this.keys.addVersion(
         orgId,
         space.id,
@@ -97,6 +111,14 @@ export class RotateSpaceKeyUseCase {
         );
       }
       await this.spaces.save(space);
+      await this.rotated.run({
+        organizationId: orgId,
+        spaceId: space.id,
+        spaceKeyId: key.id,
+        version: input.version,
+        serverWrappedKey,
+        actorUserId: actor.userId,
+      });
       await this.audit.record({
         organizationId: orgId,
         userId: actor.userId,

@@ -28,6 +28,14 @@ export function spaceResponse(v: SpaceView | SpaceDetailsView) {
           })),
         }
       : {}),
+    ...('cloud' in v
+      ? {
+          cloud: {
+            mode: v.cloud.mode,
+            activatedAt: iso(v.cloud.activatedAt),
+          },
+        }
+      : {}),
     ...('pendingGrants' in v && v.pendingGrants !== undefined
       ? { pendingGrants: v.pendingGrants }
       : {}),

@@ -8,6 +8,7 @@ import type { OrganizationDirectory } from '../../src/organizations/application/
 import type { MemberRemovedHooks } from '../../src/shared/application/member-removed-hooks.js';
 import type { InvitationHooks } from '../../src/shared/application/invitation-hooks.js';
 import type { SpaceMemberLeftHooks } from '../../src/shared/application/space-member-left-hooks.js';
+import type { SpaceKeyRotatedHooks } from '../../src/shared/application/space-key-rotated-hooks.js';
 import {
   NotFoundError,
   PermissionDeniedError,
@@ -98,6 +99,7 @@ export function makeSpaceKit() {
     create: vi.fn(),
     save: vi.fn(),
     findById: vi.fn(),
+    setCloudMode: vi.fn(),
     lockForUpdate: vi.fn(),
     lockForShare: vi.fn(),
     listForMember: vi.fn(),
@@ -166,6 +168,7 @@ export function makeSpaceKit() {
   const memberRemovedHooks = { register: vi.fn(), unregister: vi.fn() };
   const invitationHooks = { register: vi.fn(), unregister: vi.fn() };
   const spaceMemberLeftHooks = { run: vi.fn() };
+  const spaceKeyRotatedHooks = { run: vi.fn() };
   const uow = {
     run: vi.fn(async (work: () => Promise<unknown>) => {
       depth++;
@@ -198,6 +201,9 @@ export function makeSpaceKit() {
             currentKeyVersion: s.currentKeyVersion,
             keyRotationRequired: s.keyRotationRequired,
             storageQuotaBytes: s.storageQuotaBytes,
+            cloudMode: s.cloudMode,
+            cloudActivatedAt: s.cloudActivatedAt,
+            allowOnlineLlm: s.allowOnlineLlm,
             createdAt: s.createdAt,
             updatedAt: s.updatedAt,
           },
@@ -213,6 +219,8 @@ export function makeSpaceKit() {
       version?: number;
       fingerprints?: string[];
       rotation?: boolean;
+      /** The space is in the active cloud (since 2026-11-01). */
+      activeCloud?: boolean;
     } = {},
   ): void {
     const version = opts.version ?? 1;
@@ -225,6 +233,12 @@ export function makeSpaceKit() {
           currentKeyVersion: version,
           keyRotationRequired: opts.rotation ?? false,
           storageQuotaBytes: 10_737_418_240,
+          ...(opts.activeCloud
+            ? {
+                cloudMode: 'active_cloud' as const,
+                cloudActivatedAt: new Date('2026-11-01T00:00:00Z'),
+              }
+            : {}),
           createdAt: new Date('2026-10-01T00:00:00Z'),
         },
         id,
@@ -603,6 +617,8 @@ export function makeSpaceKit() {
     invitationHooks: invitationHooks as unknown as InvitationHooks,
     spaceMemberLeftHooks:
       spaceMemberLeftHooks as unknown as SpaceMemberLeftHooks,
+    spaceKeyRotatedHooks:
+      spaceKeyRotatedHooks as unknown as SpaceKeyRotatedHooks,
   };
   const access = new SpaceAccess(
     deps.spaces,
@@ -642,6 +658,7 @@ export function makeSpaceKit() {
       memberRemovedHooks,
       invitationHooks,
       spaceMemberLeftHooks,
+      spaceKeyRotatedHooks,
     },
     deps: { ...deps, access, recoveryKit },
     audited: () =>

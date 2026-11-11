@@ -108,6 +108,14 @@ export const RATE_LIMITS = {
    */
   conversationChanges: { limit: 1200, ttl: HOUR },
   conversationHubChanges: { limit: 1800, ttl: HOUR },
+  /**
+   * Nuvem ativa (módulo `cloud`), por usuário (`userIdTracker`), contador próprio por rota: aceitar o termo
+   * (`POST /organizations/:orgId/cloud/terms/accept`) 30/h; autorizar, ligar e desligar um espaço
+   * (`POST /spaces/:spaceId/cloud/authorize|activate|deactivate`) 60/h cada (ligar abre uma cópia por versão com a
+   * chave do servidor).
+   */
+  cloudTermsAccept: { limit: 30, ttl: HOUR },
+  cloudSpaceChange: { limit: 60, ttl: HOUR },
 } as const;
 
 /** Nome do throttler extra, cobrado só nas rotas marcadas com @ThrottleByEmail(). */

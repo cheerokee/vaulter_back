@@ -29,6 +29,23 @@ código e no `CLAUDE.md`).
   o Hub não consegue enviar backup daquele espaço (fica numa fila local).
 - [ ] Descobrir os Hubs da Sala para a troca de chave (`roomHubs` em `GET /spaces/:id` + chave de cifra em
   `GET /hubs/:id`).
+- [ ] **Nuvem ativa: troca de chave** num espaço com `cloud.mode = 'active_cloud'` (`GET /spaces/:id`): selar a versão
+  nova também para `GET /cloud/server-key` e mandar em `serverWrappedKey` (sem ela, 409 `key-rotation-mismatch` com
+  `missingServer: true`).
+
+## Nuvem ativa
+- [ ] **Aviso permanente** em todo espaço com `cloud.mode = 'active_cloud'` (`GET /spaces/:id` -> `cloud`): o Vaulter lê
+  aquele espaço, desde `activatedAt`.
+- [ ] **Termo de aceite** (quem decide: admin com `org.members.manage`; na pessoal, a própria pessoa):
+  `GET /organizations/:orgId/cloud/terms` -> mostrar `current.text`; aceitar com
+  `POST .../cloud/terms/accept` `{ version, hash }` (os do termo mostrado; 422 `cloud-terms-outdated` = recarregar e
+  mostrar de novo). Termo novo (`accepted.version < current.version`) precisa de aceite antes de ligar outro espaço.
+- [ ] **Ligar em dois passos:** quem decide autoriza (`POST /spaces/:spaceId/cloud/authorize`, mesmo fora do espaço); o
+  Gestor vê `GET /spaces/:spaceId/cloud` -> `state: 'authorized'` e liga com `POST .../cloud/activate`
+  `{ serverGrants }` (todas as versões da chave seladas para `GET /cloud/server-key`). Na pessoal, os dois passos seguidos
+  pela mesma pessoa. Espaço órfão não liga (422 `space-orphaned`).
+- [ ] **Desligar** (`POST /spaces/:spaceId/cloud/deactivate`, quem decide ou o Gestor): explicar antes que apaga do
+  servidor a cópia da chave e todo o conteúdo legível (o backup cifrado fica).
 
 ## Backup e espaço ocupado
 - [ ] **Espaço quase cheio:** com `storage.usedBytes` acima de **80%** de `storage.quotaBytes` e a lixeira

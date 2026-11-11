@@ -10,6 +10,12 @@ export const SPACE_STORAGE_QUOTA_DEFAULT_BYTES = 10_737_418_240;
 export const SPACE_STORAGE_QUOTA_MIN_BYTES = 1_073_741_824;
 export const SPACE_STORAGE_QUOTA_MAX_BYTES = 5_497_558_138_880;
 
+/**
+ * `encrypted_backup`: the backend only stores ciphertext. `active_cloud`: the server holds a copy of every key version
+ * and reads the space (spec active-cloud §4.1). Changed only by the `cloud` module, through `SpaceCloud`.
+ */
+export type CloudMode = 'encrypted_backup' | 'active_cloud';
+
 export type SpaceProps = {
   organizationId: string;
   name: string;
@@ -17,6 +23,12 @@ export type SpaceProps = {
   keyRotationRequired: boolean;
   /** Reserved size (bytes): counts against the organization quota and the capacity of every hub it is on. */
   storageQuotaBytes: number;
+  /** Optional on restore (defaults: `encrypted_backup`, not activated, online LLM allowed). */
+  cloudMode?: CloudMode;
+  /** When the space last became `active_cloud`; null while `encrypted_backup`. */
+  cloudActivatedAt?: Date | null;
+  /** The space allows an online language model (required by the active cloud). */
+  allowOnlineLlm?: boolean;
   createdAt?: Date;
   updatedAt?: Date;
 };
@@ -145,6 +157,15 @@ export class Space extends Entity<SpaceProps> {
   }
   get storageQuotaBytes(): number {
     return this.props.storageQuotaBytes;
+  }
+  get cloudMode(): CloudMode {
+    return this.props.cloudMode ?? 'encrypted_backup';
+  }
+  get cloudActivatedAt(): Date | null {
+    return this.props.cloudActivatedAt ?? null;
+  }
+  get allowOnlineLlm(): boolean {
+    return this.props.allowOnlineLlm ?? true;
   }
   get createdAt(): Date | undefined {
     return this.props.createdAt;

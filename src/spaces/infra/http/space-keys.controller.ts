@@ -74,6 +74,7 @@ export class SpaceKeysController {
         hubId: g.hubId,
         wrappedKey: g.wrappedKey,
       })),
+      serverWrappedKey: dto.serverWrappedKey ?? null,
     });
   }
 

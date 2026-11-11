@@ -21,6 +21,11 @@ export type CloudMode = 'encrypted_backup' | 'active_cloud';
   `"cloud_mode" IN ('encrypted_backup', 'active_cloud')`,
 )
 @Check('ck_spaces_current_key_version', `"current_key_version" >= 1`)
+// Ligada desde quando: só em nuvem ativa (SpaceRepository.setCloudMode grava os dois juntos).
+@Check(
+  'ck_spaces_cloud_activated_at',
+  `("cloud_mode" = 'active_cloud') = ("cloud_activated_at" IS NOT NULL)`,
+)
 @Check('ck_spaces_storage_quota_bytes', `"storage_quota_bytes" > 0`)
 @Index('ix_spaces_sync_version', ['syncVersion'])
 @Index('fk_spaces_organizations_idx', ['organizationId'])
@@ -39,11 +44,14 @@ export class SpaceTypeormEntity extends SyncableTypeormEntity {
   @Column({ type: 'varchar', length: 255 })
   name!: string;
 
-  // v1: só encrypted_backup.
+  // Muda só pelo fluxo de ligar/desligar a nuvem ativa (módulo `cloud`, via SpaceCloud).
   @Column({ type: 'varchar', length: 20, default: 'encrypted_backup' })
   cloudMode!: CloudMode;
 
-  // v1: só o campo; todos permitidos.
+  @Column({ type: 'timestamptz', nullable: true })
+  cloudActivatedAt!: Date | null;
+
+  // Ainda sem rota para mudar (todos permitidos); a nuvem ativa exige true para autorizar e ligar.
   @Column({ type: 'boolean', default: true })
   allowOnlineLlm!: boolean;
 

@@ -1,6 +1,39 @@
 import { Module } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
+import { OrganizationsModule } from '../organizations/organizations.module.js';
+import { SpacesModule } from '../spaces/spaces.module.js';
+import { CloudKeyRotatedHook } from './application/cloud-key-rotated.hook.js';
+import { CloudSpaceAccess } from './application/cloud-space-access.js';
+import { CloudSpaceJobs } from './application/cloud-space-jobs.js';
+import {
+  AcceptCloudTermsUseCase,
+  GetCloudTermsUseCase,
+} from './application/cloud-terms.use-cases.js';
+import {
+  ActivateSpaceCloudUseCase,
+  AuthorizeSpaceCloudUseCase,
+  DeactivateSpaceCloudUseCase,
+  GetSpaceCloudUseCase,
+} from './application/space-cloud.use-cases.js';
+import {
+  CloudTermAcceptanceRepository,
+  CloudTermRepository,
+  ServerKeyGrantRepository,
+  SpaceActivationRepository,
+} from './domain/cloud.repositories.js';
+import { CloudTermAcceptanceTypeormEntity } from './infra/db/cloud-term-acceptance.entity.js';
+import { CloudTermTypeormEntity } from './infra/db/cloud-term.entity.js';
+import {
+  CloudTermAcceptanceTypeormRepository,
+  CloudTermTypeormRepository,
+  ServerKeyGrantTypeormRepository,
+  SpaceActivationTypeormRepository,
+} from './infra/db/cloud.typeorm-repositories.js';
+import { ServerKeyGrantTypeormEntity } from './infra/db/server-key-grant.entity.js';
+import { SpaceActivationTypeormEntity } from './infra/db/space-activation.entity.js';
+import { CloudTermsController } from './infra/http/cloud-terms.controller.js';
+import { SpaceCloudController } from './infra/http/space-cloud.controller.js';
 import { Embedder } from './application/ports/embedder.js';
 import { LanguageModel } from './application/ports/language-model.js';
 import { ServerKeyring } from './application/ports/server-keyring.js';
@@ -28,12 +61,51 @@ export function createLanguageModel(config: ConfigService): LanguageModel {
 /**
  * Active cloud (spec 2026-11-10-active-cloud-design): the cloud reads a space only when it is in `active_cloud`.
  * Depends on the other modules only through what they export; no module imports `cloud`. Task 1: the server key
- * (KMS envelope) and its public route; the job queue is the global `JobQueue` (src/shared/infra/jobs).
+ * (KMS envelope) and its public route; the job queue is the global `JobQueue` (src/shared/infra/jobs). Task 3: the term
+ * and its acceptance, authorizing / switching on / switching off a space, and the server copy on key rotations
+ * (`SpaceKeyRotatedHooks`).
  */
 @Module({
-  imports: [TypeOrmModule.forFeature([CloudServerKeyTypeormEntity])],
-  controllers: [CloudServerKeyController],
+  imports: [
+    // Uma direção só: o cloud usa o que spaces e organizations exportam; ninguém importa o cloud.
+    OrganizationsModule,
+    SpacesModule,
+    TypeOrmModule.forFeature([
+      CloudServerKeyTypeormEntity,
+      CloudTermTypeormEntity,
+      CloudTermAcceptanceTypeormEntity,
+      SpaceActivationTypeormEntity,
+      ServerKeyGrantTypeormEntity,
+    ]),
+  ],
+  controllers: [
+    CloudServerKeyController,
+    CloudTermsController,
+    SpaceCloudController,
+  ],
   providers: [
+    { provide: CloudTermRepository, useClass: CloudTermTypeormRepository },
+    {
+      provide: CloudTermAcceptanceRepository,
+      useClass: CloudTermAcceptanceTypeormRepository,
+    },
+    {
+      provide: SpaceActivationRepository,
+      useClass: SpaceActivationTypeormRepository,
+    },
+    {
+      provide: ServerKeyGrantRepository,
+      useClass: ServerKeyGrantTypeormRepository,
+    },
+    CloudSpaceAccess,
+    CloudSpaceJobs,
+    CloudKeyRotatedHook,
+    GetCloudTermsUseCase,
+    AcceptCloudTermsUseCase,
+    GetSpaceCloudUseCase,
+    AuthorizeSpaceCloudUseCase,
+    ActivateSpaceCloudUseCase,
+    DeactivateSpaceCloudUseCase,
     KmsKeyEnvelope,
     ServerKeyTypeormStore,
     { provide: ServerKeyring, useClass: KmsServerKeyring },

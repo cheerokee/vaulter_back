@@ -55,7 +55,7 @@ export async function adminDataSource(): Promise<DataSource> {
   return admin;
 }
 
-// Catálogos (RBAC e plataforma) são dado de migration: o reset os guarda antes de truncar e os repõe iguais (mesmos
+// Catálogos (RBAC, plataforma e os termos da nuvem ativa) são dado de migration: o reset os guarda antes de truncar e os repõe iguais (mesmos
 // ids) depois. Ordem respeita as FKs; de roles só voltam os papéis de fábrica.
 const CATALOG_TABLES: [table: string, where: string][] = [
   ['permissions', 'true'],
@@ -65,6 +65,7 @@ const CATALOG_TABLES: [table: string, where: string][] = [
   ['platform_roles', 'true'],
   ['platform_permissions', 'true'],
   ['platform_role_permission', 'true'],
+  ['cloud_terms', 'true'],
 ];
 let catalogSnapshot: Record<string, unknown[]> | undefined;
 
