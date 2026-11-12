@@ -1,6 +1,7 @@
 import { ConfigService } from '@nestjs/config';
 import { createLanguageModel } from './cloud.module.js';
 import { BedrockLanguageModel } from './infra/bedrock/bedrock-language-model.js';
+import { OpenRouterLanguageModel } from './infra/openrouter/openrouter-language-model.js';
 import { FakeLanguageModel } from './testing/fake-language-model.js';
 
 const base = {
@@ -20,17 +21,29 @@ describe('createLanguageModel', () => {
         new ConfigService({ ...base, CLOUD_LLM_DRIVER: 'bedrock' }),
       ),
     ).toBeInstanceOf(BedrockLanguageModel);
-  });
-
-  it('refuses the fake in production', () => {
-    expect(() =>
+    expect(
       createLanguageModel(
         new ConfigService({
           ...base,
-          CLOUD_LLM_DRIVER: 'fake',
-          NODE_ENV: 'production',
+          CLOUD_LLM_DRIVER: 'openrouter',
+          OPENROUTER_API_KEY: 'sk-or-test',
         }),
       ),
-    ).toThrow(/production/);
+    ).toBeInstanceOf(OpenRouterLanguageModel);
+  });
+
+  it('refuses the fake and openrouter in production', () => {
+    for (const driver of ['fake', 'openrouter']) {
+      expect(() =>
+        createLanguageModel(
+          new ConfigService({
+            ...base,
+            CLOUD_LLM_DRIVER: driver,
+            OPENROUTER_API_KEY: 'sk-or-test',
+            NODE_ENV: 'production',
+          }),
+        ),
+      ).toThrow(/production/);
+    }
   });
 });

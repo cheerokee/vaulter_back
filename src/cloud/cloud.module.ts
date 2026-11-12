@@ -80,6 +80,7 @@ import { ServerKeyring } from './application/ports/server-keyring.js';
 import { AiPricing } from './domain/ai-pricing.js';
 import { BedrockLanguageModel } from './infra/bedrock/bedrock-language-model.js';
 import { OllamaEmbedder } from './infra/embeddings/ollama-embedder.js';
+import { OpenRouterLanguageModel } from './infra/openrouter/openrouter-language-model.js';
 import { FakeLanguageModel } from './testing/fake-language-model.js';
 import { KmsKeyEnvelope } from './infra/crypto/kms-key-envelope.js';
 import { KmsServerKeyring } from './infra/crypto/kms-server-keyring.js';
@@ -91,14 +92,18 @@ import {
 } from './infra/http/cloud-server-key.controller.js';
 
 export function createLanguageModel(config: ConfigService): LanguageModel {
-  if (config.get<string>('CLOUD_LLM_DRIVER') !== 'fake') {
+  const driver = config.get<string>('CLOUD_LLM_DRIVER');
+  if (driver !== 'fake' && driver !== 'openrouter') {
     return new BedrockLanguageModel(config);
   }
-  // Second line of defense (env validation refuses it first): canned answers never reach real customers.
+  // Second line of defense (env validation refuses them first): canned answers never reach real customers, and
+  // OpenRouter (content leaves our infrastructure) is for development only.
   if (config.get<string>('NODE_ENV') === 'production') {
-    throw new Error('CLOUD_LLM_DRIVER=fake is not allowed in production');
+    throw new Error(`CLOUD_LLM_DRIVER=${driver} is not allowed in production`);
   }
-  return new FakeLanguageModel();
+  return driver === 'openrouter'
+    ? new OpenRouterLanguageModel(config)
+    : new FakeLanguageModel();
 }
 
 /**
@@ -190,7 +195,8 @@ export function createLanguageModel(config: ConfigService): LanguageModel {
     { provide: ServerKeyring, useClass: KmsServerKeyring },
     { provide: Embedder, useClass: OllamaEmbedder },
     {
-      // Driver chosen by CLOUD_LLM_DRIVER: `fake` only for development without Bedrock (e2e override by DI).
+      // Driver chosen by CLOUD_LLM_DRIVER: `fake` and `openrouter` only for development without Bedrock (e2e override
+      // by DI).
       provide: LanguageModel,
       inject: [ConfigService],
       useFactory: createLanguageModel,

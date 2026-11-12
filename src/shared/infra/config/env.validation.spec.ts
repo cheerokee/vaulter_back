@@ -245,6 +245,27 @@ describe('validateEnv cloud and jobs', () => {
     ).toBe('fake');
   });
 
+  it('accepts the openrouter driver in development only, and only with a key', () => {
+    const base = {
+      ...validConfig(),
+      CLOUD_LLM_DRIVER: 'openrouter',
+      OPENROUTER_API_KEY: 'sk-or-test',
+    };
+    expect(
+      validateEnv({ ...base, NODE_ENV: 'development' }).CLOUD_LLM_DRIVER,
+    ).toBe('openrouter');
+    expect(() => validateEnv({ ...base, NODE_ENV: 'production' })).toThrow(
+      /CLOUD_LLM_DRIVER/,
+    );
+    for (const key of [undefined, '']) {
+      expect(() => validateEnv({ ...base, OPENROUTER_API_KEY: key })).toThrow(
+        /OPENROUTER_API_KEY/,
+      );
+    }
+    // Not needed with the other drivers.
+    expect(validateEnv(validConfig()).OPENROUTER_API_KEY).toBeUndefined();
+  });
+
   it('requires CLOUD_KMS_KEY_ID', () => {
     const config = validConfig();
     delete config.CLOUD_KMS_KEY_ID;

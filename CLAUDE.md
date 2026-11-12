@@ -28,6 +28,8 @@ npm run storage:reconcile [-- <min>]   # reparo do backup (índice × bucket); d
 npm run conversations:retention        # retenção dos assuntos (30 dias); depois do build, no container, login dono
 # embeddings reais (nuvem ativa; pulado sem a variável, o CI usa o falso):
 docker exec -e EMBEDDINGS_REAL_URL=http://embeddings:11434 vaulter-back-app npx vitest run src/cloud/infra/embeddings/ollama-embedder.real.spec.ts
+# fumaça do responder com Claude de verdade pela OpenRouter (só dev, gasta crédito; pulado sem as duas variáveis):
+docker exec -e OPENROUTER_API_KEY=<chave> -e EMBEDDINGS_REAL_URL=http://embeddings:11434 vaulter-back-app npx vitest run -c vitest.config.e2e.ts test/cloud/openrouter.smoke.e2e-spec.ts
 ```
 Antes de dizer que algo está pronto: `npm run build && npm test && npm run lint && npm run typecheck` precisam passar
 (e `docker exec vaulter-back-app npm run test:e2e`, dentro do container, quando mexer em módulos/banco).
@@ -1271,9 +1273,13 @@ registra a fonte `conversations`), `hubs` (`HubDirectory`: `ownerOf`,
 - **Modelo de linguagem** (`LanguageModel`, `application/ports/language-model.ts`): `complete({ system, messages, tools?, maxTokens })` ->
   `{ text, toolCalls, stopReason, usage, model }`, um turno por chamada (com `toolCalls` o chamador roda e chama de novo).
   `BedrockLanguageModel` (`infra/bedrock/`, Converse API, `us-east-1`, papel IAM, sem endpoint do LocalStack) escolhido por
-  `CLOUD_LLM_DRIVER` (`bedrock`|`fake`); `CLOUD_LLM_MODEL_ID` precisa ter preço. Falha = `LanguageModelError` (`retryable`: throttling, 5xx, erro de rede), só
+  `CLOUD_LLM_DRIVER` (`bedrock`|`fake`|`openrouter`); `CLOUD_LLM_MODEL_ID` precisa ter preço. `OpenRouterLanguageModel`
+  (`infra/openrouter/`, Chat Completions compatível com OpenAI, `fetch`, `OPENROUTER_API_KEY`, slug
+  `anthropic/claude-sonnet-5.5`, `provider.data_collection: deny`) é **só desenvolvimento** (testar com Claude real sem
+  conta AWS): o conteúdo sai para a OpenRouter/Anthropic, então **só dados de teste**; recusado em produção como o `fake`.
+  Resultado de ferramenta com erro vira `Error: ...` no conteúdo (o formato OpenAI não tem a marca). Falha = `LanguageModelError` (`retryable`: throttling, 5xx, erro de rede), só
   o nome do erro, nunca o prompt. Histórico com blocos de ferramenta exige repassar `tools` em todo turno (Converse recusa sem
-  `toolConfig`): sem elas, `LanguageModelError` não retentável antes de chamar. `fake` é recusado com `NODE_ENV=production` (env e módulo). Falsos determinísticos em `src/cloud/testing/` (`FakeEmbedder` bag-of-words 768 dim;
+  `toolConfig`): sem elas, `LanguageModelError` não retentável antes de chamar. `fake` e `openrouter` são recusados com `NODE_ENV=production` (env e módulo). Falsos determinísticos em `src/cloud/testing/` (`FakeEmbedder` bag-of-words 768 dim;
   `FakeLanguageModel` com turnos roteirizados `enqueue({ toolCalls })` e uso computado), trocados por DI nos e2e.
 - **Termo, autorizar, ligar e desligar** (spec §4.1; `application/cloud-terms.use-cases.ts`,
   `space-cloud.use-cases.ts`). Quem **decide** = `org.members.manage` (`CLOUD_DECIDER_PERMISSION`, a permissão do kit,
@@ -1494,7 +1500,8 @@ Validadas na subida por `src/shared/infra/config/env.validation.ts` (faltou ou i
 | `S3_FORCE_PATH_STYLE` | path-style (obrigatório no LocalStack) | `false` |
 | `CLOUD_KMS_KEY_ID` | chave KMS (id, ARN ou `alias/...`) que envelopa a privada X25519 do servidor (módulo `cloud`) | obrigatória |
 | `EMBEDDINGS_URL` / `EMBEDDING_MODEL` | serviço de embeddings (Ollama) e o modelo (tag fixada, gravado em cada trecho) | `http://embeddings:11434` / `nomic-embed-text:v1.5` |
-| `CLOUD_LLM_DRIVER` / `CLOUD_LLM_MODEL_ID` | `bedrock` ou `fake` (dev sem Bedrock); id/perfil do Claude no Bedrock (precisa de preço em `AiPricing`) | `bedrock` / `us.anthropic.claude-sonnet-5-5` |
+| `CLOUD_LLM_DRIVER` / `CLOUD_LLM_MODEL_ID` | `bedrock`, `fake` (dev sem Bedrock) ou `openrouter` (dev, Claude real); id/perfil do Claude no Bedrock ou slug da OpenRouter (precisa de preço em `AiPricing`) | `bedrock` / `us.anthropic.claude-sonnet-5-5` |
+| `OPENROUTER_API_KEY` | chave da OpenRouter — **segredo**; obrigatória só com `CLOUD_LLM_DRIVER=openrouter` | vazio |
 | `JOB_WORKERS_ENABLED` | este processo roda workers do pg-boss (busca, manutenção, cron); `send` funciona sempre | `true` |
 
 Os valores do `.env.example` para os segredos são **só de desenvolvimento**; produção gera os próprios:

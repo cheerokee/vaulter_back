@@ -267,11 +267,22 @@ export class EnvironmentVariables {
   @IsNotEmpty()
   EMBEDDING_MODEL: string = 'nomic-embed-text:v1.5';
 
-  /** `bedrock` (production) or `fake` (development without Bedrock access: answers are canned). */
-  @IsIn(['bedrock', 'fake'])
+  /**
+   * `bedrock` (production), `fake` (development without Bedrock access: answers are canned) or `openrouter`
+   * (development only: a real Claude through OpenRouter, without an AWS account; content leaves to OpenRouter).
+   */
+  @IsIn(['bedrock', 'fake', 'openrouter'])
   CLOUD_LLM_DRIVER: string = 'bedrock';
 
-  /** Bedrock model id or inference profile of Claude (region us-east-1); must have a price in `AiPricing`. */
+  /** OpenRouter API key (secret), required only with `CLOUD_LLM_DRIVER=openrouter`. */
+  @IsOptional()
+  @IsString()
+  OPENROUTER_API_KEY?: string;
+
+  /**
+   * Bedrock model id or inference profile of Claude (region us-east-1), or the OpenRouter slug with the `openrouter`
+   * driver; must have a price in `AiPricing`.
+   */
   @IsString()
   @IsNotEmpty()
   CLOUD_LLM_MODEL_ID: string = 'us.anthropic.claude-sonnet-5-5';
@@ -296,10 +307,20 @@ export function validateEnv(
       .join('\n');
     throw new Error(`Invalid environment configuration:\n${details}`);
   }
-  // The canned fake model must never answer real customers.
-  if (env.CLOUD_LLM_DRIVER === 'fake' && config.NODE_ENV === 'production') {
+  // The canned fake model must never answer real customers, and OpenRouter (content leaves our infrastructure) is a
+  // development convenience only: production is Bedrock.
+  if (
+    (env.CLOUD_LLM_DRIVER === 'fake' ||
+      env.CLOUD_LLM_DRIVER === 'openrouter') &&
+    config.NODE_ENV === 'production'
+  ) {
     throw new Error(
-      'Invalid environment configuration:\nCLOUD_LLM_DRIVER: the fake driver is not allowed when NODE_ENV=production',
+      `Invalid environment configuration:\nCLOUD_LLM_DRIVER: the ${env.CLOUD_LLM_DRIVER} driver is not allowed when NODE_ENV=production`,
+    );
+  }
+  if (env.CLOUD_LLM_DRIVER === 'openrouter' && !env.OPENROUTER_API_KEY) {
+    throw new Error(
+      'Invalid environment configuration:\nOPENROUTER_API_KEY: required when CLOUD_LLM_DRIVER=openrouter',
     );
   }
   return env;

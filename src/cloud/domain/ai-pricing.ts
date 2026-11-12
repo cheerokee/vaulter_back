@@ -19,6 +19,13 @@ export const DEFAULT_PRICE_TABLE: Readonly<Record<string, ModelPrice>> = {
     inputMicroUsdPerMTok: 2_000_000n,
     outputMicroUsdPerMTok: 10_000_000n,
   },
+  // Claude through OpenRouter (CLOUD_LLM_DRIVER=openrouter, development only): OpenRouter's list price for the slug
+  // ($2 in / $10 out per MTok, from https://openrouter.ai/api/v1/models on 2026-11-11), so a dev test spends the budget
+  // like production would.
+  'anthropic/claude-sonnet-5.5': {
+    inputMicroUsdPerMTok: 2_000_000n,
+    outputMicroUsdPerMTok: 10_000_000n,
+  },
   // Our own embedding service (Ollama on our infra): no per-token bill, so a nominal $0.02 / MTok that stands for
   // the compute, so indexing consumes the budget like everything else (placeholder).
   'nomic-embed-text:v1.5': {
