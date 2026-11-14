@@ -17,6 +17,8 @@ import { ConversationRetentionSqlStore } from '../db/conversation-retention.sql-
 
 async function main(): Promise<void> {
   if (existsSync('.env')) process.loadEnvFile('.env');
+  // A one-shot process: never fetch jobs of the API's queues.
+  process.env.JOB_WORKERS_ENABLED = 'false';
   const app = await NestFactory.createApplicationContext(AppModule, {
     bufferLogs: true,
   });

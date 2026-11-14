@@ -24,7 +24,7 @@ npm run schema:check                   # drift: falha se as entidades divergirem
 npm run lint         # oxlint com checagem de tipos
 npm run typecheck    # tsc --noEmit no projeto todo (src e test); roda no CI
 npm run format       # Prettier em src/ e test/
-npm run storage:reconcile [-- <min>]   # reparo do backup (índice × bucket); depois do build, no container
+npm run storage:reconcile [-- <min>]   # reparo do backup sob demanda (a tarefa diária do pg-boss já roda); depois do build, no container
 npm run conversations:retention        # retenção dos assuntos (30 dias); depois do build, no container, login dono
 # embeddings reais (nuvem ativa; pulado sem a variável, o CI usa o falso):
 docker exec -e EMBEDDINGS_REAL_URL=http://embeddings:11434 vaulter-back-app npx vitest run src/cloud/infra/embeddings/ollama-embedder.real.spec.ts
@@ -172,7 +172,7 @@ couber (spec de contas, §12).
   nova com `getMigrationPlans` (veja `pg-boss-schema.ts`). **Payload só com ids** (UUID ou inteiro; `send` recusa o
   resto) e falha de tarefa guardada/logada só pelo tipo do erro (nunca a mensagem). Dentro de um `uow.run`, `send` e
   `cancelQueued` entram na transação (a tarefa só existe se ela confirmar). Pelo menos uma vez: handler idempotente, que
-  reconfere sob trava. `send` com `startAfterSeconds` (atraso) e `singletonKey` (uma tarefa à espera por chave; enviar
+  reconfere sob trava. **Agendadas:** `schedule(nome, cron)` (cron de 5 campos em UTC, uma tarefa de payload vazio por ocorrência entre instâncias, `missed: 'once'`; idempotente; a linha em `pgboss.schedule` sobrevive ao código: tirar um agendamento = migration ou `unschedule`); hoje `storage.reconcile` (04:00 UTC). Os CLIs que sobem o `AppModule` forçam `JOB_WORKERS_ENABLED=false`. `send` com `startAfterSeconds` (atraso) e `singletonKey` (uma tarefa à espera por chave; enviar
   de novo substitui a que espera); `cancelQueued(nome, { spaceId })` apaga as que ainda esperam, num DELETE só guardado
   pelo estado (nunca uma em execução); `sendMany(nome, [{ payload, singletonKey, startAfterSeconds? }])` enfileira muitas num INSERT só. **Filas com
   chave** (`work(nome, handler, { oneJobPerKey: true })`, política `stately` do pg-boss, fixada quando a fila nasce;
@@ -840,7 +840,7 @@ mesmo commit).
   quem age (intenções do próprio remetente; a versão viva que o apagar indica), **renovando** para `now()`. Sob a trava
   do objeto, antes de gravar no S3, a tentativa reconfere a própria marca (sumiu = a varredura limpou enquanto o pedido
   estava parado: 409 `storage-busy`, repetível); **nenhuma gravação no S3 sem marca**. A marca **nunca** é limpa no
-  commit: só a varredura `npm run storage:reconcile` (CLI `src/storage/infra/cli/reconcile-storage.ts`, depois do `build`, no container; argumento opcional = minutos, padrão 60) a limpa, e só as mais antigas que 60 min (relógio do banco),
+  commit: só a varredura a limpa (`StorageReconciliation`: tarefa diária do pg-boss `storage.reconcile`, 04:00 UTC, e o CLI `npm run storage:reconcile`, `src/storage/infra/cli/reconcile-storage.ts`, sob demanda, depois do `build`, no container; argumento opcional = minutos, padrão 60), e só as mais antigas que 60 min (relógio do banco),
   depois de reparar o objeto sob a trava. `BackupObjectHealer` (objeto travado) apaga do bucket toda versão/marker que
   nenhuma versão `committed` referencia (objeto apagado: só versões com dado, os markers ficam). Roda: no próximo
   toque do objeto (marca mais antiga que a da tentativa), logo depois de um unit of work que rejeitou depois de gravar
@@ -913,7 +913,7 @@ mesmo commit).
   `hubs-kit.ts`. Pendências do módulo: veja "Pendências antes de produção" (snapshot pago, contratação de franquia,
   classes de armazenamento mais baratas, troca de chave pelo Hub editor da Sala, visitante em Hub alheio, configuração
   inicial por Bluetooth/idioma do Hub, índice `(space_id, updated_at)`, rota de download em lote, limpeza física do
-  índice, agendar `storage:reconcile`, aviso de franquia perto do fim, endpoint S3 público).
+  índice, aviso de franquia perto do fim, endpoint S3 público).
 
 ## Módulo `conversations`
 `src/conversations/` (assuntos: participantes, executor, chave própria por versão, mensagens, caixa de entrada, anexos e
@@ -1576,16 +1576,15 @@ Os valores do `.env.example` para os segredos são **só de desenvolvimento**; p
     COMMIT dela segura o advisory lock dos assuntos (mesmo custo das cascatas documentadas); não há rota para mudar `spaces.allow_online_llm` (padrão `true`; autorizar exige `true`); a confirmação do documento por texto
     livre depende do julgamento do modelo (o botão `documentDecision` é a forma segura); o documento grava só no espaço
     do assunto (gravar num espaço mais restrito é conselho, a pessoa faz).
-- **Agendar `npm run conversations:retention`** (1x por dia, fora da aplicação, ANTES do `storage:reconcile`, que
-  apaga do bucket o que o `DeleteObjects` dela deixou) até o pg-boss entrar. Sem ela, o conteúdo apagado dos assuntos
+- **Agendar `npm run conversations:retention`** (1x por dia, fora da aplicação, terminando antes das 03:00 UTC: a
+  tarefa `storage.reconcile` das 04:00 UTC só varre marcas com mais de 60 min e apaga do bucket o que o
+  `DeleteObjects` dela deixou). Não virou tarefa do pg-boss porque precisa ignorar o RLS (abaixo) e a API nunca segura
+  a conexão do dono: decidir entre papel de manutenção e contexto de confiança. Sem ela, o conteúdo apagado dos assuntos
   fica para sempre (conta no uso do espaço). **Login:** roda com o dono (`DB_USERNAME`), que só ignora o RLS sendo
   superusuário ou com `BYPASSRLS`; no Postgres gerenciado (dono sem superusuário e com `FORCE ROW LEVEL SECURITY`), criar
   um papel de manutenção com `BYPASSRLS` para ela (ou um contexto de confiança `app.conversation_retention` nas
   policies, como o `app.storage_reconcile`). As consultas da retenção varrem `conversations` (sem índice por
   `deleted_at`): índice parcial quando crescer.
-- **Agendar `npm run storage:reconcile`** (1x por dia, fora da aplicação) até virar uma tarefa agendada do pg-boss (a
-  fila já existe, `JobQueue`; falta a tarefa). Sem a varredura, um objeto que ninguém toca de novo depois de uma queda entre o S3 e o COMMIT pode ter a versão
-  do índice expirada pelo ciclo de vida em 30 dias.
 - Plataforma: quarentena/aviso por e-mail ao dono e aos admins quando a equipe age numa organização ou Hub; leitura da
   auditoria da organização pelo cliente (hoje só se grava); endurecer a aprovação dupla (hoje basta outra pessoa com
   `platform.support.approve`); demais permissões de financeiro, tickets e chat (o `platform_finance` só tem `platform.billing.storage_quota` e `platform.billing.ai_budget`).

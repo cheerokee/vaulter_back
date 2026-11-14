@@ -91,6 +91,26 @@ export abstract class JobQueue {
    * that its work still applies. Returns how many were deleted.
    */
   abstract cancelQueued(name: string, match: JobPayload): Promise<number>;
+
+  /**
+   * Runs the queue's handler on a recurring schedule: a 5-field cron expression evaluated in UTC (e.g. `0 4 * * *`,
+   * every day at 04:00 UTC), each occurrence sending ONE job with an empty payload, across every instance. An
+   * occurrence missed while no instance with workers ran (deploy, outage) sends a single job when one comes back.
+   * Idempotent (upserts the schedule; calling it again with another expression replaces it). Register the handler with
+   * `work` too; call both in `onModuleInit`. The schedule row outlives the code: removing a schedule needs a migration
+   * (or `unschedule`), never just deleting the call.
+   */
+  abstract schedule(name: string, cron: string): Promise<void>;
+}
+
+const CRON = /^(\S+\s+){4}\S+$/;
+
+/** A 5-field cron expression (minute hour day month weekday); pg-boss validates the fields themselves. */
+export function assertCron(cron: string): string {
+  if (typeof cron !== 'string' || !CRON.test(cron.trim())) {
+    throw new Error(`cron expression is invalid: ${JSON.stringify(cron)}`);
+  }
+  return cron.trim();
 }
 
 const QUEUE_NAME = /^[a-z][a-z0-9]*(?:[.-][a-z0-9]+)*$/;

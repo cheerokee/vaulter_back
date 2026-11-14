@@ -18,6 +18,7 @@ import { ObjectStore } from './application/ports/object-store.js';
 import { ReconcileStorageUseCase } from './application/reconcile-storage.use-case.js';
 import { RequestUploadsUseCase } from './application/request-uploads.use-case.js';
 import { BackupSpaceStorageUsage } from './application/space-storage-usage.js';
+import { StorageReconciliation } from './application/storage-reconcile.job.js';
 import { StorageAccess } from './application/storage-access.js';
 import { BackupObjectRepository } from './domain/backup-object.repository.js';
 import { BackupObjectVersionRepository } from './domain/backup-object-version.repository.js';
@@ -67,6 +68,7 @@ import { S3ObjectStore } from './infra/s3/s3-object-store.js';
     BackupObjectHealer,
     BackupTrash,
     ReconcileStorageUseCase,
+    StorageReconciliation,
     RequestUploadsUseCase,
     ConfirmUploadsUseCase,
     DeleteObjectsUseCase,

@@ -269,6 +269,52 @@ describe('job queue (e2e, pg-boss)', () => {
     expect(left.map((r) => [r.id, r.state])).toEqual([[running!.id, 'active']]);
   });
 
+  it('schedules a queue on a UTC cron (upsert, also before the start), refusing a malformed expression', async () => {
+    app = await createTestApp();
+    const queue = app.get(JobQueue);
+    const admin = await adminDataSource();
+    try {
+      await queue.work('test.scheduled', async () => {});
+      await queue.schedule('test.scheduled', '0 3 * * *');
+      await queue.schedule('test.scheduled', '30 2 * * *');
+      const rows: { cron: string; timezone: string; options: object }[] =
+        await admin.query(
+          `SELECT cron, timezone, options FROM pgboss.schedule WHERE name = 'test.scheduled'`,
+        );
+      expect(rows).toEqual([
+        {
+          cron: '30 2 * * *',
+          timezone: 'UTC',
+          options: expect.objectContaining({ tz: 'UTC', missed: 'once' }),
+        },
+      ]);
+      await expect(queue.schedule('test.scheduled', 'daily')).rejects.toThrow(
+        /cron expression is invalid/,
+      );
+
+      // The daily bucket repair registered by the storage module at boot (before the queue started).
+      const [reconcile]: { cron: string; timezone: string }[] =
+        await admin.query(
+          `SELECT cron, timezone FROM pgboss.schedule WHERE name = 'storage.reconcile'`,
+        );
+      expect(reconcile).toEqual({ cron: '0 4 * * *', timezone: 'UTC' });
+    } finally {
+      await admin.query(
+        `DELETE FROM pgboss.schedule WHERE name = 'test.scheduled'`,
+      );
+    }
+  });
+
+  it('the scheduled bucket repair runs as a job (empty payload) and completes', async () => {
+    app = await createTestApp(withWorkers);
+    await app.get(JobQueue).send('storage.reconcile', {});
+    await vi.waitFor(
+      async () =>
+        expect((await jobsOf('storage.reconcile'))[0]?.state).toBe('completed'),
+      { timeout: 15_000, interval: 200 },
+    );
+  }, 30_000);
+
   it('shutdown drains running jobs before anything they use is released', async () => {
     await sodium.ready;
     app = await createTestApp(withWorkers);

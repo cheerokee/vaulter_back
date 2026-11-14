@@ -8,6 +8,7 @@ import { ConfigService } from '@nestjs/config';
 import { PgBoss, type Db, type Job, type Queue } from 'pg-boss';
 import { DataSource } from 'typeorm';
 import {
+  assertCron,
   assertIdsOnlyPayload,
   assertQueueName,
   assertSendOptions,
@@ -69,6 +70,8 @@ export class PgBossJobQueue
   private readonly handlers = new Map<string, JobHandler<JobPayload>>();
   /** Keyed queues (`oneJobPerKey`): created with the pg-boss `stately` policy. */
   private readonly keyed = new Set<string>();
+  /** Schedules asked for before the start (another module's onModuleInit ran first): applied after it. */
+  private readonly schedules = new Map<string, string>();
   private readonly ready: Promise<PgBoss>;
   private resolveReady!: (boss: PgBoss) => void;
   private boss: PgBoss | undefined;
@@ -125,6 +128,9 @@ export class PgBossJobQueue
     // Handlers registered before the start (another module's onModuleInit ran first).
     for (const [name, handler] of this.handlers) {
       await this.subscribe(boss, name, handler);
+    }
+    for (const [name, cron] of this.schedules) {
+      await this.applySchedule(boss, name, cron);
     }
   }
 
@@ -259,6 +265,28 @@ export class PgBossJobQueue
       [name, JSON.stringify(data)],
     );
     return (rows[0] as { count: number }).count;
+  }
+
+  async schedule(name: string, cron: string): Promise<void> {
+    assertQueueName(name);
+    const expression = assertCron(cron);
+    this.schedules.set(name, expression);
+    // Before the start, onModuleInit applies it (awaiting `ready` here would wait for a hook that runs later).
+    if (this.boss) await this.applySchedule(this.boss, name, expression);
+  }
+
+  /**
+   * Upserts the schedule row (also without workers in this process: only instances with workers, `schedule: true`,
+   * turn occurrences into jobs; pg-boss sends each occurrence once across instances). UTC, and `missed: 'once'`: a
+   * daily maintenance job skipped by a deploy still runs once when an instance comes back.
+   */
+  private async applySchedule(
+    boss: PgBoss,
+    name: string,
+    cron: string,
+  ): Promise<void> {
+    await this.ensureQueue(boss, name);
+    await boss.schedule(name, cron, {}, { tz: 'UTC', missed: 'once' });
   }
 
   /** Runs one job; a failure reaches pg-boss (stored in the job row) and the log only as its error type. */
