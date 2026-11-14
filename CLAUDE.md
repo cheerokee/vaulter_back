@@ -1545,8 +1545,7 @@ Os valores do `.env.example` para os segredos são **só de desenvolvimento**; p
   (o assunto como caixa de entrada de apps); WebSocket no lugar da sondagem longa do executor; reconcile do **contador**
   `conversation_space_usage` (os triggers o mantêm, mas não há varredura que corrija uma deriva);
   `move` que completa uma segunda cópia movida sem auditar.
-  **LISTEN:** a conexão `PgConversationChangeSignal` não tem `keepAlive`/ping (meia-aberta = acorda por prazo, até 25 s) e
-  reconectar acorda todos de uma vez (sem jitter); **não funciona atrás de pgbouncer em modo transação** (LISTEN exige
+  **LISTEN:** a conexão `PgConversationChangeSignal` (com keepalive, ping de 30 s e jitter de 0–1 s ao acordar todos) **não funciona atrás de pgbouncer em modo transação** (LISTEN exige
   conexão de sessão). **Pool:** a conexão do LISTEN e o pool do pg-boss ficam fora do pool do TypeORM, então conte
   `instâncias × (DB_POOL_MAX_CONNECTIONS + 1 + JOB_QUEUE_POOL_MAX)` (hoje 10 + 1 + 4) ao dimensionar `max_connections` do
   Postgres (veja "Pool" em Banco de dados).
