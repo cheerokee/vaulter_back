@@ -1155,10 +1155,11 @@ registra a fonte `conversations`), `hubs` (`HubDirectory`: `ownerOf`,
     reserva. `messageId` continua nulo: o app apaga a mensagem e os anexos dela (a referência está no corpo cifrado).
   - **Esvaziar a lixeira do assunto** (`EmptyConversationTrashUseCase`, `POST .../:id/trash/empty`
     `{ currentAuthProof }`, `@ThrottleReauth()`): só o dono (não participante, inclusive o Gestor: 404; participante:
-    403, antes do Argon2), reautenticação antes de gravar, assunto FOR UPDATE -> corpos com lápide zerados -> até 1000
+    403, antes do Argon2), reautenticação antes de gravar, assunto FOR UPDATE -> até 5000 corpos com lápide zerados -> até 1000
     anexos com lápide `purged` (FOR UPDATE em ordem de id, marca do diário renovada) -> auditoria
     `conversation.trash_emptied` -> COMMIT -> `DeleteObjects` (`removePurgedAttachments`; o que falhar fica marcado para
-    o `storage:reconcile`). `{ purgedMessages, purgedAttachments, purgedBytes, remainingAttachments }`. O esvaziar do
+    o `storage:reconcile`). `{ purgedMessages, purgedAttachments, purgedBytes, remainingAttachments, remainingMessages }`
+    (até 5000 corpos, `MAX_CONVERSATION_PURGE_MESSAGES`, e 1000 anexos por pedido; o app repete enquanto algum > 0). O esvaziar do
     Gestor (backup) nunca toca os assuntos.
   - **Retenção** (`ConversationRetention` + `ConversationRetentionSqlStore`, CLI `npm run conversations:retention`):
     tudo com lápide há mais de 30 dias (`CONVERSATION_RETENTION_DAYS`, relógio do banco; lápide da mensagem/anexo, ou a
@@ -1542,8 +1543,7 @@ Os valores do `.env.example` para os segredos são **só de desenvolvimento**; p
   aparecem pelo feed); **executor na nuvem completo** (hoje a nuvem é só executor de **reserva** nos espaços em nuvem
   ativa, sem ferramentas; o executor principal é sempre um Hub; veja "Nuvem ativa" abaixo); API de integradores
   (o assunto como caixa de entrada de apps); WebSocket no lugar da sondagem longa do executor; reconcile do **contador**
-  `conversation_space_usage` (os triggers o mantêm, mas não há varredura que corrija uma deriva); **limite de lote** no
-  esvaziar das mensagens do assunto (`purgeTrash` das mensagens zera tudo de uma vez; os anexos já vão em 1000);
+  `conversation_space_usage` (os triggers o mantêm, mas não há varredura que corrija uma deriva);
   `move` que completa uma segunda cópia movida sem auditar.
   **LISTEN:** a conexão `PgConversationChangeSignal` não tem `keepAlive`/ping (meia-aberta = acorda por prazo, até 25 s) e
   reconectar acorda todos de uma vez (sem jitter); **não funciona atrás de pgbouncer em modo transação** (LISTEN exige

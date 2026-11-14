@@ -732,6 +732,7 @@ describe('conversations: move, retention and trash (e2e)', () => {
         purgedAttachments: 1,
         purgedBytes: bytesOf(m1) + bytesOf(m2) + x1.size,
         remainingAttachments: 0,
+        remainingMessages: 0,
       });
       expect(spy).toHaveBeenCalledTimes(1);
       spy.mockRestore();
@@ -769,6 +770,7 @@ describe('conversations: move, retention and trash (e2e)', () => {
         purgedAttachments: 0,
         purgedBytes: 0,
         remainingAttachments: 0,
+        remainingMessages: 0,
       });
     });
   });

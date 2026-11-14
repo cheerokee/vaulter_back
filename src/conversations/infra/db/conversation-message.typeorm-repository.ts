@@ -182,20 +182,32 @@ export class ConversationMessageTypeormRepository extends ConversationMessageRep
   async purgeTrash(
     scope: ConversationScope,
     conversationId: string,
-  ): Promise<{ messages: number; bytes: number }> {
-    const raw: unknown = await inScope(this.dataSource, scope, (m) =>
-      m.query(
+    limit: number,
+  ): Promise<{ messages: number; bytes: number; remaining: number }> {
+    return inScope(this.dataSource, scope, async (m) => {
+      const raw: unknown = await m.query(
         `UPDATE conversation_messages SET encrypted_body = NULL, updated_at = now()
-          WHERE organization_id = $1 AND conversation_id = $2
-            AND deleted_at IS NOT NULL AND encrypted_body IS NOT NULL
+          WHERE organization_id = $1 AND id IN (
+                SELECT id FROM conversation_messages
+                 WHERE organization_id = $1 AND conversation_id = $2
+                   AND deleted_at IS NOT NULL AND encrypted_body IS NOT NULL
+                 ORDER BY id
+                 LIMIT $3)
         RETURNING body_bytes`,
+        [scope.organizationId, conversationId, limit],
+      );
+      const rows = updatedRows<{ body_bytes: number }>(raw);
+      const left: { n: string }[] = await m.query(
+        `SELECT count(*)::text AS n FROM conversation_messages
+          WHERE organization_id = $1 AND conversation_id = $2
+            AND deleted_at IS NOT NULL AND encrypted_body IS NOT NULL`,
         [scope.organizationId, conversationId],
-      ),
-    );
-    const rows = updatedRows<{ body_bytes: number }>(raw);
-    return {
-      messages: rows.length,
-      bytes: rows.reduce((sum, r) => sum + Number(r.body_bytes), 0),
-    };
+      );
+      return {
+        messages: rows.length,
+        bytes: rows.reduce((sum, r) => sum + Number(r.body_bytes), 0),
+        remaining: Number(left[0]?.n ?? 0),
+      };
+    });
   }
 }

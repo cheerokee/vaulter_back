@@ -136,7 +136,8 @@ Visão geral: o assunto é dado do espaço, cifrado **no celular** com uma chave
   idempotente). Ao apagar uma mensagem, apague também os anexos que ela cita (o backend não sabe quais).
 - [ ] **Esvaziar a lixeira do assunto** (só o dono, com reautenticação, como a do espaço):
   `POST /spaces/:spaceId/conversations/:id/trash/empty` `{ currentAuthProof }` -> `{ purgedMessages,
-  purgedAttachments, purgedBytes, remainingAttachments }`; repetir enquanto `remainingAttachments > 0` (cada volta gasta
+  purgedAttachments, purgedBytes, remainingAttachments, remainingMessages }` (até 5000 mensagens e 1000 anexos por
+  volta); repetir enquanto `remainingMessages > 0` ou `remainingAttachments > 0` (cada volta gasta
   o orçamento de reautenticação, 5 por 15 min). Sem esvaziar, a retenção tira o conteúdo apagado depois de 30 dias.
 - [ ] **Nuvem de reserva nos assuntos** (espaço com `cloud.mode = 'active_cloud'`; spec active-cloud §4.3):
   - **Criar** um assunto num espaço em nuvem ativa exige também a versão 1 trancada para a chave do servidor

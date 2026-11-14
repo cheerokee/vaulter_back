@@ -10,7 +10,10 @@ import {
   ConversationAttachmentRepository,
   type PurgedAttachment,
 } from '../domain/conversation-attachment.repository.js';
-import { MAX_CONVERSATION_PURGE_ATTACHMENTS } from '../domain/conversation-limits.js';
+import {
+  MAX_CONVERSATION_PURGE_ATTACHMENTS,
+  MAX_CONVERSATION_PURGE_MESSAGES,
+} from '../domain/conversation-limits.js';
 import { ConversationMessageRepository } from '../domain/conversation-message.repository.js';
 import {
   bytesOfAttachments,
@@ -23,8 +26,10 @@ export type EmptyConversationTrashResult = {
   purgedAttachments: number;
   /** Encrypted bytes that left the space usage (message bodies + attachments). */
   purgedBytes: number;
-  /** Attachments still in the trash: the app repeats the request while this is above 0. */
+  /** Attachments still in the trash: the app repeats the request while this or `remainingMessages` is above 0. */
   remainingAttachments: number;
+  /** Message bodies still in the trash (a request nulls at most `MAX_CONVERSATION_PURGE_MESSAGES`). */
+  remainingMessages: number;
 };
 
 // Esvaziar a lixeira DO ASSUNTO (spec conversations §4.4.1): o esvaziar do Gestor (backup do espaço) não alcança
@@ -33,12 +38,12 @@ export type EmptyConversationTrashResult = {
 //    que não é o dono = 403 `not-conversation-owner` (sem gastar o Argon2);
 // 2. reautenticação (`CurrentAuthProofVerifier`, 422 `current-auth-proof-invalid`) ANTES de qualquer gravação;
 // 3. no unit of work (`lock_timeout` do storage: 409 `storage-busy`): assunto FOR UPDATE (dono conferido de novo) ->
-//    corpos das mensagens com lápide zerados (todos; o trigger tira os bytes do uso e da lixeira) -> até 1000 anexos
+//    até 5000 corpos das mensagens com lápide zerados (o trigger tira os bytes do uso e da lixeira) -> até 1000 anexos
 //    com lápide `purged` (FOR UPDATE em ordem de id, marca do diário renovada) -> auditoria `conversation.trash_emptied`
 //    (só contagens, só se apagou algo). Nunca trava o espaço (a ordem é espaço -> assunto -> contador);
 // 4. depois do COMMIT, `DeleteObjects` em lote no S3 (o que não sai fica com a marca para a varredura).
 // Só a lixeira deste assunto: mensagens e anexos vivos nunca são tocados. Um pedido que não apagou nada responde
-// `remainingAttachments: 0` (o laço do app sempre para).
+// `remainingAttachments: 0` e `remainingMessages: 0` (o laço do app sempre para).
 @Injectable()
 export class EmptyConversationTrashUseCase {
   private readonly logger = new Logger(EmptyConversationTrashUseCase.name);
@@ -71,6 +76,7 @@ export class EmptyConversationTrashUseCase {
       messages: { messages: number; bytes: number };
       purged: PurgedAttachment[];
       remainingAttachments: number;
+      remainingMessages: number;
     };
     try {
       committed = await this.uow.run(async () => {
@@ -82,7 +88,11 @@ export class EmptyConversationTrashUseCase {
           actor,
         );
         conversation.assertOwner(userId);
-        const messages = await this.messages.purgeTrash(scope, conversation.id);
+        const messages = await this.messages.purgeTrash(
+          scope,
+          conversation.id,
+          MAX_CONVERSATION_PURGE_MESSAGES,
+        );
         const purged = await this.attachments.purgeTrash(
           scope,
           conversation.id,
@@ -111,6 +121,7 @@ export class EmptyConversationTrashUseCase {
           messages,
           purged,
           remainingAttachments: progressed ? remaining : 0,
+          remainingMessages: progressed ? messages.remaining : 0,
         };
       });
     } catch (error) {
@@ -123,6 +134,7 @@ export class EmptyConversationTrashUseCase {
       purgedBytes:
         committed.messages.bytes + bytesOfAttachments(committed.purged),
       remainingAttachments: committed.remainingAttachments,
+      remainingMessages: committed.remainingMessages,
     };
   }
 }

@@ -14,7 +14,10 @@ import type {
 } from '../domain/conversation-attachment.repository.js';
 import type { ConversationMessageRepository } from '../domain/conversation-message.repository.js';
 import { Conversation } from '../domain/conversation.js';
-import { MAX_CONVERSATION_PURGE_ATTACHMENTS } from '../domain/conversation-limits.js';
+import {
+  MAX_CONVERSATION_PURGE_ATTACHMENTS,
+  MAX_CONVERSATION_PURGE_MESSAGES,
+} from '../domain/conversation-limits.js';
 import type { ConversationAccess } from './conversation-access.js';
 import {
   ConversationRetention,
@@ -96,7 +99,7 @@ describe('EmptyConversationTrashUseCase', () => {
   const messages = {
     purgeTrash: vi.fn(async () => {
       trace.push('purgeMessages');
-      return { messages: 2, bytes: 300 };
+      return { messages: 2, bytes: 300, remaining: 7 };
     }),
   };
   const attachments = {
@@ -157,11 +160,17 @@ describe('EmptyConversationTrashUseCase', () => {
       CONV,
       MAX_CONVERSATION_PURGE_ATTACHMENTS,
     );
+    expect(messages.purgeTrash).toHaveBeenCalledWith(
+      scope,
+      CONV,
+      MAX_CONVERSATION_PURGE_MESSAGES,
+    );
     expect(r).toEqual({
       purgedMessages: 2,
       purgedAttachments: 1,
       purgedBytes: 1300,
       remainingAttachments: 5,
+      remainingMessages: 7,
     });
     expect(audit.record).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -194,10 +203,15 @@ describe('EmptyConversationTrashUseCase', () => {
   });
 
   it('nothing purged: no audit, no S3 call, remaining 0 (the app loop stops)', async () => {
-    messages.purgeTrash.mockResolvedValueOnce({ messages: 0, bytes: 0 });
+    messages.purgeTrash.mockResolvedValueOnce({
+      messages: 0,
+      bytes: 0,
+      remaining: 3,
+    });
     batch = [];
     const r = await useCase().execute(ana, SPACE, CONV, 'ok');
     expect(r.remainingAttachments).toBe(0);
+    expect(r.remainingMessages).toBe(0);
     expect(audit.record).not.toHaveBeenCalled();
     expect(store.deleteVersions).not.toHaveBeenCalled();
   });

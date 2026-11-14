@@ -56,11 +56,13 @@ export abstract class ConversationMessageRepository {
     conversationId: string,
   ): Promise<ConversationMessage[]>;
   /**
-   * Nulls the encrypted body of every tombstoned message of the conversation that still has one (its trash). The usage
-   * trigger takes the bytes out of the space usage and trash. Inside `UnitOfWork.run`, with the conversation locked.
+   * Nulls the encrypted body of up to `limit` tombstoned messages of the conversation that still have one (its trash),
+   * in id order, and tells how many are left. The usage trigger takes the bytes out of the space usage and trash.
+   * Inside `UnitOfWork.run`, with the conversation locked.
    */
   abstract purgeTrash(
     scope: ConversationScope,
     conversationId: string,
-  ): Promise<{ messages: number; bytes: number }>;
+    limit: number,
+  ): Promise<{ messages: number; bytes: number; remaining: number }>;
 }

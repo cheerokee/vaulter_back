@@ -33,3 +33,8 @@ export const CONVERSATION_LONG_POLLS_TOTAL = 1_000;
 export const CONVERSATION_LONG_POLL_DEGRADED_REREAD_MS = 5_000;
 /** Attachments purged per "empty the conversation's trash" request (one S3 `DeleteObjects` call). */
 export const MAX_CONVERSATION_PURGE_ATTACHMENTS = 1_000;
+/**
+ * Message bodies nulled per "empty the conversation's trash" request, like a retention batch: every updated row is
+ * renumbered at COMMIT under the conversations' advisory lock, so one request never holds it for an unbounded set.
+ */
+export const MAX_CONVERSATION_PURGE_MESSAGES = 5_000;

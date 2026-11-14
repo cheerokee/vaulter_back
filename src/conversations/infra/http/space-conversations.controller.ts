@@ -430,8 +430,8 @@ export class SpaceConversationsController {
   }
 
   /**
-   * The owner empties the trash of this conversation for good (deleted message bodies, and up to 1000 deleted
-   * attachments per call: repeat while `remainingAttachments > 0`), with reauthentication.
+   * The owner empties the trash of this conversation for good (up to 5000 deleted message bodies and 1000 deleted
+   * attachments per call: repeat while `remainingMessages > 0` or `remainingAttachments > 0`), with reauthentication.
    */
   @ThrottleReauth()
   @ApiBearerAuth()
@@ -454,6 +454,7 @@ export class SpaceConversationsController {
       purgedAttachments: r.purgedAttachments,
       purgedBytes: r.purgedBytes,
       remainingAttachments: r.remainingAttachments,
+      remainingMessages: r.remainingMessages,
     };
   }
 
