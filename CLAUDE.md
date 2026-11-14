@@ -912,7 +912,7 @@ mesmo commit).
   unitários ao lado do código com `ObjectStore` simulado. Helpers de Hub em `test/support/hub-client.ts` e
   `hubs-kit.ts`. Pendências do módulo: veja "Pendências antes de produção" (snapshot pago, contratação de franquia,
   classes de armazenamento mais baratas, troca de chave pelo Hub editor da Sala, visitante em Hub alheio, configuração
-  inicial por Bluetooth/idioma do Hub, índice `(space_id, updated_at)`, rota de download em lote, limpeza física do
+  inicial por Bluetooth/idioma do Hub, rota de download em lote, limpeza física do
   índice, aviso de franquia perto do fim, endpoint S3 público).
 
 ## Módulo `conversations`
@@ -1525,8 +1525,6 @@ Os valores do `.env.example` para os segredos são **só de desenvolvimento**; p
   qualquer transação longa do cluster, quebrava num restore lógico e empatava acima de 65.535 linhas por transação), mas
   na listagem do backup a distância entre o carimbo (`clock_timestamp()`, depois do S3) e o
   COMMIT é limitada a 5 min (`limitRemainingTime`), dentro da folga de 1 h do `since`.
-- **Índice `storage_objects (space_id, updated_at)`** para o `since` da listagem do backup (hoje filtra sem índice, pelo
-  índice do espaço + PK); entra numa migration quando os espaços crescerem.
 - **Storage/backup:** snapshot pago (versão do espaço inteiro numa data); contratação de franquia pela organização com
   cobrança automática (hoje só o financeiro da plataforma ajusta `storage_quota_bytes`); classes de armazenamento mais
   baratas (ex.: Infrequent Access/Glacier para a lixeira e versões antigas); **troca de chave feita pelo Hub editor da
@@ -1546,7 +1544,7 @@ Os valores do `.env.example` para os segredos são **só de desenvolvimento**; p
   (o assunto como caixa de entrada de apps); WebSocket no lugar da sondagem longa do executor; reconcile do **contador**
   `conversation_space_usage` (os triggers o mantêm, mas não há varredura que corrija uma deriva); **limite de lote** no
   esvaziar das mensagens do assunto (`purgeTrash` das mensagens zera tudo de uma vez; os anexos já vão em 1000);
-  `move` que completa uma segunda cópia movida sem auditar; índice parcial por `deleted_at` para a retenção.
+  `move` que completa uma segunda cópia movida sem auditar.
   **LISTEN:** a conexão `PgConversationChangeSignal` não tem `keepAlive`/ping (meia-aberta = acorda por prazo, até 25 s) e
   reconectar acorda todos de uma vez (sem jitter); **não funciona atrás de pgbouncer em modo transação** (LISTEN exige
   conexão de sessão). **Pool:** a conexão do LISTEN e o pool do pg-boss ficam fora do pool do TypeORM, então conte
@@ -1583,8 +1581,8 @@ Os valores do `.env.example` para os segredos são **só de desenvolvimento**; p
   fica para sempre (conta no uso do espaço). **Login:** roda com o dono (`DB_USERNAME`), que só ignora o RLS sendo
   superusuário ou com `BYPASSRLS`; no Postgres gerenciado (dono sem superusuário e com `FORCE ROW LEVEL SECURITY`), criar
   um papel de manutenção com `BYPASSRLS` para ela (ou um contexto de confiança `app.conversation_retention` nas
-  policies, como o `app.storage_reconcile`). As consultas da retenção varrem `conversations` (sem índice por
-  `deleted_at`): índice parcial quando crescer.
+  policies, como o `app.storage_reconcile`). Os candidatos saem de três índices parciais por `deleted_at` (migration
+  `MaintenanceIndexes`).
 - Plataforma: quarentena/aviso por e-mail ao dono e aos admins quando a equipe age numa organização ou Hub; leitura da
   auditoria da organização pelo cliente (hoje só se grava); endurecer a aprovação dupla (hoje basta outra pessoa com
   `platform.support.approve`); demais permissões de financeiro, tickets e chat (o `platform_finance` só tem `platform.billing.storage_quota` e `platform.billing.ai_budget`).

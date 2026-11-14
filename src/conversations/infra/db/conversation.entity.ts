@@ -53,6 +53,10 @@ import { DeviceIdSyncableTypeormEntity } from './device-id.entity-base.js';
   where: `"cloud_reserve"`,
 })
 @Index('ix_conversations_sync_version', ['syncVersion'])
+// Retention: tombstoned conversations.
+@Index('ix_conversations_deleted', ['deletedAt'], {
+  where: `"deleted_at" IS NOT NULL`,
+})
 @Index('fk_conversations_organizations_idx', ['organizationId'])
 @Index('fk_conversations_spaces_idx', ['spaceId'])
 @Index('fk_conversations_created_by_idx', ['createdByUserId'])

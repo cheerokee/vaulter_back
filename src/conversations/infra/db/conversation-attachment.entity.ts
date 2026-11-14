@@ -35,6 +35,10 @@ import type { ConversationTypeormEntity } from './conversation.entity.js';
 @Index('fk_conversation_attachments_organizations_idx', ['organizationId'])
 @Index('fk_conversation_attachments_conversations_idx', ['conversationId'])
 @Index('fk_conversation_attachments_messages_idx', ['messageId'])
+// Retention: tombstoned attachments still in the bucket.
+@Index('ix_conversation_attachments_retention', ['deletedAt'], {
+  where: `"deleted_at" IS NOT NULL AND "status" = 'committed'`,
+})
 @Index('ix_conversation_attachments_s3_write_started', ['s3WriteStartedAt'], {
   where: `"s3_write_started_at" IS NOT NULL`,
 })

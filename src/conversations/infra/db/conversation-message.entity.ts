@@ -67,6 +67,10 @@ import type { ConversationTypeormEntity } from './conversation.entity.js';
 @Index('fk_conversation_messages_author_hubs_idx', ['authorHubId'])
 @Index('fk_conversation_messages_replaces_idx', ['replacesMessageId'])
 @Index('fk_conversation_messages_acked_by_hubs_idx', ['ackedByHubId'])
+// Retention: tombstoned messages whose body is still kept.
+@Index('ix_conversation_messages_retention', ['deletedAt'], {
+  where: `"deleted_at" IS NOT NULL AND "encrypted_body" IS NOT NULL`,
+})
 @Index('ix_conversation_messages_pending', ['conversationId'], {
   where: `"pending" AND "deleted_at" IS NULL`,
 })

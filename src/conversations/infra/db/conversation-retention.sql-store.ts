@@ -35,23 +35,29 @@ export class ConversationRetentionSqlStore extends ConversationRetentionStore {
   async candidates(retentionDays: number): Promise<RetentionCandidate[]> {
     const rows: { organization_id: string; id: string }[] =
       await this.dataSource.query(
-        `SELECT c.organization_id, c.id FROM conversations c
-          WHERE (c.deleted_at < now() - make_interval(days => $1) AND (
-                   c.encrypted_header IS NOT NULL
+        // Three driving sets, each on its partial index (migration MaintenanceIndexes): conversations tombstoned past
+        // the window that still keep something, and messages / attachments tombstoned past it. UNION dedupes.
+        `WITH due AS (
+           SELECT c.organization_id, c.id FROM conversations c
+            WHERE c.deleted_at IS NOT NULL AND c.deleted_at < now() - make_interval(days => $1)
+              AND (c.encrypted_header IS NOT NULL
                    OR EXISTS (SELECT 1 FROM conversation_messages m
                                WHERE m.conversation_id = c.id AND m.organization_id = c.organization_id
                                  AND m.encrypted_body IS NOT NULL)
                    OR EXISTS (SELECT 1 FROM conversation_attachments a
                                WHERE a.conversation_id = c.id AND a.organization_id = c.organization_id
-                                 AND a.status = 'committed')))
-             OR EXISTS (SELECT 1 FROM conversation_messages m
-                         WHERE m.conversation_id = c.id AND m.organization_id = c.organization_id
-                           AND m.encrypted_body IS NOT NULL
-                           AND m.deleted_at < now() - make_interval(days => $1))
-             OR EXISTS (SELECT 1 FROM conversation_attachments a
-                         WHERE a.conversation_id = c.id AND a.organization_id = c.organization_id
-                           AND a.status = 'committed'
-                           AND a.deleted_at < now() - make_interval(days => $1))
+                                 AND a.status = 'committed'))
+           UNION
+           SELECT m.organization_id, m.conversation_id FROM conversation_messages m
+            WHERE m.deleted_at IS NOT NULL AND m.encrypted_body IS NOT NULL
+              AND m.deleted_at < now() - make_interval(days => $1)
+           UNION
+           SELECT a.organization_id, a.conversation_id FROM conversation_attachments a
+            WHERE a.deleted_at IS NOT NULL AND a.status = 'committed'
+              AND a.deleted_at < now() - make_interval(days => $1)
+         )
+         SELECT c.organization_id, c.id FROM due
+           JOIN conversations c ON c.id = due.id AND c.organization_id = due.organization_id
           ORDER BY c.space_id, c.id`,
         [retentionDays],
       );

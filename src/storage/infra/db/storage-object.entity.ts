@@ -22,6 +22,9 @@ import type { StorageObjectVersionTypeormEntity } from './storage-object-version
 @Index('fk_storage_objects_organizations_idx', ['organizationId'])
 @Index('fk_storage_objects_spaces_idx', ['spaceId'])
 @Index('fk_storage_objects_current_version_idx', ['currentVersionId'])
+// (space_id, COALESCE(updated_at, created_at)): the listing's `since`. Expression index, created by the migration
+// MaintenanceIndexes (TypeORM cannot describe it).
+@Index('ix_storage_objects_space_changed', { synchronize: false })
 export class StorageObjectTypeormEntity {
   @PrimaryColumn('uuid')
   id!: string;
