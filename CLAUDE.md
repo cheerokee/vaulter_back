@@ -665,7 +665,14 @@ consulta só de leitura (veja Sincronização).
   sincronização completa (as linhas mantêm o `sync_version` antigo). Tipos de item: `hub`, `hub_organization`,
   `organization`, `member`, `role_assignment`, `space`, `space_key`, `space_key_grant`, `hub_space`; nunca `authHash`,
   cópia do kit nem cópia de outro Hub. Empate de `sync_version`: ver comentário de `mergeSyncPage` (a página só passa
-  de `limit` quando um único grupo é maior que ele). **Consulta de status** (`GET /hub-enrollments/:id/status`, 120/h
+  de `limit` quando um único grupo é maior que ele). **Versões no COMMIT, na ordem dos commits** (migration
+  `HubSyncCommitOrder`): as dez tabelas lidas (`hubs`, `organizations`, `users`, `role_assignments`, `spaces`,
+  `space_keys`, `space_key_grants`, `hub_organization`, `hub_space`, `user_organization`) usam o mesmo feed dos assuntos
+  (`COMMIT_ORDERED_SYNC_FEED`: mesma sequência, mesmo advisory lock; veja "Feeds de sincronização" em `conversations`),
+  então o `nextSince` nunca pula um commit atrasado e não há sincronização completa periódica (fixado por
+  `test/hubs/sync-commit-order.e2e-spec.ts`). Lock único de propósito: com dois, uma transação que grava nos dois grupos
+  em ordens opostas daria deadlock no COMMIT. `hubs` tem GRANT de UPDATE em `sync_version`/`sync_pending` (o resto é por
+  coluna); as três de chave composta passam a chave como argumentos do trigger. **Consulta de status** (`GET /hub-enrollments/:id/status`, 120/h
   por IP, que atrás de NAT é dividido entre aparelhos): recomendar intervalo de **pelo menos 60 s** com jitter e parar
   no estado final. **Intervalo recomendado da sincronização** (`hubSync` = 120/h por Hub, e a completa e cada página
   também contam): incremental a cada **5 min** com jitter de ±20% (12/h), sempre `limit=500`, e na mesma passada
@@ -1012,7 +1019,8 @@ registra a fonte `conversations`), `hubs` (`HubDirectory`: `ownerOf`,
   COMMIT, `trg_<tabela>_sync_commit`, depois de todas as travas de linha da transação: não fecha ciclo). Ele fica preso
   do primeiro UPDATE de versão **até o fim do commit** (o resto dos triggers adiados, a trava da fila de NOTIFY, o
   flush do WAL e a réplica síncrona, se houver, e a visibilidade): **os commits que gravam nos assuntos são seriais,
-  fsync incluído**. Custo conhecido: uma cascata grande (desregistrar Hub, desvincular, saída da organização com muitos
+  fsync incluído**, e o lock é o MESMO das tabelas da sincronização do Hub (pessoas, organizações, vínculos, papéis,
+  espaços, chaves, Hubs; migration `HubSyncCommitOrder`): esses commits também entram na fila. Custo conhecido: uma cascata grande (desregistrar Hub, desvincular, saída da organização com muitos
   assuntos) faz os outros que gravam nos assuntos esperarem no COMMIT, segurando a conexão do pool, pelo tempo dela
   (segundos com dezenas de milhares de linhas); a retenção grava em lotes de até 5.000 linhas
   (`CONVERSATION_RETENTION_BATCH_ROWS`). Rotas com o `lock_timeout` do storage (anexos: intenção, confirmação, apagar;
@@ -1397,9 +1405,9 @@ registra a fonte `conversations`), `hubs` (`HubDirectory`: `ownerOf`,
 - **Toda tabela tem `created_at`, `updated_at` e `deleted_at`**, vindos de uma entidade base (`@CreateDateColumn`,
   `@UpdateDateColumn`, `@DeleteDateColumn`). **Offline-first:** o que o hub/app sincronizam nunca sofre
   `DELETE` físico — excluir é `softDelete()` (lápide); tabela de ligação que volta a existir tem o
-  `deleted_at` limpo, não uma linha nova. Essas tabelas têm também `sync_version` (nas dos assuntos, dada no COMMIT:
-  `addCommitOrderedSyncVersion`; nas outras, sequência global do
-  servidor, por trigger); o endpoint de sincronização usa `withDeleted` para mandar as lápides. Regras
+  `deleted_at` limpo, não uma linha nova. Essas tabelas têm também `sync_version` (nas dos assuntos e nas do
+  `GET /hub/sync`, dada no COMMIT, de um feed só: `addCommitOrderedSyncVersion`, `COMMIT_ORDERED_SYNC_FEED`; no catálogo
+  RBAC, sequência global do servidor, por trigger); o endpoint de sincronização usa `withDeleted` para mandar as lápides. Regras
   completas no cabeçalho de `docs/der_model.sql`.
 - **Dois logins no Postgres:**
   - **runtime** (`DB_APP_USERNAME`/`DB_APP_PASSWORD`, padrão `vaulter_app`): o que a API usa. Sem superusuário,
@@ -1515,17 +1523,9 @@ Os valores do `.env.example` para os segredos são **só de desenvolvimento**; p
   organização; consulta de status por Hub atrás de NAT (o limite é por IP); limpeza física das linhas antigas de
   `hub_enrollments`, `hub_link_codes`, `hub_auth_challenges` e desafios falsos (o runtime não tem `DELETE`; hoje a
   apresentação vencida só vira `expired`, e códigos/desafios usados ficam; `expireStale` roda a cada apresentação).
-- **Ordem de commit × `sync_version`:** a versão é atribuída na escrita, não no COMMIT; uma transação com versão menor
-  que confirma depois de outra com versão maior pode ser pulada para sempre pelo `nextSince` da sincronização do Hub
-  (o `REPEATABLE READ` só deixa cada página coerente). Opções: horizonte seguro (guardar `pg_current_xact_id()` numa
-  coluna xid8 junto da versão e só servir linhas abaixo de `pg_snapshot_xmin(pg_current_snapshot())`) ou carimbo de
-  versão no momento do commit. Mitigação até lá: sincronização completa periódica do Hub. O mesmo vale para o `since`
-  da listagem do backup (os feeds dos assuntos **não** têm mais a ressalva: versões dadas no COMMIT, na ordem dos
-  commits, veja o módulo `conversations`; as tabelas do `GET /hub/sync` podem adotar o mesmo helper
-  `addCommitOrderedSyncVersion` com um `CommitOrderedSyncFeed` próprio, sem o horizonte por xid, que parava os feeds com
-  qualquer transação longa do cluster, quebrava num restore lógico e empatava acima de 65.535 linhas por transação), mas
-  na listagem do backup a distância entre o carimbo (`clock_timestamp()`, depois do S3) e o
-  COMMIT é limitada a 5 min (`limitRemainingTime`), dentro da folga de 1 h do `since`.
+- **`since` da listagem do backup × ordem de commit:** o carimbo é `clock_timestamp()` (depois do S3), não uma versão
+  dada no COMMIT; a distância entre ele e o COMMIT é limitada a 5 min (`limitRemainingTime`), dentro da folga de 1 h do
+  `since`. (A sincronização do Hub e os feeds dos assuntos já têm versões na ordem dos commits.)
 - **Storage/backup:** snapshot pago (versão do espaço inteiro numa data); contratação de franquia pela organização com
   cobrança automática (hoje só o financeiro da plataforma ajusta `storage_quota_bytes`); classes de armazenamento mais
   baratas (ex.: Infrequent Access/Glacier para a lixeira e versões antigas); **troca de chave feita pelo Hub editor da

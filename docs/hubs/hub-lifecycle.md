@@ -255,7 +255,10 @@ Hub, como faria para uma pessoa.
 - **Paginação:**
   - guarde o `nextSince` e mande-o como `since` na próxima chamada;
   - página cheia (`items.length == limit`) significa que há mais: peça a seguinte na mesma passada;
-  - a página só passa de `limit` quando um grupo de itens com o mesmo `syncVersion` é maior que ele.
+  - a página só passa de `limit` quando um grupo de itens com o mesmo `syncVersion` é maior que ele;
+  - o `syncVersion` é dado no COMMIT, na ordem dos commits: o que confirmou já sai na próxima leitura e o que
+    confirmar depois vem sempre com versão maior, então o `nextSince` nunca pula uma mudança (não é preciso uma
+    sincronização completa periódica para "consertar" o estado).
 - **Sincronização completa (`since=0`):** **substitui** todo o estado local do Hub. Faça uma:
   - na primeira vez;
   - depois de mais de 30 dias sem sincronizar;
@@ -473,7 +476,7 @@ organização está aprovado). Rotas com o token de Hub:
     `conversationId=<id>&since=0` (páginas até vir vazia) e segue com o cursor principal;
   - sincronização completa (`since=0`) **substitui** o estado local. Este feed **não** pula linhas pela ordem de commit
     (a versão é dada no COMMIT, na ordem dos commits: o que confirmou já sai na próxima leitura, e o que confirmar depois
-    vem sempre com versão maior), então não precisa de sincronização completa periódica. `syncVersion` aqui não é comparável com o do `GET /hub/sync` (são outra ordem).
+    vem sempre com versão maior), então não precisa de sincronização completa periódica. Não compare o `syncVersion` daqui com o do `GET /hub/sync`: são cursores separados (hoje saem da mesma sequência, mas isso não é contrato).
   - mensagem com `replacesMessageId` = edição: esconder a substituída (a lápide dela chega na mesma página ou depois,
     nunca antes);
   - **itens filhos de um assunto que o Hub ainda não conhece** (mensagem, anexo, participação ou cópia) **podem chegar
@@ -689,9 +692,6 @@ Estourou: 429 `too-many-requests` com `Retry-After` (segundos).
   comandos para o aparelho entram com o canal WebSocket.
 - **Apagamento remoto:** não há comando para o backend mandar o Hub se apagar. O desregistro só corta o acesso.
 - **Transferência de Hub:** não existe. Hoje o caminho é desregistrar e fazer reset de fábrica.
-- **Ordem de commit × `sync_version`:** uma sincronização pode pular de vez uma linha cujo commit chegou atrasado.
-  Até a correção (versões dadas no COMMIT, como nos assuntos), a sincronização completa periódica corrige o estado. O
-  feed dos assuntos (`GET /hub/conversations/changes`) já tem versões na ordem dos commits e não precisa disso.
 - **Nuvem ativa:** prefixos de tarefa nos embeddings (`search_document:`/`search_query:`) só como mudança conjunta com
   reindexação dos dois lados; executor na nuvem completo e Hub hospedado ficam para depois (hoje a nuvem é só reserva).
 - **Backup (storage):** snapshot pago, troca de chave feita pelo Hub editor da Sala (hoje o Hub guarda os envios numa

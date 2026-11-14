@@ -35,6 +35,8 @@ type Row = Record<string, unknown> & { sv: string; deleted: boolean };
 type Params = [hubId: string, since: string, limit: number];
 type OrgParams = [...Params, organizationId: string];
 
+// Versions are given at commit, in commit order (migration HubSyncCommitOrder): only `sync_pending = false` rows are
+// served (always true of committed rows; documents intent), and a snapshot never misses a row below its highest version.
 // One query = one batch; `truncated` when it hit the limit ($3), so rows above its last version may exist.
 async function readBatch(
   m: EntityManager,
@@ -112,7 +114,7 @@ export class HubSyncSqlReader extends HubSyncReader {
             m,
             `SELECT id, name, owner_user_id, encryption_public_key, signing_public_key,
                     deleted_at IS NOT NULL AS deleted, sync_version::text AS sv
-               FROM hubs WHERE id = $1 AND sync_version > $2::bigint
+               FROM hubs WHERE id = $1 AND sync_version > $2::bigint AND NOT sync_pending
               ORDER BY sync_version LIMIT $3`,
             (r) =>
               item(
@@ -137,7 +139,7 @@ export class HubSyncSqlReader extends HubSyncReader {
             `SELECT organization_id, status, (deleted_at IS NOT NULL OR status <> 'approved') AS deleted,
                     sync_version::text AS sv
                FROM hub_organization
-              WHERE hub_id = $1 AND sync_version > $2::bigint
+              WHERE hub_id = $1 AND sync_version > $2::bigint AND NOT sync_pending
               ORDER BY sync_version LIMIT $3`,
             (r) =>
               item(
@@ -154,7 +156,7 @@ export class HubSyncSqlReader extends HubSyncReader {
             `SELECT hs.space_id, hs.organization_id, hs.added_by_user_id,
                     hs.deleted_at IS NOT NULL AS deleted, hs.sync_version::text AS sv
                FROM hub_space hs
-              WHERE hs.hub_id = $1 AND hs.sync_version > $2::bigint
+              WHERE hs.hub_id = $1 AND hs.sync_version > $2::bigint AND NOT hs.sync_pending
                 AND EXISTS (SELECT 1 FROM hub_organization ho
                              WHERE ho.hub_id = hs.hub_id AND ho.organization_id = hs.organization_id
                                AND ho.status = 'approved' AND ho.deleted_at IS NULL)
@@ -176,7 +178,7 @@ export class HubSyncSqlReader extends HubSyncReader {
             m,
             `SELECT ${ROLE_COLUMNS}
                FROM role_assignments ra JOIN roles r ON r.id = ra.role_id
-              WHERE ra.scope_type = 'hub' AND ra.hub_id = $1 AND ra.sync_version > $2::bigint
+              WHERE ra.scope_type = 'hub' AND ra.hub_id = $1 AND ra.sync_version > $2::bigint AND NOT ra.sync_pending
               ORDER BY ra.sync_version LIMIT $3`,
             roleItem,
           ),
@@ -217,7 +219,7 @@ async function readOrganization(
       `SELECT id, name, is_personal, allow_room_spaces, deleted_at IS NOT NULL AS deleted,
                 sync_version::text AS sv
            FROM organizations o
-          WHERE o.id = $4 AND o.sync_version > $2::bigint
+          WHERE o.id = $4 AND o.sync_version > $2::bigint AND NOT o.sync_pending
             AND EXISTS (SELECT 1 FROM hub_organization ho
                          WHERE ho.hub_id = $1 AND ho.organization_id = o.id
                            AND ho.status = 'approved' AND ho.deleted_at IS NULL)
@@ -261,7 +263,7 @@ async function readOrganization(
                   AND ((ra.scope_type = 'organization' AND ra.organization_id = uo.organization_id)
                     OR (ra.scope_type = 'hub' AND ra.hub_id = $1))), 0)) AS sv
            ) v
-          WHERE uo.organization_id = $4 AND v.sv > $2::bigint
+          WHERE uo.organization_id = $4 AND v.sv > $2::bigint AND NOT uo.sync_pending AND NOT u.sync_pending
           ORDER BY v.sv LIMIT $3`,
       (r) =>
         item(
@@ -289,7 +291,7 @@ async function readOrganization(
       m,
       `SELECT ${ROLE_COLUMNS}
            FROM role_assignments ra JOIN roles r ON r.id = ra.role_id
-          WHERE ra.organization_id = $4 AND ra.sync_version > $2::bigint
+          WHERE ra.organization_id = $4 AND ra.sync_version > $2::bigint AND NOT ra.sync_pending
             AND (ra.user_id IS NOT NULL OR ra.room_hub_id = $1)
             AND (ra.scope_type = 'organization'
               OR (ra.scope_type = 'space' AND EXISTS (
@@ -308,7 +310,7 @@ async function readOrganization(
            FROM spaces s
            JOIN hub_space hs ON hs.space_id = s.id AND hs.organization_id = s.organization_id
             AND hs.hub_id = $1 AND hs.deleted_at IS NULL
-          WHERE s.organization_id = $4 AND s.sync_version > $2::bigint
+          WHERE s.organization_id = $4 AND s.sync_version > $2::bigint AND NOT s.sync_pending
           ORDER BY s.sync_version LIMIT $3`,
       (r) =>
         item(
@@ -332,7 +334,7 @@ async function readOrganization(
       m,
       `SELECT k.id, k.space_id, k.version, k.deleted_at IS NOT NULL AS deleted, k.sync_version::text AS sv
            FROM space_keys k ${ON_HUB_SPACE('k')}
-          WHERE k.organization_id = $4 AND k.sync_version > $2::bigint
+          WHERE k.organization_id = $4 AND k.sync_version > $2::bigint AND NOT k.sync_pending
           ORDER BY k.sync_version LIMIT $3`,
       (r) =>
         item(
@@ -356,7 +358,7 @@ async function readOrganization(
            FROM space_key_grants g
            JOIN space_keys k ON k.id = g.space_key_id AND k.organization_id = g.organization_id
            ${ON_HUB_SPACE('k')}
-          WHERE g.organization_id = $4 AND g.sync_version > $2::bigint
+          WHERE g.organization_id = $4 AND g.sync_version > $2::bigint AND NOT g.sync_pending
             AND (g.user_id IS NOT NULL OR g.hub_id = $1)
           ORDER BY g.sync_version LIMIT $3`,
       (r) =>

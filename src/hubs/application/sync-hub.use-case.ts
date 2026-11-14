@@ -17,7 +17,7 @@ export type SyncPage = { items: SyncItem[]; nextSince: bigint };
  * Merges the reader's batches into one page (the shared `mergeSyncBatches`, in `SYNC_ITEM_TYPES` order).
  * - Horizon: a truncated batch only proves completeness up to its last `syncVersion`; items of other batches above
  *   the lowest such horizon are held back for the next page (otherwise `nextSince` would jump over unread rows).
- * - Ties: `sync_version` is one global sequence, so two rows never share a value, but one row can feed several items
+ * - Ties: `sync_version` is one sequence, so two rows never share a value, but one row can feed several items
  *   (a `users` row is behind the `member` item of each organization; a role row is behind its `role_assignment` item
  *   and the `member` items that embed the role). A page never splits such a group: it stops before it, or, when the
  *   group alone is larger than `limit`, returns the whole group (the only case a page exceeds `limit`; a group is at
@@ -35,6 +35,11 @@ export function mergeSyncPage(
 /**
  * `GET /hub/sync` (spec hubs §4.9, plan decision 9): what an authenticated hub needs to work offline, in
  * `sync_version` order, tombstones included. Page: `since` (default 0) and `limit` (1..500, default 500).
+ *
+ * Versions are given AT COMMIT, in commit order (migration HubSyncCommitOrder, the same feed and advisory lock as the
+ * conversation feeds): a page that saw version V saw every committed row with a version <= V, so `nextSince` never
+ * skips a late commit and no periodic full sync is needed to repair the state (a full sync is still how a hub starts
+ * over). Rows only become readable committed, never provisional (`sync_pending`).
  *
  * Scope (derived by the reader from the hub's own `hub_organization` rows, never from the caller):
  * - `hub`: the hub itself;
