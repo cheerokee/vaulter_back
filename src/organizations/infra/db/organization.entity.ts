@@ -1,5 +1,5 @@
 import { Check, Column, Entity, Index, JoinColumn, ManyToOne } from 'typeorm';
-import { SyncableTypeormEntity } from '../../../shared/infra/db/base.entity.js';
+import { CommitOrderedSyncableTypeormEntity } from '../../../shared/infra/db/base.entity.js';
 import type { HubLinkPolicy } from '../../domain/organization.js';
 
 // RLS (migrations CreateOrganizations + HardenOrganizationsRls): visível com `app.organization_id = id` ou
@@ -31,7 +31,7 @@ import type { HubLinkPolicy } from '../../domain/organization.js';
   unique: true,
   where: '"personal_owner_user_id" IS NOT NULL',
 })
-export class OrganizationTypeormEntity extends SyncableTypeormEntity {
+export class OrganizationTypeormEntity extends CommitOrderedSyncableTypeormEntity {
   @Column({ type: 'varchar', length: 255 })
   name!: string;
 

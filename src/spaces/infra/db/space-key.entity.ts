@@ -7,7 +7,7 @@ import {
   ManyToOne,
   Unique,
 } from 'typeorm';
-import { SyncableTypeormEntity } from '../../../shared/infra/db/base.entity.js';
+import { CommitOrderedSyncableTypeormEntity } from '../../../shared/infra/db/base.entity.js';
 import { SpaceTypeormEntity } from './space.entity.js';
 
 // Uma linha por versão da chave do espaço. Sincronizável. organization_id desnormalizado para o RLS
@@ -22,7 +22,7 @@ import { SpaceTypeormEntity } from './space.entity.js';
   where: '"deleted_at" IS NULL',
 })
 @Index('fk_space_keys_organizations_idx', ['organizationId'])
-export class SpaceKeyTypeormEntity extends SyncableTypeormEntity {
+export class SpaceKeyTypeormEntity extends CommitOrderedSyncableTypeormEntity {
   @Column({ type: 'uuid' })
   organizationId!: string;
 

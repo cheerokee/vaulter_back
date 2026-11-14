@@ -7,7 +7,7 @@ import {
   ManyToOne,
   Unique,
 } from 'typeorm';
-import { SyncableTypeormEntity } from '../../../shared/infra/db/base.entity.js';
+import { CommitOrderedSyncableTypeormEntity } from '../../../shared/infra/db/base.entity.js';
 
 export type CloudMode = 'encrypted_backup' | 'active_cloud';
 
@@ -29,7 +29,7 @@ export type CloudMode = 'encrypted_backup' | 'active_cloud';
 @Check('ck_spaces_storage_quota_bytes', `"storage_quota_bytes" > 0`)
 @Index('ix_spaces_sync_version', ['syncVersion'])
 @Index('fk_spaces_organizations_idx', ['organizationId'])
-export class SpaceTypeormEntity extends SyncableTypeormEntity {
+export class SpaceTypeormEntity extends CommitOrderedSyncableTypeormEntity {
   @Column({ type: 'uuid' })
   organizationId!: string;
 

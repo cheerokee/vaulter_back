@@ -7,7 +7,7 @@ import {
   ManyToOne,
   Unique,
 } from 'typeorm';
-import { SyncableTypeormEntity } from '../../../shared/infra/db/base.entity.js';
+import { CommitOrderedSyncableTypeormEntity } from '../../../shared/infra/db/base.entity.js';
 
 // Sincronizável e sem organization_id (o Hub não é de organização). RLS (migration CreateHubs): dono, o próprio
 // Hub (`app.hub_id`), membro ativo de organização com vínculo aprovado, ou a busca por chave
@@ -20,7 +20,7 @@ import { SyncableTypeormEntity } from '../../../shared/infra/db/base.entity.js';
 @Index('fk_hubs_users_idx', ['ownerUserId'])
 @Index('ix_hubs_sync_version', ['syncVersion'])
 @Check('ck_hubs_storage_capacity_bytes', `"storage_capacity_bytes" > 0`)
-export class HubTypeormEntity extends SyncableTypeormEntity {
+export class HubTypeormEntity extends CommitOrderedSyncableTypeormEntity {
   @Column({ type: 'uuid' })
   ownerUserId!: string;
 

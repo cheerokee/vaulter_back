@@ -1,5 +1,5 @@
 import { Check, Column, Entity, Index, JoinColumn, ManyToOne } from 'typeorm';
-import { SyncableTypeormEntity } from '../../../shared/infra/db/base.entity.js';
+import { CommitOrderedSyncableTypeormEntity } from '../../../shared/infra/db/base.entity.js';
 import type { PermissionScope } from '../../domain/rbac-catalog.js';
 import { OrganizationTypeormEntity } from './organization.entity.js';
 import { RoleTypeormEntity } from './role.entity.js';
@@ -79,7 +79,7 @@ export type ApprovalStatus =
   unique: true,
   where: `"scope_type" = 'hub' AND "room_hub_id" IS NOT NULL AND "deleted_at" IS NULL`,
 })
-export class RoleAssignmentTypeormEntity extends SyncableTypeormEntity {
+export class RoleAssignmentTypeormEntity extends CommitOrderedSyncableTypeormEntity {
   @Column({ type: 'uuid' })
   roleId!: string;
 

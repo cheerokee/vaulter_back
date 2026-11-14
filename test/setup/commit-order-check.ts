@@ -1,16 +1,37 @@
 import type { DataSource } from 'typeorm';
 
 /**
- * The conversation feed tables whose versions are assigned at commit (migration ConversationFeedCommitOrder): a
+ * The tables whose versions are assigned at commit, in commit order: the conversation feeds (migration
+ * ConversationFeedCommitOrder) and the hub sync (migration HubSyncCommitOrder), one sequence and one advisory lock. A
  * committed row is never `sync_pending`. One left pending means the commit-time UPDATE changed 0 rows (e.g. a policy
- * without the `sync_commit_in_progress()` escape) and the row is silently out of the feeds forever.
+ * without the `sync_commit_in_progress()` escape, or a missing column grant) and the row is silently out of the feeds
+ * forever.
  */
-export const COMMIT_ORDERED_TABLES = [
+export const CONVERSATION_FEED_TABLES = [
   'conversations',
   'conversation_participants',
   'conversation_key_grants',
   'conversation_messages',
   'conversation_attachments',
+] as const;
+
+/** The tables `GET /hub/sync` reads (HubSyncSqlReader), with the key the commit-time UPDATE matches on. */
+export const HUB_SYNC_TABLES = {
+  hubs: ['id'],
+  organizations: ['id'],
+  users: ['id'],
+  role_assignments: ['id'],
+  spaces: ['id'],
+  space_keys: ['id'],
+  space_key_grants: ['id'],
+  hub_organization: ['organization_id', 'hub_id'],
+  hub_space: ['space_id', 'hub_id'],
+  user_organization: ['organization_id', 'user_id'],
+} as const satisfies Record<string, readonly string[]>;
+
+export const COMMIT_ORDERED_TABLES = [
+  ...CONVERSATION_FEED_TABLES,
+  ...(Object.keys(HUB_SYNC_TABLES) as (keyof typeof HUB_SYNC_TABLES)[]),
 ] as const;
 
 /** Fails loudly when a committed row of a commit-ordered table is still `sync_pending` (run by every reset and at teardown). */

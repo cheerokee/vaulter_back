@@ -1,5 +1,5 @@
 import { Check, Column, Entity, Index, JoinColumn, ManyToOne } from 'typeorm';
-import { SyncableTypeormEntity } from '../../../shared/infra/db/base.entity.js';
+import { CommitOrderedSyncableTypeormEntity } from '../../../shared/infra/db/base.entity.js';
 import { SpaceKeyTypeormEntity } from './space-key.entity.js';
 
 // Cópia trancada da chave de uma versão: para exatamente um de usuário, hub ou instalação. Sincronizável;
@@ -31,7 +31,7 @@ import { SpaceKeyTypeormEntity } from './space-key.entity.js';
 @Index('fk_space_key_grants_users_idx', ['userId'])
 @Index('fk_space_key_grants_hubs_idx', ['hubId'])
 @Index('fk_space_key_grants_app_installations_idx', ['appInstallationId'])
-export class SpaceKeyGrantTypeormEntity extends SyncableTypeormEntity {
+export class SpaceKeyGrantTypeormEntity extends CommitOrderedSyncableTypeormEntity {
   @Column({ type: 'uuid' })
   organizationId!: string;
 

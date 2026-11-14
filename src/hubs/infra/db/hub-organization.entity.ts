@@ -129,4 +129,14 @@ export class HubOrganizationTypeormEntity {
 
   @Column({ type: 'bigint', insert: false, update: false })
   syncVersion!: string;
+
+  // Provisória até o COMMIT dar a versão (migration HubSyncCommitOrder); só o banco grava.
+  @Column({
+    type: 'boolean',
+    default: true,
+    insert: false,
+    update: false,
+    select: false,
+  })
+  syncPending!: boolean;
 }

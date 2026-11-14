@@ -1,12 +1,24 @@
 import { ConversationFeedSequenceFloor1792897400000 } from '../../src/database/migrations/1792897400000-ConversationFeedSequenceFloor.js';
+import type { INestApplication } from '@nestjs/common';
 import {
-  CONVERSATION_SYNC_FEED,
+  COMMIT_ORDERED_SYNC_FEED,
   ORIGINAL_POLICY_PREFIX,
 } from '../../src/shared/infra/db/migration-helpers.js';
-import { COMMIT_ORDERED_TABLES } from '../setup/commit-order-check.js';
-import { adminDataSource } from '../setup/test-app.js';
+import {
+  COMMIT_ORDERED_TABLES,
+  CONVERSATION_FEED_TABLES,
+  HUB_SYNC_TABLES,
+} from '../setup/commit-order-check.js';
+import {
+  adminDataSource,
+  createTestApp,
+  resetDatabase,
+} from '../setup/test-app.js';
+import { hubsKit } from '../support/hubs-kit.js';
+import { identityClient } from '../support/identity-client.js';
 
-// Schema invariants of the commit-ordered versions (migration ConversationFeedCommitOrder, `addCommitOrderedSyncVersion`).
+// Schema invariants of the commit-ordered versions (migrations ConversationFeedCommitOrder and HubSyncCommitOrder,
+// `addCommitOrderedSyncVersion`), over the fifteen tables of both feeds (one sequence, one advisory lock).
 // A policy without the `sync_commit_in_progress()` escape makes the commit-time UPDATE change 0 rows: the row stays
 // `sync_pending` and is silently out of the feeds forever. A trigger that locks after the advisory lock breaks "the
 // advisory lock is the last lock". These fail loudly when a later migration forgets either (the e2e reset and teardown
@@ -14,7 +26,7 @@ import { adminDataSource } from '../setup/test-app.js';
 describe('commit-ordered sync versions: schema invariants (e2e)', () => {
   const ESCAPE = 'sync_commit_in_progress()';
 
-  it('every RESTRICTIVE SELECT/UPDATE/ALL policy of the five tables carries the escape, and the permissive escape policies exist', async () => {
+  it('every RLS table of the feed has the permissive escape policies; every RESTRICTIVE SELECT/UPDATE/ALL policy carries the escape', async () => {
     const ds = await adminDataSource();
     const policies = (await ds.query(
       `SELECT tablename, policyname, permissive, cmd, qual, with_check FROM pg_policies
@@ -38,7 +50,23 @@ describe('commit-ordered sync versions: schema invariants (e2e)', () => {
       )
       .map((p) => `${p.tablename}.${p.policyname}`);
     expect(missing).toEqual([]);
-    for (const table of COMMIT_ORDERED_TABLES) {
+    const rls = new Set(
+      (
+        (await ds.query(
+          `SELECT relname FROM pg_class WHERE relname = ANY($1) AND relrowsecurity`,
+          [[...COMMIT_ORDERED_TABLES]],
+        )) as { relname: string }[]
+      ).map((r) => r.relname),
+    );
+    // `users` has no RLS: no escape policy (it would be dead code).
+    expect(rls.has('users')).toBe(false);
+    expect(
+      policies.filter(
+        (p) =>
+          p.tablename === 'users' && p.policyname.startsWith('sync_commit'),
+      ),
+    ).toEqual([]);
+    for (const table of COMMIT_ORDERED_TABLES.filter((t) => rls.has(t))) {
       const own = policies.filter(
         (p) => p.tablename === table && p.permissive === 'PERMISSIVE',
       );
@@ -48,7 +76,9 @@ describe('commit-ordered sync versions: schema invariants (e2e)', () => {
       expect(
         own.find((p) => p.policyname === 'sync_commit_update'),
       ).toMatchObject({ cmd: 'UPDATE', qual: ESCAPE, with_check: ESCAPE });
-      // Some restrictive SELECT and UPDATE policy exists (the filter above is not vacuous).
+    }
+    // Some restrictive SELECT and UPDATE policy exists (the filter above is not vacuous).
+    for (const table of CONVERSATION_FEED_TABLES) {
       expect(
         policies.filter(
           (p) => p.tablename === table && p.permissive === 'RESTRICTIVE',
@@ -97,7 +127,14 @@ describe('commit-ordered sync versions: schema invariants (e2e)', () => {
         tginitdeferred: true,
       });
       expect(commit!.def).toContain('WHEN (new.sync_pending)');
-      expect(commit!.def).toContain(CONVERSATION_SYNC_FEED.lockKey);
+      expect(commit!.def).toContain(COMMIT_ORDERED_SYNC_FEED.lockKey);
+      expect(commit!.def).toContain(COMMIT_ORDERED_SYNC_FEED.sequence);
+      const keys: readonly string[] = HUB_SYNC_TABLES[
+        table as keyof typeof HUB_SYNC_TABLES
+      ] ?? ['id'];
+      if (keys.join() !== 'id') {
+        expect(commit!.def).toContain(keys.map((k) => `'${k}'`).join(', '));
+      }
       const unsafe = mine
         .filter(
           (t) =>
@@ -120,7 +157,7 @@ describe('commit-ordered sync versions: schema invariants (e2e)', () => {
     try {
       // The old state, in a transaction that is rolled back at the end (DDL is transactional).
       const comments = new Map<string, string>();
-      for (const table of COMMIT_ORDERED_TABLES) {
+      for (const table of CONVERSATION_FEED_TABLES) {
         await qr.query(
           `ALTER TRIGGER "trg_${table}_zz_sync_version" ON "${table}" RENAME TO "trg_${table}_sync_version"`,
         );
@@ -145,7 +182,7 @@ describe('commit-ordered sync versions: schema invariants (e2e)', () => {
       await migration.up(qr);
       await migration.up(qr); // idempotent
 
-      for (const table of COMMIT_ORDERED_TABLES) {
+      for (const table of CONVERSATION_FEED_TABLES) {
         const names = (
           (await qr.query(
             `SELECT tgname FROM pg_trigger WHERE tgrelid = $1::regclass AND tgname LIKE '%sync_version'`,
@@ -159,7 +196,7 @@ describe('commit-ordered sync versions: schema invariants (e2e)', () => {
            FROM pg_policy pol JOIN pg_class c ON c.oid = pol.polrelid
            JOIN pg_description d ON d.objoid = pol.oid AND d.classoid = 'pg_policy'::regclass
           WHERE c.relname = ANY($1)`,
-        [[...COMMIT_ORDERED_TABLES]],
+        [[...CONVERSATION_FEED_TABLES]],
       )) as { key: string; description: string }[];
       expect(new Map(healed.map((h) => [h.key, h.description]))).toEqual(
         comments,
@@ -168,5 +205,67 @@ describe('commit-ordered sync versions: schema invariants (e2e)', () => {
       await qr.rollbackTransaction();
       await qr.release();
     }
+  });
+
+  it('hubs: the runtime may update sync_version and sync_pending (commit-time UPDATE under the column grants)', async () => {
+    const ds = await adminDataSource();
+    const rows = (await ds.query(
+      `SELECT c AS column, has_column_privilege('app_runtime', 'hubs', c, 'UPDATE') AS ok
+         FROM unnest(ARRAY['sync_version', 'sync_pending']) AS c`,
+    )) as { column: string; ok: boolean }[];
+    expect(rows).toEqual([
+      { column: 'sync_version', ok: true },
+      { column: 'sync_pending', ok: true },
+    ]);
+  });
+
+  describe('with an application', () => {
+    let app: INestApplication;
+    const c = identityClient(() => app);
+    const k = hubsKit(() => app);
+
+    beforeAll(async () => {
+      app = await createTestApp();
+      await resetDatabase();
+    });
+    afterAll(async () => {
+      await app.close();
+    });
+
+    it('a composite-key row written twice in one transaction gets one version, from the shared sequence, and is not left pending', async () => {
+      const olivia = await c.spaces.signUpKeyed(
+        'co-olivia@example.com',
+        'Olivia',
+        'correct horse battery staple',
+      );
+      const hub = await k.claim(olivia, 'Sala');
+      const ds = await adminDataSource();
+      const [{ before }] = (await ds.query(
+        `SELECT last_value::text AS before FROM ${COMMIT_ORDERED_SYNC_FEED.sequence}`,
+      )) as [{ before: string }];
+      const qr = ds.createQueryRunner();
+      await qr.connect();
+      try {
+        await qr.startTransaction();
+        await qr.query(
+          `UPDATE hub_organization SET updated_at = now() WHERE hub_id = $1`,
+          [hub.hubId],
+        );
+        await qr.query(
+          `UPDATE hub_organization SET deleted_at = now() WHERE hub_id = $1`,
+          [hub.hubId],
+        );
+        await qr.commitTransaction();
+      } finally {
+        await qr.release();
+      }
+      const rows = (await ds.query(
+        `SELECT sync_version::text AS v, sync_pending FROM hub_organization WHERE hub_id = $1`,
+        [hub.hubId],
+      )) as { v: string; sync_pending: boolean }[];
+      expect(rows).toHaveLength(1);
+      expect(rows[0]!.sync_pending).toBe(false);
+      expect(BigInt(rows[0]!.v)).toBe(BigInt(before) + 1n);
+    });
   });
 });

@@ -1,5 +1,5 @@
 import { Column, Entity, Index } from 'typeorm';
-import { SyncableTypeormEntity } from '../../../shared/infra/db/base.entity.js';
+import { CommitOrderedSyncableTypeormEntity } from '../../../shared/infra/db/base.entity.js';
 import type { KdfParams } from '../../domain/kdf-params.js';
 
 @Entity('users')
@@ -8,7 +8,7 @@ import type { KdfParams } from '../../domain/kdf-params.js';
   where: '"deleted_at" IS NULL',
 })
 @Index('ix_users_sync_version', ['syncVersion'])
-export class UserTypeormEntity extends SyncableTypeormEntity {
+export class UserTypeormEntity extends CommitOrderedSyncableTypeormEntity {
   @Column({ type: 'varchar', length: 255 })
   name!: string;
 

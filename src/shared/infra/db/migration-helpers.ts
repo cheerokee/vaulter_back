@@ -95,11 +95,21 @@ export const XID_SYNC_VERSION_SHIFT = 16;
  */
 export type CommitOrderedSyncFeed = { sequence: string; lockKey: string };
 
-/** The conversation feeds (migration ConversationFeedCommitOrder): "SYNCCONV" in ASCII. */
-export const CONVERSATION_SYNC_FEED: CommitOrderedSyncFeed = {
+/**
+ * THE commit-ordered feed: the conversation feeds (migration ConversationFeedCommitOrder) and the hub sync (migration
+ * HubSyncCommitOrder) share one sequence and one advisory lock ("SYNCCONV" in ASCII; the sequence keeps its first
+ * name). ONE lock is required: deferred triggers fire in the order the rows were written, so a transaction writing
+ * both groups (deregistering a hub, leaving a space or an organization, switching the cloud off) would take two locks
+ * in either order and two such commits could deadlock. With one lock, one sequence is enough (each feed's cursor only
+ * sees gaps). Never add a second feed with its own lock to a table a transaction may write together with these.
+ */
+export const COMMIT_ORDERED_SYNC_FEED: CommitOrderedSyncFeed = {
   sequence: 'conversation_sync_version_seq',
   lockKey: '6005917628874313302',
 };
+
+/** The name the conversation migrations import; the same feed as `COMMIT_ORDERED_SYNC_FEED`. */
+export const CONVERSATION_SYNC_FEED = COMMIT_ORDERED_SYNC_FEED;
 
 const SYNC_COMMIT_ESCAPE = 'sync_commit_in_progress()';
 /** Prefix of the policy COMMENT that keeps the expression a policy had before the escape (for the down migration). */
@@ -125,9 +135,10 @@ export const commitOrderedSyncTrigger = (table: string) =>
  *
  * COST: the advisory lock is held from the first version UPDATE to the very end of the commit: the rest of the
  * deferred triggers, the NOTIFY queue lock, the WAL flush (and a synchronous replica, if any) and the moment the
- * commit becomes visible. Commits that write to the feed are therefore SERIAL, fsync included; a transaction that
- * writes many rows (a cascade: deregister, unlink, organization exit; a retention batch) makes the other writers of the
- * feed wait at their COMMIT, holding their pool connection, for the whole of it. Keep bulk writes in bounded batches
+ * commit becomes visible. Commits that write to ANY table of the feed (the five conversation tables and the ten of the
+ * hub sync: users, organizations, memberships, roles, spaces, keys, hubs, links) are therefore SERIAL, fsync included;
+ * a transaction that writes many rows (a cascade: deregister, unlink, organization exit; a retention batch) makes the
+ * other writers of the feed wait at their COMMIT, holding their pool connection, for the whole of it. Keep bulk writes in bounded batches
  * (retention: `CONVERSATION_RETENTION_BATCH_ROWS`). A `lock_timeout` set by the transaction also bounds this wait
  * (55P03 raised at COMMIT).
  *
@@ -166,6 +177,8 @@ export async function createCommitOrderedSyncFunctions(
     END
     $$ LANGUAGE plpgsql SECURITY INVOKER
   `);
+  // The first body (key `id` only), as ConversationFeedCommitOrder created it; HubSyncCommitOrder replaces it with
+  // `replaceAssignCommitSyncVersion` (composite keys). Kept so the old migration keeps creating what it created.
   await qr.query(`
     CREATE FUNCTION assign_commit_sync_version() RETURNS trigger AS $$
     BEGIN
@@ -175,6 +188,34 @@ export async function createCommitOrderedSyncFunctions(
         'UPDATE %I.%I SET sync_version = nextval(%L::regclass), sync_pending = false WHERE id = $1 AND sync_pending',
         TG_TABLE_SCHEMA, TG_TABLE_NAME, TG_ARGV[1]
       ) USING NEW.id;
+      PERFORM set_config('app.sync_commit', '', true);
+      RETURN NULL;
+    END
+    $$ LANGUAGE plpgsql SECURITY INVOKER
+  `);
+}
+
+/**
+ * `assign_commit_sync_version(lockKey, sequence[, keyColumn...])`: the commit-time UPDATE matches the row by its key
+ * columns (trigger arguments after the sequence; `id` when there are none, as in the conversation tables). `CREATE OR
+ * REPLACE` keeps every existing trigger working (migration HubSyncCommitOrder: composite keys).
+ */
+export async function replaceAssignCommitSyncVersion(
+  qr: QueryRunner,
+): Promise<void> {
+  await qr.query(`
+    CREATE OR REPLACE FUNCTION assign_commit_sync_version() RETURNS trigger AS $$
+    DECLARE
+      cond text;
+    BEGIN
+      PERFORM pg_advisory_xact_lock(TG_ARGV[0]::bigint);
+      SELECT string_agg(format('%I = ($1).%I', k, k), ' AND ') INTO cond
+        FROM unnest(CASE WHEN TG_NARGS > 2 THEN TG_ARGV[2:TG_NARGS - 1] ELSE ARRAY['id'] END) AS k;
+      PERFORM set_config('app.sync_commit', 'on', true);
+      EXECUTE format(
+        'UPDATE %I.%I SET sync_version = nextval(%L::regclass), sync_pending = false WHERE %s AND sync_pending',
+        TG_TABLE_SCHEMA, TG_TABLE_NAME, TG_ARGV[1], cond
+      ) USING NEW;
       PERFORM set_config('app.sync_commit', '', true);
       RETURN NULL;
     END
@@ -205,8 +246,8 @@ export async function createCommitOrderedSyncFeed(
 }
 
 /**
- * Commit-ordered versions on a table that already has `sync_version` (`addSyncVersionTrigger`) and an `id` primary
- * key; `createCommitOrderedSyncFunctions` and `createCommitOrderedSyncFeed` first. Replaces the "version at write time"
+ * Commit-ordered versions on a table that already has `sync_version` (`addSyncVersionTrigger`), keyed by `keyColumns`
+ * (its primary key; `id` by default); `createCommitOrderedSyncFunctions` and `createCommitOrderedSyncFeed` first. Replaces the "version at write time"
  * of the global sequence (commit order × sync_version, Pendências do CLAUDE.md), with no dependency on other
  * transactions, xids or the cluster:
  * - column `sync_pending` (NOT NULL DEFAULT true; existing rows false) and the BEFORE trigger
@@ -238,7 +279,12 @@ export async function addCommitOrderedSyncVersion(
   qr: QueryRunner,
   table: string,
   feed: CommitOrderedSyncFeed,
+  keyColumns: readonly string[] = ['id'],
 ): Promise<void> {
+  const keyArgs =
+    keyColumns.length === 1 && keyColumns[0] === 'id'
+      ? ''
+      : keyColumns.map((k) => `, '${k}'`).join('');
   await qr.query(
     `ALTER TABLE "${table}" ADD COLUMN "sync_pending" boolean NOT NULL DEFAULT false`,
   );
@@ -253,8 +299,14 @@ export async function addCommitOrderedSyncVersion(
   await qr.query(
     `CREATE CONSTRAINT TRIGGER "trg_${table}_sync_commit" AFTER INSERT OR UPDATE ON "${table}" ` +
       `DEFERRABLE INITIALLY DEFERRED FOR EACH ROW WHEN (NEW.sync_pending) ` +
-      `EXECUTE FUNCTION assign_commit_sync_version('${feed.lockKey}', '${feed.sequence}')`,
+      `EXECUTE FUNCTION assign_commit_sync_version('${feed.lockKey}', '${feed.sequence}'${keyArgs})`,
   );
+  // Without RLS (`users`) the escape policies would be dead code.
+  const [{ rls }] = (await qr.query(
+    `SELECT relrowsecurity AS rls FROM pg_class WHERE oid = $1::regclass`,
+    [table],
+  )) as [{ rls: boolean }];
+  if (!rls) return;
   await qr.query(
     `CREATE POLICY "sync_commit_read" ON "${table}" FOR SELECT USING (${SYNC_COMMIT_ESCAPE})`,
   );
@@ -316,8 +368,8 @@ export async function dropCommitOrderedSyncVersion(
     await qr.query(`ALTER POLICY "${p.name}" ON "${table}"${using}${check}`);
     await qr.query(`COMMENT ON POLICY "${p.name}" ON "${table}" IS NULL`);
   }
-  await qr.query(`DROP POLICY "sync_commit_update" ON "${table}"`);
-  await qr.query(`DROP POLICY "sync_commit_read" ON "${table}"`);
+  await qr.query(`DROP POLICY IF EXISTS "sync_commit_update" ON "${table}"`);
+  await qr.query(`DROP POLICY IF EXISTS "sync_commit_read" ON "${table}"`);
   await qr.query(`DROP TRIGGER "trg_${table}_sync_commit" ON "${table}"`);
   await qr.query(
     `DROP TRIGGER "${commitOrderedSyncTrigger(table)}" ON "${table}"`,
