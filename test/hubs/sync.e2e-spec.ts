@@ -402,7 +402,8 @@ describe('hub sync (e2e)', () => {
       const { items } = await syncAll(hub, limit);
       expect(items).toEqual(full);
     }
-  });
+    // Hundreds of requests with limit=1: it ran at ~4.7 s against the 5 s default.
+  }, 30_000);
 
   it("a user's key change reaches every organization of the hub, and the tie is never split across pages", async () => {
     const { nextSince } = await sync(hub);
