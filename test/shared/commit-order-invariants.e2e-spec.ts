@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { ConversationFeedSequenceFloor1792897400000 } from '../../src/database/migrations/1792897400000-ConversationFeedSequenceFloor.js';
 import type { INestApplication } from '@nestjs/common';
 import {
@@ -205,6 +206,30 @@ describe('commit-ordered sync versions: schema invariants (e2e)', () => {
       await qr.rollbackTransaction();
       await qr.release();
     }
+  });
+
+  it('every table the hub sync reads with a version is commit-ordered (a table added to the reader with addSyncVersionTrigger alone would get versions below every cursor)', async () => {
+    const source = readFileSync(
+      new URL(
+        '../../src/hubs/infra/db/hub-sync.sql-reader.ts',
+        import.meta.url,
+      ),
+      'utf8',
+    );
+    const read = new Set(
+      [...source.matchAll(/\b(?:FROM|JOIN)\s+([a-z_]+)/g)].map((m) => m[1]!),
+    );
+    // `roles` is joined for the role key only; its catalog version is never served.
+    read.delete('roles');
+    expect([...read].sort()).toEqual(Object.keys(HUB_SYNC_TABLES).sort());
+    const ds = await adminDataSource();
+    const withCommitTrigger = (
+      (await ds.query(
+        `SELECT tgrelid::regclass::text AS t FROM pg_trigger
+          WHERE NOT tgisinternal AND tgname = 'trg_' || tgrelid::regclass::text || '_sync_commit'`,
+      )) as { t: string }[]
+    ).map((r) => r.t);
+    for (const table of read) expect(withCommitTrigger).toContain(table);
   });
 
   it('hubs: the runtime may update sync_version and sync_pending (commit-time UPDATE under the column grants)', async () => {

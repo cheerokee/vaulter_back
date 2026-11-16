@@ -1,7 +1,9 @@
 import type { QueryRunner } from 'typeorm';
 
 // Adiciona sync_version (bigint NOT NULL), índice e trigger à tabela. Linhas já existentes recebem
-// valores da sequência global antes de a coluna virar NOT NULL.
+// valores da sequência global antes de a coluna virar NOT NULL. Tabela lida por um feed (GET /hub/sync, assuntos):
+// chame `addCommitOrderedSyncVersion(..., COMMIT_ORDERED_SYNC_FEED)` logo depois; sozinha, esta dá versões da sequência
+// global, muito abaixo de todo cursor, e o Hub nunca as buscaria.
 export async function addSyncVersionTrigger(
   qr: QueryRunner,
   table: string,

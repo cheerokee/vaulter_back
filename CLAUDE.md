@@ -286,7 +286,10 @@ test/support/        helpers e fixtures de teste compartilhados (cliente de crip
    `currentManager(this.dataSource).getRepository(Entidade)` (ex.: um getter `private get repo()`), para entrar na
    transação do `UnitOfWork` quando houver uma — veja "Unit of work" em Banco de dados.
 4. Migration em `src/database/migrations/` (`addSyncVersionTrigger` / `enableOrganizationRls` quando couber;
-   dado de cliente tem `organization_id` e RLS); `migration:generate` depois dela deve sair vazio.
+   dado de cliente tem `organization_id` e RLS); `migration:generate` depois dela deve sair vazio. Tabela que um feed
+   lê (`GET /hub/sync`, feeds dos assuntos) precisa **também** de `addCommitOrderedSyncVersion(..., COMMIT_ORDERED_SYNC_FEED)`
+   logo depois: só `addSyncVersionTrigger` dá versões da sequência global, muito abaixo de todo cursor (o Hub nunca as
+   buscaria); entre na lista `HUB_SYNC_TABLES` dos e2e (o teste de invariantes confere a lista contra o leitor).
 5. `infra/http/`: controllers e DTOs de borda. Rotas exigem token por padrão (guard global); abra uma rota com
    `@Public()` e leia o chamador com `@CurrentAuth()` (ambos em `src/shared/infra/http/auth.decorators.ts`).
 6. `<modulo>.module.ts`: `TypeOrmModule.forFeature([...])` e `{ provide: Contrato, useClass: Implementacao }`.
@@ -1421,7 +1424,8 @@ registra a fonte `conversations`), `hubs` (`HubDirectory`: `ownerOf`,
   - Em banco **já existente** (criado antes do script), rodar uma vez:
     `docker exec vaulter-back-db sh /docker-entrypoint-initdb.d/02-app-role.sh`
 - **Helpers de migration** (`src/shared/infra/db/migration-helpers.ts`): `addSyncVersionTrigger(qr, tabela)` (coluna
-  `sync_version`, índice e trigger da sequência global) e `enableOrganizationRls(qr, tabela)` (RLS com `FORCE` e
+  `sync_version`, índice e trigger da sequência global; em tabela lida por um feed, só o passo anterior a
+  `addCommitOrderedSyncVersion`, veja o passo 4 de "Como criar um módulo novo") e `enableOrganizationRls(qr, tabela)` (RLS com `FORCE` e
   policy por `app.organization_id`; sem contexto, nenhuma linha é visível). Em código, o contexto vai por transação:
   `runInOrganizationScope(dataSource, orgId, work)` ou, nos repositórios de dado de cliente, estendendo
   `OrganizationScopedRepository` (todo método recebe `organizationId` e filtra por ele; o RLS é a segunda trava).
