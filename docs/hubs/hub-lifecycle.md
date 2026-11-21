@@ -641,9 +641,10 @@ active-cloud §4.3). O Hub continua sendo o executor principal; a nuvem só cobr
 9. **Prazo do ack do agente (Hub `kind: "pc"`)** (spec pc-agent §5.3): o ack de um agente vale por **15 min**
    (`AGENT_ACK_LEASE_MS`, relógio do servidor), contados do ack e renovados a cada passo do cérebro e por
    `POST /hub/conversations/:id/messages/:messageId/lease` (abaixo). Vencido o prazo **sem resposta do agente** (uma
-   mensagem dele no assunto depois do ack), uma varredura do servidor (a cada minuto) devolve a mensagem a `pending`
-   (`requeuedAt` novo) e a nuvem de reserva a pega **na hora** (sem os 30 s: o agente já teve os 15 min) e responde só
-   com conhecimento. Dali em diante o agente perdeu a vez, como um Hub que perdeu a mensagem: o passo do cérebro e a
+   mensagem dele com `answeringMessageId` = ela), uma varredura do servidor (a cada minuto) devolve a mensagem a
+   `pending` (`requeuedAt` novo) e a nuvem de reserva responde só com conhecimento. Hoje a tarefa da nuvem começa na
+   hora, mas a janela de 30 s do Hub recomeça no `requeuedAt` (a mesma regra de uma volta à fila): a resposta chega uns
+   30 s depois da varredura (pendência no CLAUDE.md). Dali em diante o agente perdeu a vez, como um Hub que perdeu a mensagem: o passo do cérebro e a
    renovação dão **409 `brain-step-not-owned`**, a resposta atrasada (`POST .../messages` com `answeringMessageId`)
    também dá **409 `brain-step-not-owned`** (nunca uma segunda resposta) e, pega pela nuvem, o ack dá **404
    `message-not-found`**: **descarte** o trabalho (as ações já executadas no PC ficam, registradas na auditoria).
@@ -684,6 +685,37 @@ servidor não lê nada).
    claro das mensagens** na convenção v1 de `docs/crypto/conversations.md`: valem para o Hub também.
 7. **Embeddings:** mesmo modelo (`nomic-embed-text`), sem prefixo de tarefa, mesma divisão em trechos (`space-manifest.md`,
    "Trechos e embeddings"); mudar isso é mudança conjunta com reindexação dos dois lados.
+
+## Agente do PC: visão geral
+
+O agente do PC é um Hub `kind: "pc"` (spec `docs/superpowers/specs/2026-11-21-pc-agent-design.md`): age no computador do
+dono (ferramentas MCP, navegador, pasta liberada) para responder nos assuntos de que é executor, e o back faz o papel do
+cérebro (prompt, trechos do espaço, modelo, orçamento). As regras de cada peça estão nas seções indicadas; aqui só a
+sequência. O fluxo inteiro, pelas rotas reais, está fixado em `test/agents/pc-agent-flow.e2e-spec.ts`.
+
+1. **Apresentação v2** com `kind: "pc"` (§2; assinatura `hub-enroll-v2`), reivindicação pelo dono (§3) e autenticação
+   (§5). Um `pc` **nunca é compartilhável**: só o dono o vê e o usa (nenhum papel de Hub para outra pessoa, 422
+   `agent-not-shareable`), e o `GET /hub/sync` só traz o dono como pessoa.
+2. **Vínculo e espaços** como qualquer Hub (§6, §7). O passo do cérebro só funciona num espaço em **nuvem ativa** cuja
+   organização aceitou um termo que **cobre o agente** (`agentCovered` em `GET /organizations/:orgId/cloud/terms`; a v2
+   cobre).
+3. **Catálogo:** o agente publica as ferramentas que tem (`PUT /hub/agent/tools`; "Agente do PC: catálogo de
+   ferramentas").
+4. **Política:** o admin grava as regras (`PUT /organizations/:orgId/agent-policy`); o agente vê o item `agent_policy`
+   no `GET /hub/sync` e baixa `GET /hub/agent/policy` ("Agente do PC: política da organização"). A política local do PC
+   tem a última palavra.
+5. **Ack com prazo:** o agente confirma a mensagem (`POST .../messages/:messageId/ack`), que fica dele por 15 min,
+   renovados a cada passo e por `POST .../messages/:messageId/lease` enquanto uma confirmação espera na bandeja (item 9
+   de "A nuvem como executor de reserva").
+6. **Passos do cérebro:** `POST /hub/conversations/:id/brain/step` com o histórico decifrado no PC; `tools` = executar
+   (ou pedir confirmação) e chamar de novo com os resultados; `final` = cifrar e mandar a resposta com
+   `answeringMessageId` ("Agente do PC: passo do cérebro"; envio em "Assuntos", mensagens do executor). Só a pergunta do
+   **dono** recebe ferramentas do PC; o agente não manda edição nem mensagem que não responda a uma confirmada.
+7. **Auditoria:** cada ferramenta executada, recusada, bloqueada ou que falhou vai para `POST /hub/agent/actions` (só
+   ids, nome, efeito e decisão; "Agente do PC: auditoria das ações"); o admin lê em
+   `GET /organizations/:orgId/agent-actions`.
+8. **PC desligado no meio:** o prazo vence, a varredura devolve a mensagem à fila e a nuvem de reserva responde; o
+   agente que volta recebe 409 `brain-step-not-owned` no passo, na renovação e na resposta atrasada, e descarta.
 
 ## Agente do PC: catálogo de ferramentas
 

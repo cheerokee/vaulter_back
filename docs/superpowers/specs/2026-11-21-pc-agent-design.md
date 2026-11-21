@@ -302,3 +302,36 @@ da sincronização.
 - e2e cobrindo: o 404 para aparelho e para Hub que não é executor, a pergunta de outro participante sem ferramentas,
   `deny` nunca oferecido, o limite de passos, a recusa de orçamento e a idempotência da auditoria.
 - `CLAUDE.md`, `docs/hubs/hub-lifecycle.md` e `docs/crypto/hub-identity.md` atualizados no mesmo trabalho.
+
+## 9. Desvios na implementação
+
+Decisões tomadas durante a implementação (21/11/2026) que mudam ou completam o texto acima; detalhe no `CLAUDE.md` e em
+`docs/hubs/hub-lifecycle.md`.
+- Assinatura `hub-enroll-v2` sem `kind` no corpo é o mesmo 401 `hub-signature-invalid` de uma assinatura inválida.
+- `GET /hub/sync` de um `pc` leva só o dono como pessoa (sem membros, papéis nem cópias de chave dos outros), e o `pc`
+  fica fora do `GET /hubs` de quem não é dono.
+- Limite do corpo JSON por rota: `PUT /hub/agent/tools` e `PUT /organizations/:orgId/agent-policy` 2 MiB, passo do
+  cérebro 256 KiB; o resto segue em 100 kB.
+- ACL: casamento de `deny`/`confirm` com normalização NFC e dobra de caixa Unicode (nomes de ferramenta e pastas);
+  caminho com nome curto 8.3 (`~1`) ou curinga do Windows é negado; regra inválida gravada faz o avaliador negar tudo.
+- `domain:*.empresa.com` vale para subdomínios em qualquer nível, mas não para o próprio `empresa.com` (a spec não
+  dizia; fechado por padrão); `*.com` é inválido.
+- Sessão de pessoa aberta por um Hub não troca a política (`PUT .../agent-policy` = 404 `organization-not-found`) nem lê
+  a auditoria da organização.
+- A mensagem de um `pc` leva `answeringMessageId` (obrigatório), reconferido sob a trava do assunto (409
+  `brain-step-not-owned`); "respondida pelo agente" = mensagem dele com esse id. Por isso o agente não manda edições
+  nem mensagens que não respondam a uma confirmada.
+- Prazo vencido: a nuvem de reserva responde ~30 s depois da varredura, não na hora (a janela do Hub recomeça no
+  `requeued_at`); pendência registrada.
+- Checagem de tamanho dos resultados (32 KiB) roda antes de contar a chamada: pedido malformado não gasta vaga. A rota
+  conta a primeira chamada do passo; o compositor conta só as adicionais; no limite no meio do passo devolve o último
+  texto como `final`; passo recusado pelo orçamento ou que falhou também gasta a vaga.
+- Contra injeção: o system leva só instruções fixas e os nomes das ferramentas; descrições só no canal `tools`; trechos
+  e resultados achatados vão como bloco de dados escapado num turno `user`.
+- `record_document` recusado ou sem confirmação volta ao modelo como `tool_result` de erro; `refused` na resposta é só
+  o do orçamento.
+- `final`/`tools` trazem `documentProposal`/`documentRecorded` para o agente repetir no texto em claro da mensagem dele.
+- Proposta de documento numa mensagem do agente só vale se o back a emitiu (`agent_issued_proposals`: id + SHA-256 do
+  título, conteúdo e `confidential`).
+- Termo: basta a organização ter aceitado alguma versão que cobre o agente (`covers_agent`), não a atual; `GET
+  .../cloud/terms` traz `agentCovered`.

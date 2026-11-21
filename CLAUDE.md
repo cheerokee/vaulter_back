@@ -526,10 +526,13 @@ no mesmo commit. Depende de `identity` (`HubTokenService`), `organizations` (`Or
 nenhum deles importa `hubs`. Única exceção: a sincronização lê tabelas dos outros módulos por um repositório de
 consulta só de leitura (veja Sincronização).
 - **Identidade do Hub:** o aparelho gera um par Ed25519 e assina mensagens JSON canônicas com **rótulo** de uso
-  (`hub-enroll-v1`, `hub-status-v1`, `hub-auth-v1`, sem o nome do produto; formato, vetor, regras de
+  (`hub-enroll-v1`, `hub-enroll-v2`, `hub-status-v1`, `hub-auth-v1`, sem o nome do produto; formato, vetor, regras de
   canonicalização e a receita em Python (`json.dumps(..., sort_keys=True, separators=(',', ':'),
   ensure_ascii=False)`, timestamp terminando em `Z`) em `docs/crypto/hub-identity.md`, implementação única em
-  `domain/hub-signed-message.ts`). **Uma apresentação pendente por chave** (índice único parcial
+  `domain/hub-signed-message.ts`). **Tipo do Hub** (`hubs.kind`: `appliance` | `pc`, o agente do PC): declarado na
+  apresentação v2 (`kind` no corpo, assinado com `hub-enroll-v2`; sem `kind` vale o v1 e o Hub é `appliance`; v2 sem
+  `kind` = 401 `hub-signature-invalid`), copiado no claim e imutável (fora do GRANT de UPDATE); sai em `GET /hubs`,
+  `GET /hubs/:id` e no item `hub` da sincronização. **Uma apresentação pendente por chave** (índice único parcial
   `uq_hub_enrollments_pending_signing_key`): a apresentação nova expira a anterior da mesma chave na mesma transação
   (replay com nonce repetido não derruba a pendente) e, na corrida, quem perde expira a outra e tenta de novo. O código
   de reivindicação (8 dígitos) e o desafio de autenticação ficam no banco só como hash com chave
@@ -1066,7 +1069,9 @@ registra a fonte `conversations`), `hubs` (`HubDirectory`: `ownerOf`,
   lido no contexto do Hub que confirmou, volta à fila no contexto do DONO, lotes de 100 assuntos por unit of work em
   ordem (espaço, assunto), `requeueExpiredAgentLeases` (um instante só do banco; sem resposta = `pending`,
   `requeued_at` novo; respondida ou apagada = só o prazo sai; o laço para quando um lote não tira nenhum prazo) e
-  `CloudReservePendingHooks` com `immediate` dentro do unit of work. Invariante: um prazo é sempre do executor atual
+  `CloudReservePendingHooks` com `immediate` dentro do unit of work (a tarefa da nuvem começa na hora, mas
+  `nextResponderStep` conta os 30 s do Hub de novo a partir do `requeued_at`: a nuvem responde ~30 s depois da
+  varredura; veja Pendências, "Agente do PC"). Invariante: um prazo é sempre do executor atual
   (`requeueAckedBy` de um Hub limpa os prazos dele no assunto, respondidas inclusive). **Resposta do agente:** a
   mensagem de um Hub `pc` leva `answeringMessageId` (obrigatório; aparelho: recusado, 422 `validation-failed`),
   reconferido sob a trava do assunto pela mesma regra do turno (409 `brain-step-not-owned`, nada gravado: a resposta
@@ -1471,7 +1476,8 @@ registra a fonte `conversations`), `hubs` (`HubDirectory`: `ownerOf`,
   `documentProposal`/`documentRecorded` para o agente pôr no texto em claro da mensagem dele. **Proposta do agente só
   vale se o back a emitiu:** `propose_document` grava em `agent_issued_proposals` (migration
   `CreateAgentIssuedProposals`: `(conversation_id, proposal_id)` único, `content_sha256` = `proposalContentSha256`
-  (título, conteúdo, `confidential`), só ids e hash, RLS por organização, runtime só SELECT/INSERT; porta
+  (título, conteúdo, `confidential`), só ids e hash, RLS por organização, runtime sem UPDATE (a migration só revoga o
+  UPDATE: o DELETE do GRANT padrão continua, então não é só de acréscimo; veja Pendências, "Agente do PC"); porta
   `AgentIssuedProposals`), e uma proposta numa mensagem `hub` do histórico do servidor sem linha com o mesmo hash é
   tirada antes do modelo e da trava (`verifiedHubProposals`); o responder continua aceitando só as da nuvem. **Contador** `agent_brain_steps` (uma linha por (assunto,
   mensagem): `calls`, `cost_micro_usd`, `chunk_ids uuid[]`; só ids e números; RLS por organização; sem FK para assunto e
@@ -1482,11 +1488,14 @@ registra a fonte `conversations`), `hubs` (`HubDirectory`: `ownerOf`,
 
 ## Módulo `agents`
 `src/agents/` (o agente do PC, que age como um Hub `pc`). Spec: `docs/superpowers/specs/2026-11-21-pc-agent-design.md`
-(§5.4 = catálogo). Catálogo, política da organização e auditoria das ações existem; o passo do cérebro é do `cloud`
-(veja "Passo do cérebro do agente" lá).
+(§5.4 = catálogo; desvios do que foi implementado na seção "Desvios" dela). Catálogo, política da organização e
+auditoria das ações existem; o passo do cérebro é do `cloud` (veja "Passo do cérebro do agente" lá), o tipo `pc` e a
+apresentação v2 são do `hubs`, e o prazo do ack e a resposta com `answeringMessageId` são do `conversations`. A
+sequência inteira para quem implementa o agente: `docs/hubs/hub-lifecycle.md`, "Agente do PC: visão geral".
 - **Fronteiras:** `agents` depende de `hubs` (`HubAccess`, `HubDirectory`), `organizations` (`OrganizationAccess`) e
   `conversations` (só a porta exportada `HubConversationScope`); **nunca importa `cloud`**; o `cloud` importa `agents`
-  só pela `application/` exportada (`AgentToolCatalog`); `hubs`, `organizations` e `conversations` nunca importam
+  pela `application/` exportada (`AgentToolCatalog`, `AgentPolicyReader`) e pelos tipos e funções puras do domínio
+  (`agent-policy.ts`: `toolEffect`, `callEffect`, `AgentRule`; `agent-tool.ts`: `AgentToolDef`); `hubs`, `organizations` e `conversations` nunca importam
   `agents`. O domínio é puro. Plaintext (histórico, resultados de ferramenta, trechos, prompt, argumentos, caminhos, URLs)
   nunca em log, Sentry, auditoria, payload de tarefa, banco ou resposta de erro: só ids, contagens, nomes de ferramenta,
   códigos e versões.
@@ -1538,7 +1547,9 @@ registra a fonte `conversations`), `hubs` (`HubDirectory`: `ownerOf`,
 - **ACL (`agent-policy.ts`):** apertar `parseAgentRules`/`normalizeAgentPath` depois pode invalidar políticas já gravadas
   (os avaliadores negam tudo para quem tem regra inválida, na organização inteira); mudança no validador exige um passo
   de revalidação das políticas armazenadas.
-- **Testes:** `src/agents/domain/agent-tool.spec.ts`, `agent-action.spec.ts`, e2e em `test/agents/tools.e2e-spec.ts`; helper `agentsKit(getApp)`
+- **Testes:** `src/agents/domain/agent-tool.spec.ts`, `agent-action.spec.ts`, `agent-policy.spec.ts`; e2e em
+  `test/agents/` (`tools`, `policy`, `actions` e `pc-agent-flow`: o fluxo inteiro pelas rotas reais, da apresentação v2
+  à nuvem de reserva respondendo depois do prazo vencido); helper `agentsKit(getApp)`
   em `test/support/agents-kit.ts` (`publishTools(hub, tools)`, `defaultTools()`: uma ferramenta de cada categoria).
 
 ## Banco de dados (TypeORM + migrations)
@@ -1730,6 +1741,15 @@ Os valores do `.env.example` para os segredos são **só de desenvolvimento**; p
   um papel de manutenção com `BYPASSRLS` para ela (ou um contexto de confiança `app.conversation_retention` nas
   policies, como o `app.storage_reconcile`). Os candidatos saem de três índices parciais por `deleted_at` (migration
   `MaintenanceIndexes`).
+- **Agente do PC** (spec pc-agent): (a) **prazo vencido responde ~30 s depois:** a varredura sinaliza `immediate`, mas
+  `nextResponderStep` conta a janela do Hub de novo a partir do `requeued_at` (não sabe que a volta à fila foi um prazo
+  vencido); decidir se a nuvem responde na hora (precisa marcar o motivo na mensagem) ou se os 30 s ficam; (b)
+  `agent_issued_proposals` mantém o DELETE do GRANT padrão (só o UPDATE foi revogado): revogar numa migration nova e
+  definir a retenção (hoje nada sai); (c) a varredura pode morrer de fome se ≥100 prazos mais antigos forem pulados para
+  sempre; `answers_message_id` não é imutável no banco (só pelo código); (d) lotes concorrentes de
+  `POST /hub/agent/actions` e de `PUT /hub/agent/tools` gravam linha a linha sem ordenar (deadlock possível, o cliente
+  repete); (e) o app precisa mostrar o cartão da proposta de documento numa mensagem do agente (repo do app); (f)
+  apertar o validador da ACL exige revalidar as políticas gravadas (veja "ACL" em `agents`).
 - Plataforma: quarentena/aviso por e-mail ao dono e aos admins quando a equipe age numa organização ou Hub; leitura da
   auditoria da organização pelo cliente (hoje só se grava); endurecer a aprovação dupla (hoje basta outra pessoa com
   `platform.support.approve`); demais permissões de financeiro, tickets e chat (o `platform_finance` só tem `platform.billing.storage_quota` e `platform.billing.ai_budget`).
