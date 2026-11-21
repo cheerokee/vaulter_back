@@ -772,8 +772,9 @@ passo, pede ao back o que fazer: o back monta o prompt, busca os trechos do espa
   mensagem de pessoa confirmada **por este Hub**, com o prazo do ack correndo e sem resposta dele, senão 409
   `brain-step-not-owned` (descartar o trabalho: a nuvem de reserva responde); (4) menos de **16 chamadas ao modelo**
   nesta mensagem, senão 422 `brain-step-limit` (o back conta chamadas, não o `stepIndex`: repetir um passo depois de uma
-  queda conta e é cobrado de novo); (5) cada resultado de ferramenta até **32 KiB** em UTF-8, senão 422
-  `validation-failed` (o agente corta antes, com aviso no texto; a chamada da checagem 4 já foi contada).
+  queda conta e é cobrado de novo; um passo recusado pelo orçamento ou que falhou também conta); (5) cada resultado de
+  ferramenta até **32 KiB** em UTF-8, senão 422 `validation-failed` (o agente corta antes, com aviso no texto). A
+  checagem 5, só de formato, roda logo **antes** de contar a chamada da 4: pedido malformado nunca gasta chamada.
 - **Resposta 200:** `{ kind: "final", text, policyVersion }` (o agente cifra e manda como mensagem do executor, com
   `answeringMessageId`), `{ kind: "tools", text?, toolCalls: [ { id, name, input, effect: "allow"|"confirm" } ],
   policyVersion }` (executa `allow`, pede confirmação na bandeja para `confirm`, registra em `POST /hub/agent/actions` e

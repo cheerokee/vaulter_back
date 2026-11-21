@@ -1430,9 +1430,12 @@ registra a fonte `conversations`), `hubs` (`HubDirectory`: `ownerOf`,
   domínio). `BrainStepUseCase` confere **na ordem da spec, antes de qualquer custo**: (1) `HubConversationScope.organizationOf`
   (executor + vínculo aprovado, senão 404 `conversation-not-found`); (2) `SpaceCloud.modeOf` = `active_cloud` (422
   `cloud-not-active`) e `CloudTermAcceptanceRepository.hasAgentCoverage` (422 `cloud-terms-agent-not-accepted`); (3)
-  `AgentTurn.requireTurn` (409 `brain-step-not-owned`; prazo do ack incluído); (4) `BrainStepCounter.consume` (422
-  `brain-step-limit`); (5) `assertToolResultSizes` (cada `tool_result` até 32 KiB em UTF-8, 422 `validation-failed` com
-  `turn`/`block`, nunca o conteúdo). Depois a porta `BrainComposer` (`compose(view, request)`; a ligação padrão
+  `AgentTurn.requireTurn` (409 `brain-step-not-owned`; prazo do ack incluído); (5) `assertToolResultSizes` (cada
+  `tool_result` até 32 KiB em UTF-8, 422 `validation-failed` com `turn`/`block`, nunca o conteúdo; pura, roda **antes**
+  de contar, decisão do controlador: pedido malformado não gasta chamada); (4) `BrainStepCounter.consume` (422
+  `brain-step-limit`), a última: conta a primeira chamada ao modelo do passo; o composer só chama `consume` antes de
+  cada chamada ADICIONAL no mesmo passo e, com `'limit'` no meio, devolve o último texto como `final`; passo recusado
+  pelo orçamento ou que falhou também gasta a vaga. Depois a porta `BrainComposer` (`compose(view, request)`; a ligação padrão
   `NotImplementedBrainComposer` lança até a Task 11; os e2e a trocam por DI) e `AgentTurn.renewLease` (passo que
   responde renova o prazo; checagem recusada não renova). **Contador** `agent_brain_steps` (uma linha por (assunto,
   mensagem): `calls`, `cost_micro_usd`, `chunk_ids uuid[]`; só ids e números; RLS por organização; sem FK para assunto e

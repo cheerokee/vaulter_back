@@ -301,6 +301,7 @@ describe('cloud: the pc agent brain step (e2e)', () => {
     const conv = await create(lone);
     const m = await turn(lone, loneToken, conv);
     await expectStatus(step(loneToken, conv.id, stepBody(m)), 200);
+    // Vacuous until Task 11 (only the composer reserves): `composer.calls` empty and `callsOf(m)` are the real proof.
     const before = await reservations();
 
     await hubs.unlink(olivia, lone.hubId, orgId);
@@ -344,6 +345,8 @@ describe('cloud: the pc agent brain step (e2e)', () => {
     const conv = await create(pc, sp.spaceId);
     const m = await turn(pc, pcToken, conv, sp.spaceId);
     await expectStatus(step(pcToken, conv.id, stepBody(m)), 200);
+    const leaseAfterStep = await leaseOf(m);
+    // Vacuous until Task 11 (only the composer reserves): `composer.calls` empty and `callsOf(m)` are the real proof.
     const before = await reservations();
 
     await cloud.switchOff(olivia, sp.spaceId);
@@ -356,6 +359,7 @@ describe('cloud: the pc agent brain step (e2e)', () => {
     expect(composer.calls).toEqual([]);
     expect(await reservations()).toBe(before);
     expect(await callsOf(m)).toBe(1);
+    expect(await leaseOf(m)).toEqual(leaseAfterStep);
 
     // The refused step did not renew the lease: it still runs out and the sweep puts the message back in the queue.
     await (
@@ -481,6 +485,7 @@ describe('cloud: the pc agent brain step (e2e)', () => {
       turns: toolTurns('é'.repeat(BRAIN_TOOL_RESULT_MAX_BYTES / 2)),
     });
     await expectStatus(step(pcToken, conv.id, big), 200);
+    expect(await callsOf(m)).toBe(1);
 
     const tooBig = stepBody(m, {
       history: [{ id: m, author: 'person', text: 'a'.repeat(270_000) }],
@@ -497,6 +502,8 @@ describe('cloud: the pc agent brain step (e2e)', () => {
       422,
       'validation-failed',
     );
+    // A malformed request never uses a call slot (size check before the counter).
+    expect(await callsOf(m)).toBe(1);
     // A malformed content block is refused by the format check too.
     expectProblem(
       await step(
@@ -514,6 +521,7 @@ describe('cloud: the pc agent brain step (e2e)', () => {
       422,
       'validation-failed',
     );
+    expect(await callsOf(m)).toBe(1);
     expect(composer.calls).toHaveLength(1);
   });
 });
