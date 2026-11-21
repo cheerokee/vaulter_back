@@ -69,3 +69,11 @@ export function hubRoleTargetNotEligible(): DomainValidationError {
 export function spaceNotFound(): NotFoundError {
   return new NotFoundError('space-not-found', 'The space was not found.');
 }
+
+/** A pc hub (agent) is never shared: no hub_operator/hub_user role on it (422). */
+export function agentNotShareable(): DomainValidationError {
+  return new DomainValidationError(
+    'agent-not-shareable',
+    'An agent cannot be shared; it belongs to its owner only.',
+  );
+}

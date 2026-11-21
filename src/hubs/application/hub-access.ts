@@ -17,6 +17,7 @@ export type HubAccessGrant = { hub: Hub; role: HubRole };
 // membro de uma organização vinculada: a atribuição exige isso e as cascatas (desvincular, saída da organização)
 // tiram o papel de quem fica sem nenhuma. Por isso a visibilidade é a do RLS de `hubs` com `app.user_id` (dono, ou
 // vínculo aprovado com organização de que a pessoa é membro ativo), lida só neste trecho (`withContext`).
+// Hub `pc` (agente) nunca é compartilhável: só o dono o vê (sem papel explícito nem `hub_user` implícito).
 // Quem não vê, Hub desregistrado, inexistente ou id malformado: o MESMO 404 `hub-not-found` (nunca revela que o Hub
 // existe). Ação de dono num Hub que a pessoa vê: 403.
 // Sem lock: as mutações travam o Hub (FOR SHARE/UPDATE) depois desta checagem, cada uma na ordem
@@ -36,6 +37,8 @@ export class HubAccess {
       const hub = await this.hubs.findById(hubId);
       if (!hub || hub.isDeregistered) return null;
       if (hub.ownerUserId === userId) return { hub, role: 'hub_owner' };
+      // A pc hub (agent) belongs to its owner only: no explicit role can exist and there is no implicit hub_user.
+      if (hub.kind !== 'appliance') return null;
       const explicit = await this.roles.roleOf(hubId, userId);
       return { hub, role: explicit ?? 'hub_user' };
     });

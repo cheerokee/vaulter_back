@@ -12,7 +12,7 @@ const HUB_ID = '019a0000-0000-7000-8000-0000000000aa';
 const OWNER = '019a0000-0000-7000-8000-0000000000a1';
 const MEMBER = '019a0000-0000-7000-8000-0000000000b1';
 
-const hub = (deletedAt: Date | null = null) =>
+const hub = (deletedAt: Date | null = null, kind?: 'pc') =>
   Hub.restore(
     {
       ownerUserId: OWNER,
@@ -21,6 +21,7 @@ const hub = (deletedAt: Date | null = null) =>
       encryptionPublicKey: 'e',
       lastSeenAt: null,
       deletedAt,
+      ...(kind ? { kind } : {}),
     },
     HUB_ID,
   );
@@ -91,6 +92,19 @@ describe('HubAccess', () => {
     hubs.findById.mockResolvedValueOnce(null);
     await expect(access().requireOwner(HUB_ID, MEMBER)).rejects.toMatchObject({
       code: 'hub-not-found',
+    });
+  });
+
+  it('hub-access gives no implicit hub_user on a pc hub', async () => {
+    hubs.findById.mockResolvedValue(hub(null, 'pc'));
+    await expect(access().find(HUB_ID, MEMBER)).resolves.toBeNull();
+    await expect(access().hasAccess(HUB_ID, MEMBER)).resolves.toBe(false);
+    await expect(access().requireAccess(HUB_ID, MEMBER)).rejects.toMatchObject({
+      code: 'hub-not-found',
+    });
+    // the owner still sees it
+    await expect(access().find(HUB_ID, OWNER)).resolves.toMatchObject({
+      role: 'hub_owner',
     });
   });
 });

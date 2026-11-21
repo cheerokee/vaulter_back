@@ -9,7 +9,11 @@ import { HubRepository } from '../domain/hub.repository.js';
 import { HubRoleRepository } from '../domain/hub-role.repository.js';
 import { HubRoleRules, type AssignableHubRole } from '../domain/hub-roles.js';
 import { HubAccess } from './hub-access.js';
-import { hubNotFound, hubRoleTargetNotEligible } from './hub-errors.js';
+import {
+  agentNotShareable,
+  hubNotFound,
+  hubRoleTargetNotEligible,
+} from './hub-errors.js';
 import { ownerAuditOrganization } from './owner-audit.js';
 
 // Papel de Hub de um membro (`PUT /hubs/:id/roles/:userId`, spec §6): só o dono (404/403), só `hub_operator` ou
@@ -39,6 +43,7 @@ export class AssignHubRoleUseCase {
     return this.uow.run(async () => {
       await this.uow.setContext({ userId: actor.userId });
       const hub = await this.access.requireOwner(hubId, actor.userId);
+      if (hub.kind === 'pc') throw agentNotShareable();
       const roleKey = HubRoleRules.assertAssignable(input.roleKey);
       HubRoleRules.assertNotOwner(hub.ownerUserId, userId);
       if (!validate(userId)) throw hubRoleTargetNotEligible();

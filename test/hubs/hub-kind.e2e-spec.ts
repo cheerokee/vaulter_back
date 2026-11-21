@@ -69,4 +69,56 @@ describe('hub kind (e2e)', () => {
     expect(forged.status).toBe(401);
     expect(forged.body.type).toMatch(/\/hub-signature-invalid$/);
   });
+
+  it('a pc is never shared: a member of the linked organization gets 404 hub-not-found and no hub login; the owner sees it', async () => {
+    const ana = await c.spaces.signUpKeyed('ana@example.com', 'Ana');
+    const org = await c.spaces.orgWithKit(olivia, 'Agentes');
+    await c.spaces.joinOrg(olivia, org.orgId, ana);
+    const pc = await h.onboard(olivia.token, 'PC compartilhado', {
+      kind: 'pc',
+    });
+    await expectStatus(
+      c
+        .http()
+        .post(`/hubs/${pc.hubId}/organizations`)
+        .set(c.bearer(olivia.token))
+        .send({ organizationId: org.orgId }),
+      201,
+    );
+
+    const asMember = await c
+      .http()
+      .get(`/hubs/${pc.hubId}`)
+      .set(c.bearer(ana.token));
+    expect(asMember.status).toBe(404);
+    expect(asMember.body.type).toMatch(/\/hub-not-found$/);
+    await expectStatus(
+      c.http().get(`/hubs/${pc.hubId}`).set(c.bearer(olivia.token)),
+      200,
+    );
+
+    const hubToken = await h.authenticate(pc);
+    const login = await h.loginPerson(
+      hubToken,
+      ana.email,
+      ana.account.authProof,
+    );
+    expect(login.status).toBe(401);
+    expect(login.body.type).toMatch(/\/invalid-credentials$/);
+
+    // the same member does see an appliance linked to the same organization
+    const box = await h.onboard(olivia.token, 'Caixa');
+    await expectStatus(
+      c
+        .http()
+        .post(`/hubs/${box.hubId}/organizations`)
+        .set(c.bearer(olivia.token))
+        .send({ organizationId: org.orgId }),
+      201,
+    );
+    await expectStatus(
+      c.http().get(`/hubs/${box.hubId}`).set(c.bearer(ana.token)),
+      200,
+    );
+  });
 });

@@ -540,7 +540,8 @@ consulta só de leitura (veja Sincronização).
   `find(hubId, userId)` -> `{ hub, role } | null`; `requireAccess` -> **404** `hub-not-found` para quem não vê o Hub
   (desregistrado, inexistente, id malformado: o mesmo 404); `requireOwner` -> **403** para quem vê e não é dono.
   `role` = `hub_owner` | `hub_operator` | `hub_user` (explícito ou implícito para membro de organização com vínculo
-  aprovado). **Autorização é sempre do caso de uso**: `HubOrganizationRepository.upsert` troca para o contexto do Hub
+  aprovado). **Hub `pc` (agente) nunca é compartilhável:** `find` devolve só o dono (sem `hub_user` implícito, 404
+  `hub-not-found` para o resto) e atribuir papel é 422 `agent-not-shareable`. **Autorização é sempre do caso de uso**: `HubOrganizationRepository.upsert` troca para o contexto do Hub
   por dentro, então todo caso de uso confere dono / membro (`OrganizationAccess.requireMember`) / admin
   (`org.hubs.approve`) antes de escrever.
 - **Ordem de locks dos Hubs:** linha do Hub (`HubRepository.lockForShare`; `lockForUpdate` no desregistro;

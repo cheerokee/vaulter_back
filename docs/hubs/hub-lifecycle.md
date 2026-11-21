@@ -402,6 +402,9 @@ nuvem é reservado ao servidor (enviar ou apagar com ele: 422 `object-id-reserve
 - **Papéis no Hub:** o dono atribui `hub_operator` ou `hub_user` a membros das organizações vinculadas, por
   `PUT /hubs/:id/roles/:userId` com `{ "roleKey" }`, e remove por `DELETE /hubs/:id/roles/:userId` (204, idempotente).
   Membros das organizações vinculadas já são `hub_user` implicitamente.
+  **Hub `pc` (agente) nunca é compartilhável:** só o dono o vê. `PUT /hubs/:id/roles/:userId` num `pc` é 422
+  `agent-not-shareable` (antes de gravar); não há `hub_user` implícito, então um membro de organização vinculada recebe 404
+  `hub-not-found` em `GET /hubs/:id` e 401 `invalid-credentials` em `POST /hub/user-sessions`.
 
 ## 11. Troca da chave de um espaço (app)
 
