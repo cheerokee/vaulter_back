@@ -135,6 +135,8 @@ export const RATE_LIMITS = {
   agentPolicyRead: { limit: 600, ttl: HOUR },
   agentPolicyChange: { limit: 60, ttl: HOUR },
   agentPolicyHub: { limit: 120, ttl: HOUR },
+  /** Auditoria das ações do agente (`POST /hub/agent/actions`, só `pc`): 600/h por Hub, até 100 itens por pedido. */
+  agentActions: { limit: 600, ttl: HOUR },
 } as const;
 
 /** Nome do throttler extra, cobrado só nas rotas marcadas com @ThrottleByEmail(). */

@@ -936,8 +936,8 @@ vivo ou executor) e "quem sai grava por último" no cabeçalho da migration `Cre
 registra a fonte `conversations`), `hubs` (`HubDirectory`: `ownerOf`,
 `installedSpaceOrganization`, `lockExecutorCandidate`; `HubAccess`), `organizations` (`AuditLog`) e `storage` (a porta
 `ObjectStore` e a peça compartilhada `application/object-uploads.ts`, o diário `journal.ts` e os erros
-`storage-errors.ts`) e `identity` (`CurrentAuthProofVerifier`, para esvaziar a lixeira do assunto); ninguém importa
-`conversations`.
+`storage-errors.ts`) e `identity` (`CurrentAuthProofVerifier`, para esvaziar a lixeira do assunto); só o `agents` (a porta `HubConversationScope`,
+`organizationOf(hubId, conversationId)`: organização e espaço de um assunto que o Hub executa) e o `cloud` o importam.
 - **RLS (modelo):** `org_isolation` mais policies **restritivas** por comando: participante vivo (`app.user_id` em
   `participant_user_ids`) ou executor (`executor_hub_id = app.hub_id`); as filhas consultam a conversa e nada consulta as
   filhas de volta (sem recursão, sem `SECURITY DEFINER`). `participant_user_ids` é cópia **derivada** das participações
@@ -1401,9 +1401,9 @@ registra a fonte `conversations`), `hubs` (`HubDirectory`: `ownerOf`,
 
 ## Módulo `agents`
 `src/agents/` (o agente do PC, que age como um Hub `pc`). Spec: `docs/superpowers/specs/2026-11-21-pc-agent-design.md`
-(§5.4 = catálogo). Catálogo e política da organização existem; auditoria e passo do cérebro entram nas próximas tarefas.
-- **Fronteiras:** `agents` depende de `hubs` (`HubAccess`, `HubDirectory`), `organizations` (`OrganizationAccess`) e,
-  nas próximas tarefas, `conversations` (só as portas exportadas); **nunca importa `cloud`**; o `cloud` importa `agents`
+(§5.4 = catálogo). Catálogo, política da organização e auditoria das ações existem; o passo do cérebro entra na próxima tarefa.
+- **Fronteiras:** `agents` depende de `hubs` (`HubAccess`, `HubDirectory`), `organizations` (`OrganizationAccess`) e
+  `conversations` (só a porta exportada `HubConversationScope`); **nunca importa `cloud`**; o `cloud` importa `agents`
   só pela `application/` exportada (`AgentToolCatalog`); `hubs`, `organizations` e `conversations` nunca importam
   `agents`. O domínio é puro. Plaintext (histórico, resultados de ferramenta, trechos, prompt, argumentos, caminhos, URLs)
   nunca em log, Sentry, auditoria, payload de tarefa, banco ou resposta de erro: só ids, contagens, nomes de ferramenta,
@@ -1438,10 +1438,25 @@ registra a fonte `conversations`), `hubs` (`HubDirectory`: `ownerOf`,
   `{ version: 0, rules: [] }`. `GET /hub/agent/policy` (`@PcHubOnly()`): por organização com vínculo aprovado, a versão e só as regras
   `all` + as do dono (`rulesFor`). O item `agent_policy` da sincronização (`{ organizationId, version }`, só a versão mais
   recente por organização, **só Hub `pc`**, nunca lápide nem regras) avisa que a versão mudou.
+- **Auditoria das ações** (spec §5.6; migration `CreateAgentActionLogs`): `POST /hub/agent/actions` (`@PcHubOnly()`,
+  `RecordAgentActionsUseCase`, 600/h por Hub, `RATE_LIMITS.agentActions`), lote de 1..100 itens `{ id, conversationId,
+  messageId, toolName, effect, decision, startedAt, durationMs, policyVersion }`; DTO com `forbidNonWhitelisted`: nenhum
+  argumento, resultado, caminho, URL ou organização passa (422). **A organização e o espaço o servidor lê da conversa**
+  pela porta `HubConversationScope.organizationOf(hubId, conversationId)` (exportada pelo `conversations`; o Hub precisa
+  ser o executor e ter vínculo aprovado, senão 404 `conversation-not-found`; é a única coisa do `conversations` que o
+  `agents` importa); `owner_user_id` é o dono do Hub (`HubDirectory.ownerOf`). **Tudo ou nada** num `uow.run`: uma
+  conversa que não é do Hub = 404 para o lote inteiro, nada gravado. Idempotência por `UNIQUE (hub_id, action_id)`
+  (`action_id` = o `id` do agente; `id` interno = UUID v7 do servidor, ordem e cursor): mesmo `id` com conteúdo igual é
+  no-op (antes ou dentro do lote), com outro 409 `agent-action-id-conflict`; a perda de corrida contra o mesmo lote
+  relê e decide. Tabela `agent_action_logs`: **só de acréscimo** (runtime SELECT/INSERT, sem UPDATE nem DELETE), RLS
+  `org_isolation` + `owner_read` (o dono lê o que o próprio agente fez, em qualquer organização), sem FK para conversa
+  e mensagem (têm RLS e retenção próprias). Leituras: `GET /organizations/:orgId/agent-actions?userId=&hubId=&cursor=`
+  (`org.agents.manage`; sessão de Hub = 404 `organization-not-found`, o agente não lê a própria auditoria) e
+  `GET /hubs/:id/agent/actions` (dono do `pc`). e2e em `test/agents/actions.e2e-spec.ts`.
 - **ACL (`agent-policy.ts`):** apertar `parseAgentRules`/`normalizeAgentPath` depois pode invalidar políticas já gravadas
   (os avaliadores negam tudo para quem tem regra inválida, na organização inteira); mudança no validador exige um passo
   de revalidação das políticas armazenadas.
-- **Testes:** `src/agents/domain/agent-tool.spec.ts`, e2e em `test/agents/tools.e2e-spec.ts`; helper `agentsKit(getApp)`
+- **Testes:** `src/agents/domain/agent-tool.spec.ts`, `agent-action.spec.ts`, e2e em `test/agents/tools.e2e-spec.ts`; helper `agentsKit(getApp)`
   em `test/support/agents-kit.ts` (`publishTools(hub, tools)`, `defaultTools()`: uma ferramenta de cada categoria).
 
 ## Banco de dados (TypeORM + migrations)

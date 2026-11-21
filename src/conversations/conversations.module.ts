@@ -60,6 +60,7 @@ import { SyncConversationsUseCase } from './application/sync-conversations.use-c
 import { ConversationChangesSqlReader } from './infra/db/conversation-changes.sql-reader.js';
 import { PgConversationChangeSignal } from './infra/db/pg-conversation-change-signal.js';
 import { SpaceConversationsController } from './infra/http/space-conversations.controller.js';
+import { HubConversationScope } from './application/hub-conversation-scope.js';
 import { CloudConversationExecutor } from './application/cloud-conversation-executor.js';
 import { ConversationsCloudDeactivatedHook } from './application/cloud-deactivated.hook.js';
 import { ConversationCloudReserve } from './application/conversation-cloud-reserve.js';
@@ -74,7 +75,8 @@ import { SetCloudReserveUseCase } from './application/set-cloud-reserve.use-case
  * (AuditLog) and `storage` (the ObjectStore port and the shared upload/repair pieces of `application/object-uploads`)
  * through what they export; reacts to `SpaceMemberLeftHooks`, `HubExecutorLostHooks` and `SpaceCloudDeactivatedHooks`,
  * joins the `storage:reconcile` sweep through `StorageReconcileHooks`, and emits `CloudReservePendingHooks`.
- * Exports `CloudConversationExecutor` (the cloud as reserve executor, spec active-cloud §4.3) for the `cloud` module;
+ * Exports `HubConversationScope` (the (organization, space) of a conversation a Hub executes) for the `agents` module and
+ * `CloudConversationExecutor` (the cloud as reserve executor, spec active-cloud §4.3) for the `cloud` module;
  * `conversations` never imports `cloud` (the server copies are checked through `ServerKeyCopyCheck`).
  */
 @Module({
@@ -167,7 +169,8 @@ import { SetCloudReserveUseCase } from './application/set-cloud-reserve.use-case
     SetCloudReserveUseCase,
     SetCloudAnswerUseCase,
     CloudConversationExecutor,
+    HubConversationScope,
   ],
-  exports: [CloudConversationExecutor],
+  exports: [CloudConversationExecutor, HubConversationScope],
 })
 export class ConversationsModule {}

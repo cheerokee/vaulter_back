@@ -703,6 +703,29 @@ regras `allow`/`confirm`/`deny` sobre ferramentas, pastas e domínios) é gravad
   `organization-not-found` de quem está fora (o agente, com a sessão do dono, não reescreve a própria ACL). `GET .../agent-policy` (todo membro, inclusive sessão de Hub; 600/h) -> `{ organizationId, version, rules }` com a política inteira.
   Cada troca é auditada (`organization.agent_policy.changed`, só `{ version, ruleCount }`).
 
+## Agente do PC: auditoria das ações
+
+Spec `docs/superpowers/specs/2026-11-21-pc-agent-design.md` §5.6. O agente relata o que fez com cada ferramenta; o
+servidor guarda só o rastro, nunca o conteúdo.
+
+- `POST /hub/agent/actions` (token de Hub, só `pc`, **600/h por Hub**; um `appliance` recebe o 404 do Nest para rota
+  inexistente, `Cannot POST /hub/agent/actions`) com `{ "items": [ { id, conversationId, messageId, toolName, effect,
+  decision, startedAt, durationMs, policyVersion } ] }`, de 1 a **100** itens (mais que isso, ou lista vazia, 422).
+  `id`, `conversationId` e `messageId` são UUID (o `id` é do agente: ele o gera e reenvia o mesmo); `toolName` até 200
+  caracteres; `effect` ∈ `allow | confirm | deny` (o efeito da ACL que valeu); `decision` ∈ `executed | declined |
+  blocked | failed`; `startedAt` ISO 8601; `durationMs` 0..86 400 000; `policyVersion` inteiro >= 0. **Nenhum outro campo
+  passa** (argumentos, resultados, caminhos, URLs e organização dão 422): a organização e o espaço o servidor lê da
+  conversa. Resposta 200 `{ "recorded": n }` (linhas gravadas por esta chamada).
+- **Tudo ou nada.** Cada `conversationId` precisa ser de um assunto que **este Hub executa**, em organização com vínculo
+  aprovado; um só que não seja (ou não exista) dá 404 `conversation-not-found` para o lote inteiro e nada é gravado. O
+  mesmo `id` com conteúdo idêntico (já gravado antes, ou repetido no lote) é no-op; com conteúdo diferente, 409
+  `agent-action-id-conflict` (nada gravado). Reenviar um lote após uma falha de rede é seguro.
+- Quem lê (token de usuário): `GET /organizations/:orgId/agent-actions?userId=&hubId=&cursor=&limit=` (`org.agents.manage`:
+  404 não membro, 403 sem a permissão; **sessão aberta por um Hub** = 404 `organization-not-found`) e
+  `GET /hubs/:id/agent/actions?cursor=&limit=` (só o dono do Hub `pc`; 404 `hub-not-found` para o resto e para um
+  `appliance`). Mais novas primeiro, cursor, `limit` 1..100 (padrão 20); item `{ id, hubId, userId (o dono do agente),
+  spaceId, conversationId, messageId, toolName, effect, decision, startedAt, durationMs, policyVersion, recordedAt }`.
+
 ## 13. Reset de fábrica
 
 Um aparelho desregistrado **não pode ser reivindicado de novo com as mesmas chaves**: a apresentação dá 409
@@ -727,6 +750,7 @@ Assim nada do dono anterior chega a um dono novo.
 | `GET /hub/sync` | 120/h | Hub |
 | `PUT /hub/agent/tools` (só `pc`) | 60/h | Hub |
 | `GET /hub/agent/policy` (só `pc`) | 120/h | Hub |
+| `POST /hub/agent/actions` (só `pc`) | 600/h | Hub |
 | `PUT /organizations/:orgId/agent-policy` | 60/h | usuário |
 | `GET /organizations/:orgId/agent-policy` | 600/h | usuário |
 | `POST /hub/spaces/:spaceId/uploads` | 600/h | Hub |
