@@ -7,6 +7,8 @@ import type { SpaceActivation } from '../../domain/space-activation.js';
 /** The current term and the organization's latest acceptance (`accepted.version` < `current.version`: accept again). */
 export type CloudTermsView = {
   current: CloudTerm | null;
+  /** The organization accepted a term version that covers the PC agent. */
+  agentCovered: boolean;
   accepted: {
     version: number;
     hash: string;

@@ -40,7 +40,13 @@ const copy = (n: number) =>
   Buffer.concat([Buffer.from([0x01]), Buffer.alloc(80, n)]).toString(
     'base64url',
   );
-const TERM = { version: 1, hash: HASH, text: 't', publishedAt: new Date() };
+const TERM = {
+  version: 1,
+  hash: HASH,
+  text: 't',
+  coversAgent: false,
+  publishedAt: new Date(),
+};
 const ACCEPTED = {
   organizationId: ORG,
   termVersion: 1,

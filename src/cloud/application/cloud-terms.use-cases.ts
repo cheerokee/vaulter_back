@@ -30,6 +30,7 @@ export class GetCloudTermsUseCase {
     const accepted = await this.acceptances.latest(orgId);
     return {
       current: await this.terms.current(),
+      agentCovered: await this.acceptances.hasAgentCoverage(orgId),
       accepted: accepted ? toAcceptanceView(accepted) : null,
     };
   }

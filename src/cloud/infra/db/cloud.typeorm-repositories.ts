@@ -42,6 +42,7 @@ export class CloudTermTypeormRepository extends CloudTermRepository {
           version: row.version,
           hash: row.hash,
           text: row.text,
+          coversAgent: row.coversAgent,
           publishedAt: row.publishedAt,
         }
       : null;
@@ -72,6 +73,22 @@ export class CloudTermAcceptanceTypeormRepository extends CloudTermAcceptanceRep
       }),
     );
     return row ? toAcceptance(row) : null;
+  }
+
+  async hasAgentCoverage(orgId: string): Promise<boolean> {
+    const rows: unknown[] = await runInOrganizationScope(
+      this.dataSource,
+      orgId,
+      (m) =>
+        m.query(
+          `SELECT 1 FROM cloud_term_acceptances a
+             JOIN cloud_terms t ON t.version = a.term_version
+            WHERE a.organization_id = $1 AND t.covers_agent
+            LIMIT 1`,
+          [orgId],
+        ),
+    );
+    return rows.length > 0;
   }
 
   // ON CONFLICT DO NOTHING: dois aceites concorrentes da mesma versão gravam uma linha só; o que perde lê a do outro.

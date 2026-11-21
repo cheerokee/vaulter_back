@@ -139,7 +139,7 @@ describe('active cloud: term, authorize, switch on, switch off (e2e, real client
     it('every member reads the current term (hash = SHA-256 of the text); nobody accepted yet', async () => {
       const res = await expectStatus(terms(dave, orgId), 200);
       expect(res.body.accepted).toBeNull();
-      expect(res.body.current.version).toBe(1);
+      expect(res.body.current.version).toBe(2);
       expect(res.body.current.hash).toBe(
         createHash('sha256')
           .update(res.body.current.text, 'utf8')
@@ -166,7 +166,7 @@ describe('active cloud: term, authorize, switch on, switch off (e2e, real client
         200,
       );
       expect(first.body).toMatchObject({
-        version: 1,
+        version: cur.version,
         hash: cur.hash,
         acceptedByUserId: carol.userId,
       });
@@ -213,7 +213,7 @@ describe('active cloud: term, authorize, switch on, switch off (e2e, real client
       expect(res.body).toMatchObject({
         spaceId,
         state: 'authorized',
-        termVersion: 1,
+        termVersion: 2,
         authorizedByUserId: carol.userId,
         activatedAt: null,
       });
@@ -525,7 +525,7 @@ describe('active cloud: term, authorize, switch on, switch off (e2e, real client
     });
 
     it('a new term version must be accepted before authorizing a new space; spaces already on stay on', async () => {
-      // Space A on under v1.
+      // Space A on under the then-current term.
       await expectStatus(authorize(carol, spaceId), 200);
       await expectStatus(
         activate(bob, spaceId, await serverGrants(bob, keys)),
@@ -534,7 +534,7 @@ describe('active cloud: term, authorize, switch on, switch off (e2e, real client
       const other = await c.spaces.create(ana, orgId, kitPk, 'Outro');
       await db(
         `INSERT INTO cloud_terms (version, hash, text, published_at)
-         VALUES (2, encode(sha256(convert_to('v2', 'UTF8')), 'hex'), 'v2', now())`,
+         VALUES (3, encode(sha256(convert_to('v3', 'UTF8')), 'hex'), 'v3', now())`,
       );
       const res = await authorize(carol, other.spaceId);
       expect(res.status).toBe(422);
@@ -544,9 +544,9 @@ describe('active cloud: term, authorize, switch on, switch off (e2e, real client
       ).toBe('active');
       await acceptCurrent(carol, orgId);
       await expectStatus(authorize(carol, other.spaceId), 200);
-      await db(`DELETE FROM cloud_space_activations WHERE term_version = 2`);
-      await db(`DELETE FROM cloud_term_acceptances WHERE term_version = 2`);
-      await db(`DELETE FROM cloud_terms WHERE version = 2`);
+      await db(`DELETE FROM cloud_space_activations WHERE term_version = 3`);
+      await db(`DELETE FROM cloud_term_acceptances WHERE term_version = 3`);
+      await db(`DELETE FROM cloud_terms WHERE version = 3`);
     });
 
     it('the runtime cannot publish or rewrite a term, nor rewrite an acceptance; it can delete server copies', async () => {
@@ -563,6 +563,64 @@ describe('active cloud: term, authorize, switch on, switch off (e2e, real client
       expect(await priv('cloud_term_acceptances', 'DELETE')).toBe(false);
       expect(await priv('cloud_space_activations', 'DELETE')).toBe(false);
       expect(await priv('cloud_space_key_grants', 'DELETE')).toBe(true);
+    });
+  });
+
+  describe('agent coverage', () => {
+    let owner: KeyedUser;
+    let orgId: string;
+    let v1: { version: number; hash: string };
+
+    beforeAll(async () => {
+      owner = await c.spaces.signUpKeyed('agent-owner@example.com', 'Owner');
+      orgId = (await c.spaces.orgWithKit(owner)).orgId;
+      const rows = await db<{ version: number; hash: string }>(
+        `SELECT version, hash FROM cloud_terms WHERE version = 1`,
+      );
+      v1 = rows[0]!;
+    }, 60_000);
+
+    it('a fresh organization is not agent-covered', async () => {
+      const res = await expectStatus(terms(owner, orgId), 200);
+      expect(res.body.agentCovered).toBe(false);
+      expect(res.body.current.version).toBe(2);
+      expect(res.body.current.text.startsWith('RASCUNHO PROVISÓRIO')).toBe(
+        true,
+      );
+    });
+
+    it('accepting v2 covers the agent; an acceptance of v1 alone does not', async () => {
+      await db(
+        `INSERT INTO cloud_term_acceptances
+           (organization_id, term_version, term_hash, accepted_by_user_id, accepted_at)
+         VALUES ($1, 1, $2, $3, now())`,
+        [orgId, v1.hash, owner.userId],
+      );
+      expect(
+        (await expectStatus(terms(owner, orgId), 200)).body.agentCovered,
+      ).toBe(false);
+      await acceptCurrent(owner, orgId);
+      expect(
+        (await expectStatus(terms(owner, orgId), 200)).body.agentCovered,
+      ).toBe(true);
+    });
+
+    it('authorize still requires the CURRENT version', async () => {
+      const other = await c.spaces.signUpKeyed('agent-v1@example.com', 'Other');
+      const kit2 = await c.spaces.orgWithKit(other);
+      const org2 = kit2.orgId;
+      await setAiBudgetInDb(org2, TEST_AI_BUDGET_MICRO_USD);
+      const sp = await c.spaces.create(other, org2, kit2.kit.publicKey);
+      expect(sp.res.status).toBe(201);
+      await db(
+        `INSERT INTO cloud_term_acceptances
+           (organization_id, term_version, term_hash, accepted_by_user_id, accepted_at)
+         VALUES ($1, 1, $2, $3, now())`,
+        [org2, v1.hash, other.userId],
+      );
+      const res = await authorize(other, sp.spaceId);
+      expect(res.status).toBe(422);
+      expect(res.body.type).toMatch(/cloud-terms-not-accepted$/);
     });
   });
 

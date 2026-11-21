@@ -1299,7 +1299,7 @@ registra a fonte `conversations`), `hubs` (`HubDirectory`: `ownerOf`,
   `space-cloud.use-cases.ts`). Quem **decide** = `org.members.manage` (`CLOUD_DECIDER_PERMISSION`, a permissão do kit,
   a outra forma de ler todos os espaços; na pessoal, a própria pessoa). **Termo:** `cloud_terms` (versão, texto pt-BR,
   `hash` = SHA-256 hex do texto em UTF-8), publicado **só por migration** (o runtime só lê; o reset dos e2e o trata como
-  catálogo); atual = maior versão; a v1 é **rascunho provisório** (texto final do Jonas entra como versão nova).
+  catálogo); atual = maior versão; a v1 e a v2 são **rascunhos provisórios** (texto final do Jonas entra como versão nova). `cloud_terms.covers_agent` (migration `CloudTermsCoverAgent`) marca as versões que cobrem o agente do PC (dados do PC enviados ao modelo: resultados de ferramentas, páginas do navegador, arquivos da pasta liberada); a v2 cobre, a v1 não. `CloudTermAcceptanceRepository.hasAgentCoverage(orgId)` = a organização aceitou alguma versão que cobre (não precisa ser a atual); `GET .../cloud/terms` traz `agentCovered`. Autorizar a nuvem continua exigindo a versão ATUAL.
   `GET /organizations/:orgId/cloud/terms` (todo membro) -> `{ current, accepted }`;
   `POST .../cloud/terms/accept` `{ version, hash }` (quem decide; tela velha 422 `cloud-terms-outdated`; repetir devolve
   o mesmo aceite) grava `cloud_term_acceptances` (org, versão, hash, quem, quando, IP; append-only). **Dois passos:**

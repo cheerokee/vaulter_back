@@ -60,10 +60,12 @@ export function cloudTermsResponse(v: CloudTermsView) {
           version: v.current.version,
           hash: v.current.hash,
           text: v.current.text,
+          coversAgent: v.current.coversAgent,
           publishedAt: v.current.publishedAt.toISOString(),
         }
       : null,
     accepted: v.accepted ? acceptanceResponse(v.accepted) : null,
+    agentCovered: v.agentCovered,
   };
 }
 

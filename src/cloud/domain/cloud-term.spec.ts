@@ -4,6 +4,7 @@ const term: CloudTerm = {
   version: 2,
   hash: 'a'.repeat(64),
   text: 't',
+  coversAgent: false,
   publishedAt: new Date('2026-11-10T00:00:00Z'),
 };
 

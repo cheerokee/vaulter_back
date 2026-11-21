@@ -18,6 +18,9 @@ export class CloudTermTypeormEntity extends BaseTypeormEntity {
   @Column({ type: 'text' })
   text!: string;
 
+  @Column({ type: 'boolean', default: false })
+  coversAgent!: boolean;
+
   @Column({ type: 'timestamptz' })
   publishedAt!: Date;
 }

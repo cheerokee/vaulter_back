@@ -10,6 +10,8 @@ export type CloudTerm = {
   /** SHA-256 of the UTF-8 text, 64 lowercase hex chars. */
   hash: string;
   text: string;
+  /** The version covers the PC agent (tool results, browser pages and folder files sent to the model). */
+  coversAgent: boolean;
   publishedAt: Date;
 };
 

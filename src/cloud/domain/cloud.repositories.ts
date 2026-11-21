@@ -12,6 +12,11 @@ export abstract class CloudTermAcceptanceRepository {
   /** The acceptance of the most recent version the organization accepted, or null. */
   abstract latest(orgId: string): Promise<CloudTermAcceptance | null>;
   /**
+   * Whether the organization accepted any term version that covers the PC agent (`covers_agent`). Not the same as
+   * accepting the CURRENT version: an older covering version still counts here.
+   */
+  abstract hasAgentCoverage(orgId: string): Promise<boolean>;
+  /**
    * Records the acceptance unless the organization already accepted that version (concurrent accepts: one row).
    * Returns the stored acceptance and whether this call created it.
    */
