@@ -292,6 +292,32 @@ describe('monthly AI budget (e2e)', () => {
       expect(statuses.map((s) => s.status)).toEqual(['settled', 'released']);
     });
 
+    it('a reservation of kind agent is recorded and listed in ai-usage items', async () => {
+      const r = await budget().reserve({ ...req(300n), kind: 'agent' });
+      await budget().settle(r, {
+        model: 'fake-llm',
+        inputTokens: 10,
+        outputTokens: 5,
+        costMicroUsd: 120n,
+      });
+      const view = await expectStatus(usage(owner), 200);
+      expect(view.body.items).toEqual([
+        expect.objectContaining({
+          spaceId,
+          kind: 'agent',
+          costMicroUsd: 120,
+          inputTokens: 10,
+          outputTokens: 5,
+          calls: 1,
+        }),
+      ]);
+      const rows = await db<{ kind: string; status: string }>(
+        `SELECT kind, status FROM cloud_ai_reservations WHERE organization_id = $1`,
+        [orgId],
+      );
+      expect(rows).toEqual([{ kind: 'agent', status: 'settled' }]);
+    });
+
     it('warning levels 75 / 90 / 100 in the usage view and in the organization (every member, no amounts)', async () => {
       const spend = async (cost: bigint) => {
         const r = await budget().reserve(req(cost));

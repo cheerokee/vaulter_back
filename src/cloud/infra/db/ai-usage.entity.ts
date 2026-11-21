@@ -22,7 +22,7 @@ import type { AiUsageKind } from '../../domain/ai-usage.js';
   'kind',
 ])
 @Index('fk_cloud_ai_usage_spaces_idx', ['spaceId', 'organizationId'])
-@Check('ck_cloud_ai_usage_kind', `"kind" IN ('answer', 'indexing')`)
+@Check('ck_cloud_ai_usage_kind', `"kind" IN ('answer', 'indexing', 'agent')`)
 @Check(
   'ck_cloud_ai_usage_counts',
   `"cost_micro_usd" >= 0 AND "input_tokens" >= 0 AND "output_tokens" >= 0 AND "calls" >= 0`,

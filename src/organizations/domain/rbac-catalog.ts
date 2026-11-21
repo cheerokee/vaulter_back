@@ -19,6 +19,7 @@ export const PERMISSIONS = {
   'org.spaces.create': 'organization',
   'org.hubs.approve': 'organization',
   'org.billing': 'organization',
+  'org.agents.manage': 'organization',
 } as const satisfies Record<string, PermissionScope>;
 
 export type PermissionKey = keyof typeof PERMISSIONS;
@@ -35,6 +36,7 @@ export const FACTORY_ROLES = {
     'org.spaces.create',
     'org.hubs.approve',
     'org.billing',
+    'org.agents.manage',
   ],
   org_member: [],
   space_reader: ['memory.read'],

@@ -1,7 +1,7 @@
 import { DomainValidationError } from '../../shared/domain/errors.js';
 
 /** What spent AI money (spec active-cloud §4.4: "por espaço e por tipo"). */
-export const AI_USAGE_KINDS = ['answer', 'indexing'] as const;
+export const AI_USAGE_KINDS = ['answer', 'indexing', 'agent'] as const;
 export type AiUsageKind = (typeof AI_USAGE_KINDS)[number];
 
 /**

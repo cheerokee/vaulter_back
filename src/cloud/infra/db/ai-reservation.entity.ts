@@ -13,7 +13,7 @@ import type { AiUsageKind } from '../../domain/ai-usage.js';
 })
 @Index('fk_cloud_ai_reservations_spaces_idx', ['spaceId', 'organizationId'])
 @Index('fk_cloud_ai_reservations_organizations_idx', ['organizationId'])
-@Check('ck_cloud_ai_reservations_kind', `"kind" IN ('answer', 'indexing')`)
+@Check('ck_cloud_ai_reservations_kind', `"kind" IN ('answer', 'indexing', 'agent')`)
 @Check(
   'ck_cloud_ai_reservations_status',
   `"status" IN ('reserved', 'settled', 'released', 'expired')`,

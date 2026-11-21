@@ -70,6 +70,7 @@ const ORG_PERMS: Record<OrgRole, string[]> = {
     'org.spaces.create',
     'org.hubs.approve',
     'org.billing',
+    'org.agents.manage',
   ],
   org_member: [],
 };

@@ -352,7 +352,7 @@ src/organizations/
   `permissions`, `permission_dependency` e `role_permission` são só leitura para o runtime **por GRANT** (só
   `SELECT`); em `roles`, os papéis de fábrica (`organization_id IS NULL`) são protegidos pelo **RLS**, e o runtime
   pode gravar papéis da própria organização (base dos papéis próprios futuros). Papéis de fábrica: `org_admin` (`org.members.manage`, `org.spaces.create`,
-  `org.hubs.approve`, `org.billing`), `org_member` (nenhuma), `space_reader/editor/manager`, `hub_owner/operator/...`
+  `org.hubs.approve`, `org.billing`, `org.agents.manage`: migration `AgentsPermissionAndUsageKind`, para o agente do PC), `org_member` (nenhuma), `space_reader/editor/manager`, `hub_owner/operator/...`
   (detalhe na spec §6). Atribuição em `role_assignments` (escopo organização/espaço/hub); a API de membros só mexe em
   `org_admin`/`org_member`.
 - **RLS das tabelas da organização:** policies só com `current_setting` (`app.organization_id`, `app.user_id`,
@@ -1349,7 +1349,7 @@ registra a fonte `conversations`), `hubs` (`HubDirectory`: `ownerOf`,
 - **Orçamento de IA** (spec §4.4; `application/ai-budget.ts`, `domain/ai-usage.ts`): `organizations.ai_budget_micro_usd`
   (micro-USD, `bigint`, padrão **0**), ajustado só pelo financeiro (`PUT /platform/organizations/:orgId/ai-budget`, veja
   `platform`). Mês = **mês civil UTC pelo relógio do banco**. Toda chamada que custa passa por `AiBudget`:
-  `reserve({ organizationId, spaceId, kind: 'answer'|'indexing', estimatedMicroUsd })` (transação curta própria:
+  `reserve({ organizationId, spaceId, kind: 'answer'|'indexing'|'agent', estimatedMicroUsd })` (transação curta própria:
   `OrganizationDirectory.lockAiBudget` = linha da organização FOR NO KEY UPDATE, **folha**; reservas vencidas viram
   `expired`; gasto + reservas vivas do mês lidos em **um comando**; não cabe = 422 `ai-budget-exceeded` com `resetsAt`)
   -> chamada de rede **fora** de transação -> `settle(reserva, { model, inputTokens, outputTokens, costMicroUsd })` (gasto

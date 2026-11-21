@@ -121,6 +121,6 @@ describe('RBAC catalog (migration data)', () => {
     const [{ n }]: { n: string }[] = await db.query(
       `SELECT count(*) AS n FROM permissions`,
     );
-    expect(Number(n)).toBe(16);
+    expect(Number(n)).toBe(17);
   });
 });

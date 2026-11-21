@@ -239,7 +239,7 @@ describe('organizations repositories (e2e, app role)', () => {
 
     it('the runtime role reads the RBAC catalog without context', async () => {
       for (const [t, n] of [
-        ['permissions', 16],
+        ['permissions', 17],
         ['permission_dependency', 2],
       ] as const) {
         expect(await asApp({}, `SELECT 1 FROM ${t}`)).toHaveLength(n);
@@ -488,6 +488,7 @@ describe('organizations repositories (e2e, app role)', () => {
       await roles.assignOrgRole(org.id, bob, 'org_admin', ana);
       expect(await roles.orgRoleOf(org.id, bob)).toBe('org_admin');
       expect(await roles.permissionsOf(org.id, bob)).toEqual([
+        'org.agents.manage',
         'org.billing',
         'org.hubs.approve',
         'org.members.manage',

@@ -16,8 +16,8 @@ const HUB_ALL = [
 ];
 
 describe('RBAC catalog', () => {
-  it('has the 16 permissions with their scopes', () => {
-    expect(Object.keys(PERMISSIONS)).toHaveLength(16);
+  it('has the 17 permissions with their scopes', () => {
+    expect(Object.keys(PERMISSIONS)).toHaveLength(17);
     const byScope = (scope: string) =>
       Object.entries(PERMISSIONS)
         .filter(([, s]) => s === scope)
@@ -34,6 +34,7 @@ describe('RBAC catalog', () => {
       'org.spaces.create',
       'org.hubs.approve',
       'org.billing',
+      'org.agents.manage',
     ]);
   });
 
@@ -44,6 +45,7 @@ describe('RBAC catalog', () => {
         'org.spaces.create',
         'org.hubs.approve',
         'org.billing',
+        'org.agents.manage',
       ],
       org_member: [],
       space_reader: ['memory.read'],
