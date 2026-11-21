@@ -43,7 +43,11 @@ const mostRestrictive = (a: AgentEffect, b: AgentEffect): AgentEffect =>
  * folds that case-insensitive file systems apply (long s, dotless i, ligatures, Kelvin sign); upper then lower
  * catches them. Always applied to both sides, after NFC.
  */
-const fold = (s: string) => s.toUpperCase().toLowerCase();
+const fold = (s: string) =>
+  s
+    .toUpperCase()
+    .toLowerCase()
+    .replace(/\u03c2/g, '\u03c3'); // final sigma is sigma
 
 // ---------------------------------------------------------------- paths
 
@@ -178,13 +182,15 @@ function toolPatternMatches(
   effect: AgentEffect,
   name: string,
 ) {
+  const prefix = pattern.endsWith('*');
+  // NFC on both sides; fold the text without the trailing `*` (the folding is contextual for sigma)
+  let body = (prefix ? pattern.slice(0, -1) : pattern).normalize('NFC');
+  let target = name.normalize('NFC');
   if (effect !== 'allow') {
-    pattern = fold(pattern);
-    name = fold(name);
+    body = fold(body);
+    target = fold(target);
   }
-  return pattern.endsWith('*')
-    ? name.startsWith(pattern.slice(0, -1))
-    : pattern === name;
+  return prefix ? target.startsWith(body) : target === body;
 }
 
 // ---------------------------------------------------------------- parsing

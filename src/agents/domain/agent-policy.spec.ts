@@ -297,6 +297,51 @@ describe('agent policy', () => {
     ).toBe('deny');
   });
 
+  it('sigma and NFC in tool patterns: restrictive rules cannot be dodged', () => {
+    const allowAll = rule(all, tool('mcp:*'), 'allow');
+    const cases: [string, string][] = [
+      ['mcp:x\u03c3*', 'mcp:x\u03c3a'],
+      ['mcp:X\u03a3*', 'mcp:x\u03c3a'],
+      ['mcp:\u03c3*', 'mcp:\u03c3a'],
+      ['mcp:caf\u00e9/*', 'mcp:cafe\u0301/x'], // NFD name vs NFC pattern
+      ['mcp:cafe\u0301/*', 'mcp:caf\u00e9/x'], // NFC name vs NFD pattern
+    ];
+    for (const [pattern, name] of cases) {
+      expect(
+        toolEffect([allowAll, rule(all, tool(pattern), 'deny')], U, name),
+      ).toBe('deny');
+    }
+    // exact (non-prefix) pattern too
+    expect(
+      toolEffect(
+        [allowAll, rule(all, tool('mcp:caf\u00e9'), 'deny')],
+        U,
+        'mcp:cafe\u0301',
+      ),
+    ).toBe('deny');
+  });
+
+  it('sigma and final sigma fold equally in folder rules', () => {
+    const base = [
+      rule(all, tool('*'), 'allow'),
+      rule(all, folder('./'), 'allow'),
+    ];
+    for (const [ruleName, path] of [
+      [
+        '\u03a3\u03bf\u03c6\u03af\u03b1\u03c3/',
+        '\u03c3\u03bf\u03c6\u03af\u03b1\u03c3/x',
+      ],
+      [
+        '\u03c3\u03bf\u03c6\u03af\u03b1\u03c2/',
+        '\u03a3\u039f\u03a6\u038a\u0391\u03a3/x',
+      ],
+      ['\u03bf\u03c3/', '\u039f\u03c2/x'],
+    ]) {
+      const rules = [...base, rule(all, folder(ruleName), 'deny')];
+      expect(callEffect(rules, U, read, { path })).toBe('deny');
+    }
+  });
+
   it('unicode: NFD and NFC spellings are the same path, in both directions', () => {
     const nfc = 'Relat\u00f3rios';
     const nfd = 'Relato\u0301rios';
