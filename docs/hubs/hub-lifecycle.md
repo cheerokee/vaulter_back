@@ -672,8 +672,8 @@ corpo de qualquer rota que não existe), nunca um 403: o aparelho não descobre 
   `folder:*` precisa declarar `properties.path` e o de `browser:*`, `properties.url` (a política da organização casa
   caminhos e URLs). Limites de texto: nome e título até 200 caracteres, descrição até 2000, `inputSchema` até 8 KiB
   serializado. Qualquer violação é 422 `validation-failed` com o `index` da ferramenta inválida (nada é gravado; o
-  catálogo anterior continua). O corpo é limitado pelo limite geral do JSON (100 kB): 200 ferramentas com schemas grandes
-  não cabem num pedido só.
+  catálogo anterior continua). Esta rota aceita corpo JSON de até **2 MiB** (`AGENT_TOOLS_BODY_MAX_BYTES`), para caber
+  as 200 ferramentas num pedido só; acima disso é 413. As outras rotas seguem no limite geral de 100 kB.
 - Quem lê: o dono, `GET /hubs/:id/agent/tools` (404 `hub-not-found` para qualquer outra pessoa e para um Hub que não é
   `pc`), e o admin com `org.agents.manage`, `GET /organizations/:orgId/agent/tools` -> `{ items: [{ name, title }] }`
   das ferramentas dos agentes com vínculo aprovado, sem repetir nome e **sem dizer de quem** (nenhum id de Hub ou de

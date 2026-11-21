@@ -6,6 +6,7 @@ import {
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { parseTrustProxy, trustProxyWarnings } from './trust-proxy.js';
+import { applyJsonBodyLimits } from './body-limits.js';
 import { setupSwagger } from './swagger.js';
 import { ProblemDetailsFilter } from './problem-details.filter.js';
 import {
@@ -43,6 +44,8 @@ export function configureApp(app: INestApplication): void {
   })) {
     logger.warn(warning);
   }
+  // Before init(): the per-route parsers must come before Nest's default JSON parser.
+  applyJsonBodyLimits(app);
   app.useGlobalPipes(
     new ValidationPipe({
       whitelist: true,

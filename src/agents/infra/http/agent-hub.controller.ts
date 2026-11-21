@@ -17,7 +17,10 @@ import { PublishAgentToolsDto } from './dto/agent-tools.dto.js';
 export class AgentHubController {
   constructor(private readonly publish: PublishAgentToolsUseCase) {}
 
-  /** The agent publishes its tool catalog; the new list replaces the previous one (up to 200 tools). */
+  /**
+   * The agent publishes its tool catalog; the new list replaces the previous one (up to 200 tools). The JSON body
+   * limit of this route is `AGENT_TOOLS_BODY_MAX_BYTES` (2 MiB, `body-limits.ts`), not the 100 kB default.
+   */
   @Throttle({
     default: { ...RATE_LIMITS.agentTools, getTracker: hubIdTracker },
   })

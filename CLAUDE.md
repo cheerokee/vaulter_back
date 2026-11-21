@@ -1419,7 +1419,7 @@ registra a fonte `conversations`), `hubs` (`HubDirectory`: `ownerOf`,
   num `uow.run` (lápide no que saiu, upsert do resto: nome que volta revive a linha). Tabela `agent_tools` (migration
   `CreateAgentTools`; `owner_user_id` desnormalizado com FK composta para `hubs (id, owner_user_id)`; `UNIQUE (hub_id, name)`;
   sem `organization_id` nem sync): metadado de software, legível, com RLS do dono do Hub (`app.user_id`) ou do próprio Hub
-  (`app.hub_id`). Rate limit `agentTools` 60/h por Hub.
+  (`app.hub_id`). Rate limit `agentTools` 60/h por Hub. **Corpo JSON de até 2 MiB** só nessa rota (`AGENT_TOOLS_BODY_MAX_BYTES`, 413 acima): limite por rota em `src/shared/infra/http/body-limits.ts` (`JSON_BODY_LIMITS` + `applyJsonBodyLimits`, chamado por `configureApp` antes do `init()` para valer no bootstrap e nos e2e); o resto fica no padrão de 100 kB.
 - **Leitura:** `AgentToolCatalog.toolsOf(hubId)` (exportado, lê no contexto do próprio Hub, **não autoriza**: quem chama
   já autorizou). `GET /hubs/:id/agent/tools` é do dono (404 `hub-not-found` para outros e para `appliance`);
   `GET /organizations/:orgId/agent/tools` (`org.agents.manage`: 404 não membro, 403 sem a permissão) devolve nomes e títulos

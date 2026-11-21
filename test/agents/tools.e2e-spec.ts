@@ -207,4 +207,49 @@ describe('agent tool catalog (e2e)', () => {
       .set(c.bearer(outsider.token));
     expect(asOutsider.status).toBe(404);
   });
+  it('accepts a near-maximum catalog (well over 100 kB) and refuses a body over 2 MiB with 413', async () => {
+    const pc = await h.onboard(olivia.token, 'PC grande', { kind: 'pc' });
+    const token = await h.authenticate(pc);
+    // 200 tools, each with a ~7 KiB inputSchema (below the 8 KiB cap): ~1.4 MB
+    const big = Array.from({ length: 200 }, (_, i) => ({
+      name: `mcp:srv/tool_${i}`,
+      title: `Tool ${i}`,
+      description: 'd'.repeat(1500),
+      inputSchema: {
+        type: 'object',
+        properties: {
+          filler: { type: 'string', description: 'x'.repeat(7000) },
+        },
+      },
+      category: 'mcp',
+    }));
+    const body = JSON.stringify({ tools: big });
+    expect(body.length).toBeGreaterThan(1_000_000);
+    const ok = await c
+      .http()
+      .put('/hub/agent/tools')
+      .set('Authorization', `Bearer ${token}`)
+      .set('Content-Type', 'application/json')
+      .send(body);
+    expect(ok.status).toBe(204);
+    expect(await listOfHub(olivia.token, pc.hubId)).toHaveLength(200);
+
+    const over = await c
+      .http()
+      .put('/hub/agent/tools')
+      .set('Authorization', `Bearer ${token}`)
+      .set('Content-Type', 'application/json')
+      .send(JSON.stringify({ tools: [], pad: 'p'.repeat(2 * 1024 * 1024) }));
+    expect(over.status).toBe(413);
+    expect(over.body.status).toBe(413);
+
+    // everything else keeps the default limit
+    const other = await c
+      .http()
+      .patch(`/hubs/${pc.hubId}`)
+      .set(c.bearer(olivia.token))
+      .set('Content-Type', 'application/json')
+      .send(JSON.stringify({ name: 'n'.repeat(150_000) }));
+    expect(other.status).toBe(413);
+  });
 });
