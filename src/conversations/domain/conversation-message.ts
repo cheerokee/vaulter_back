@@ -38,6 +38,8 @@ export type ConversationMessageProps = {
    * away instead of waiting for the Hub (spec active-cloud §4.3). Set when sent, never changed.
    */
   cloudAnswerRequested: boolean;
+  /** The person's message a `pc` hub (the agent) answers with this one; null for every other message. */
+  answersMessageId?: string | null;
   /**
    * Until when the ack of a `pc` hub (the agent) holds it (`AGENT_ACK_LEASE_MS`, database clock); null for any other
    * ack and while pending. Past it, without an answer of that hub, the lease sweep requeues it.
@@ -62,6 +64,8 @@ export class ConversationMessage extends Entity<ConversationMessageProps> {
     replacesMessageId: string | null;
     /** A person asks the cloud to answer this one at once (ignored for the executor's own messages: they are born acked). */
     cloudAnswerRequested?: boolean;
+    /** The agent's answer (a `pc` hub's message only): the person's message it answers. */
+    answersMessageId?: string | null;
     sentAt: Date;
     now: Date;
   }): ConversationMessage {
@@ -91,6 +95,8 @@ export class ConversationMessage extends Entity<ConversationMessageProps> {
         ackedByCloud: false,
         cloudAnswerRequested:
           !fromExecutor && (input.cloudAnswerRequested ?? false),
+        answersMessageId:
+          input.author.kind === 'hub' ? (input.answersMessageId ?? null) : null,
         sentAt: input.sentAt,
         createdAt: input.now,
         deletedAt: null,
@@ -128,7 +134,8 @@ export class ConversationMessage extends Entity<ConversationMessageProps> {
       sameActor(other.author, this.author) &&
       other.keyVersion === this.keyVersion &&
       other.encryptedBody === this.encryptedBody &&
-      other.replacesMessageId === this.replacesMessageId
+      other.replacesMessageId === this.replacesMessageId &&
+      other.answersMessageId === this.answersMessageId
     );
   }
 
@@ -242,6 +249,9 @@ export class ConversationMessage extends Entity<ConversationMessageProps> {
   }
   get cloudAnswerRequested(): boolean {
     return this.props.cloudAnswerRequested;
+  }
+  get answersMessageId(): string | null {
+    return this.props.answersMessageId ?? null;
   }
   get ackedLeaseUntil(): Date | null {
     return this.props.ackedLeaseUntil ?? null;

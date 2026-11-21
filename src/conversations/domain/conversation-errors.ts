@@ -166,3 +166,10 @@ export const brainStepNotOwned = () =>
     'brain-step-not-owned',
     "This message is not the agent's turn: not acknowledged by this hub, already answered, or its ack lease ran out.",
   );
+
+/**
+ * `answeringMessageId` on a hub's message: required for a `pc` hub (the agent: every message of it answers one acked
+ * person's message), refused for any other hub (spec pc-agent §5.3). The same 422 as a malformed body.
+ */
+export const answeringMessageIdInvalid = (detail: string) =>
+  new DomainValidationError('validation-failed', detail);

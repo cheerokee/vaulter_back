@@ -21,6 +21,8 @@ export type AgentLeaseSweepResult = {
   conversations: number;
   /** Messages back to `pending`. */
   requeued: number;
+  /** Leases only cleared (answered or tombstoned messages). */
+  cleared: number;
   /** Conversations left for the next run (owner changing, executor no longer the acking hub). */
   skipped: number;
 };
@@ -35,7 +37,8 @@ type Resolved = {
 // cada minuto. Um ack de Hub `pc` vencido (`acked_lease_until`, relógio do banco) sem resposta desse Hub volta a
 // `pending` (`requeued_at` novo, prazo e ack limpos), o que dispara `CloudReservePendingHooks` (motivo `requeued`,
 // `immediate`: o agente já teve os 15 min dele) dentro do mesmo unit of work, e a nuvem de reserva responde só com
-// conhecimento. Mensagem já respondida pelo Hub (mensagem dele depois do `acked_at`) ou apagada: só o prazo sai.
+// conhecimento. Mensagem já respondida pelo agente (mensagem dele com `answers_message_id` = ela) ou apagada: só o
+// prazo sai.
 // Depois disso o agente atrasado perde a vez como um Hub que perdeu a mensagem: passo e renovação 409
 // `brain-step-not-owned` (`AgentTurn`: a mensagem não é mais dele) e, pega pela nuvem, ack 404 `message-not-found`.
 // Como o executor perdido (`ConversationsExecutorLostHook`): os candidatos vêm do contexto `app.agent_lease_sweep` (só
@@ -70,15 +73,21 @@ export class AgentLeaseSweepJob implements OnModuleInit {
     const total: AgentLeaseSweepResult = {
       conversations: 0,
       requeued: 0,
+      cleared: 0,
       skipped: 0,
     };
     for (;;) {
       const { candidates, ...batch } = await this.uow.run(() => this.batch());
       total.conversations += batch.conversations;
       total.requeued += batch.requeued;
+      total.cleared += batch.cleared;
       total.skipped += batch.skipped;
-      // A full batch of skipped conversations would come back first forever: stop (the next run retries).
-      if (candidates < AGENT_LEASE_SWEEP_BATCH || batch.conversations === 0) {
+      // Progress = leases actually gone (requeued or cleared): a batch that removed none would come back the same
+      // forever (skipped conversations come first): stop, the next run retries.
+      if (
+        candidates < AGENT_LEASE_SWEEP_BATCH ||
+        batch.requeued + batch.cleared === 0
+      ) {
         return total;
       }
     }
@@ -87,7 +96,7 @@ export class AgentLeaseSweepJob implements OnModuleInit {
   private async batch(): Promise<
     AgentLeaseSweepResult & { candidates: number }
   > {
-    const result = { conversations: 0, requeued: 0, skipped: 0 };
+    const result = { conversations: 0, requeued: 0, cleared: 0, skipped: 0 };
     const leases = await this.messages.listExpiredAgentLeases(
       AGENT_LEASE_SWEEP_BATCH,
     );
@@ -122,11 +131,13 @@ export class AgentLeaseSweepJob implements OnModuleInit {
       if (seen.deletedAt) {
         // Tombstoned (moved): nothing answers there any more; the leases just go (no lock: the conversation is dead,
         // and its reserve is off, so there is no signal).
-        await this.messages.requeueExpiredAgentLeases(
+        const gone = await this.messages.requeueExpiredAgentLeases(
           ownerScope,
           lease.conversationId,
         );
         result.conversations += 1;
+        result.requeued += gone.requeued.length;
+        result.cleared += gone.cleared;
         continue;
       }
       const conversation = await this.conversations.lockById(
@@ -138,10 +149,11 @@ export class AgentLeaseSweepJob implements OnModuleInit {
         result.skipped += 1;
         continue;
       }
-      const requeued = await this.messages.requeueExpiredAgentLeases(
-        ownerScope,
-        conversation.id,
-      );
+      const { requeued, cleared } =
+        await this.messages.requeueExpiredAgentLeases(
+          ownerScope,
+          conversation.id,
+        );
       for (const messageId of requeued) {
         await this.reserve.signal(conversation, messageId, 'requeued', {
           immediate: true,
@@ -149,6 +161,7 @@ export class AgentLeaseSweepJob implements OnModuleInit {
       }
       result.conversations += 1;
       result.requeued += requeued.length;
+      result.cleared += cleared;
     }
     return { ...result, candidates: leases.length };
   }

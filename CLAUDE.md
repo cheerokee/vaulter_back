@@ -172,7 +172,7 @@ couber (spec de contas, §12).
   nova com `getMigrationPlans` (veja `pg-boss-schema.ts`). **Payload só com ids** (UUID ou inteiro; `send` recusa o
   resto) e falha de tarefa guardada/logada só pelo tipo do erro (nunca a mensagem). Dentro de um `uow.run`, `send` e
   `cancelQueued` entram na transação (a tarefa só existe se ela confirmar). Pelo menos uma vez: handler idempotente, que
-  reconfere sob trava. **Agendadas:** `schedule(nome, cron)` (cron de 5 campos em UTC, uma tarefa de payload vazio por ocorrência entre instâncias, `missed: 'once'`; idempotente; a linha em `pgboss.schedule` sobrevive ao código: tirar um agendamento = migration ou `unschedule`); hoje `storage.reconcile` (04:00 UTC). Os CLIs que sobem o `AppModule` forçam `JOB_WORKERS_ENABLED=false`. `send` com `startAfterSeconds` (atraso) e `singletonKey` (uma tarefa à espera por chave; enviar
+  reconfere sob trava. **Agendadas:** `schedule(nome, cron)` (cron de 5 campos em UTC, uma tarefa de payload vazio por ocorrência entre instâncias, `missed: 'once'`; idempotente; a linha em `pgboss.schedule` sobrevive ao código: tirar um agendamento = migration ou `unschedule`); hoje `storage.reconcile` (04:00 UTC) e `conversations.agent-lease-sweep` (a cada minuto, prazo do ack do agente). Os CLIs que sobem o `AppModule` forçam `JOB_WORKERS_ENABLED=false`. `send` com `startAfterSeconds` (atraso) e `singletonKey` (uma tarefa à espera por chave; enviar
   de novo substitui a que espera); `cancelQueued(nome, { spaceId })` apaga as que ainda esperam, num DELETE só guardado
   pelo estado (nunca uma em execução); `sendMany(nome, [{ payload, singletonKey, startAfterSeconds? }])` enfileira muitas num INSERT só. **Filas com
   chave** (`work(nome, handler, { oneJobPerKey: true })`, política `stately` do pg-boss, fixada quando a fila nasce;
@@ -1056,17 +1056,24 @@ registra a fonte `conversations`), `hubs` (`HubDirectory`: `ownerOf`,
   `conversation_messages.acked_lease_until` = `acked_at` + `AGENT_ACK_LEASE_MS` (15 min, domínio, relógio do banco; CHECK
   só com `acked_by_hub_id`; nulo para aparelho). `AgentTurn` (exportado para o `cloud`): `requireTurn(hubId,
   conversationId, messageId)` -> `AgentTurnView` (executor com vínculo aprovado, pela regra do `HubConversationScope`,
-  senão 404 `conversation-not-found`; mensagem de pessoa, confirmada por ESTE Hub, prazo correndo e sem resposta dele
-  depois do `acked_at`, senão 409 `brain-step-not-owned`) e `renewLease` (assunto `FOR NO KEY UPDATE`, as mesmas
+  senão 404 `conversation-not-found`; mensagem de pessoa, confirmada por ESTE Hub, prazo correndo e sem resposta dele,
+  senão 409 `brain-step-not-owned`; regra única em `agent-turn-rules.ts`) e `renewLease` (assunto `FOR NO KEY UPDATE`, as mesmas
   checagens, prazo = agora + 15 min; rota `POST /hub/conversations/:id/messages/:messageId/lease`, `@PcHubOnly()`,
   `agentLease` 600/h). Prazo vencido = 409 já antes da varredura. **Varredura** `AgentLeaseSweepJob` (fila
   `conversations.agent-lease-sweep`, cron `* * * * *`): candidatos pelo contexto de confiança `app.agent_lease_sweep`
   (`UnitOfWorkContext.agentLeaseSweep`; SELECT só das linhas de mensagem com prazo, de toda organização: policy
   `conversation_message_agent_lease_read` e OR na restritiva `conversation_child_read`, com o escape do commit), assunto
   lido no contexto do Hub que confirmou, volta à fila no contexto do DONO, lotes de 100 assuntos por unit of work em
-  ordem (espaço, assunto), `requeueExpiredAgentLeases` (sem resposta = `pending`, `requeued_at` novo; respondida ou
-  apagada = só o prazo sai) e `CloudReservePendingHooks` com `immediate` dentro do unit of work. Invariante: um prazo é
-  sempre do executor atual (`requeueAckedBy` de um Hub limpa os prazos dele no assunto, respondidas inclusive).
+  ordem (espaço, assunto), `requeueExpiredAgentLeases` (um instante só do banco; sem resposta = `pending`,
+  `requeued_at` novo; respondida ou apagada = só o prazo sai; o laço para quando um lote não tira nenhum prazo) e
+  `CloudReservePendingHooks` com `immediate` dentro do unit of work. Invariante: um prazo é sempre do executor atual
+  (`requeueAckedBy` de um Hub limpa os prazos dele no assunto, respondidas inclusive). **Resposta do agente:** a
+  mensagem de um Hub `pc` leva `answeringMessageId` (obrigatório; aparelho: recusado, 422 `validation-failed`),
+  reconferido sob a trava do assunto pela mesma regra do turno (409 `brain-step-not-owned`, nada gravado: a resposta
+  atrasada nunca vira uma segunda resposta) e gravado em `conversation_messages.answers_message_id` (só o id; CHECK só
+  em mensagem de Hub, FK composta no mesmo assunto). Para o agente, "respondida" = existe mensagem com
+  `answers_message_id` = ela (`answeredBy`: turno, renovação, varredura e `requeueAckedBy` dos acks com prazo); o
+  aparelho segue a regra antiga (mensagem dele depois).
   Renovar grava a linha (sai de novo nos feeds e entra no lock de versões do COMMIT, como um ack).
 - **Cabeçalho** (`ReplaceConversationHeaderUseCase`, `PUT .../:id/header` `{ keyVersion, encryptedHeader }` nas duas
   formas): o dono (pessoa; outro participante 403 `not-conversation-owner`) ou o executor (Hub; outro Hub 404); versão

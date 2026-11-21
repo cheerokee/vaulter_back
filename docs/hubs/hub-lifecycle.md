@@ -555,6 +555,13 @@ organização está aprovado). Rotas com o token de Hub:
   com troca pendente: 409 `conversation-key-rotation-required` (faça a troca antes). Espaço cheio: 422
   `space-storage-full` (`missingBytes`; o texto das mensagens conta no tamanho do espaço, junto com o backup).
   `replacesMessageId` edita uma mensagem do próprio Hub (ela vira lápide).
+  **Hub `pc` (o agente):** toda mensagem dele responde **uma** mensagem de pessoa que ele confirmou e leva
+  `answeringMessageId` (o id dela, em claro; obrigatório: sem ele 422 `validation-failed`; num aparelho o campo é
+  recusado, 422 `validation-failed`). Sob a trava do assunto o servidor confere que ainda é a vez dele (confirmada por
+  ele, prazo do ack correndo, ainda sem resposta dele: outra mensagem dele com o mesmo `answeringMessageId`), senão 409
+  `brain-step-not-owned` e nada gravado (descarte; a nuvem de reserva responde). Reenviar a mesma resposta continua
+  200. Por isso o agente não manda mensagens intermediárias nem edita uma resposta já mandada (use o estado do assunto
+  para "trabalhando"). Ver "A nuvem como executor de reserva", item 9.
 - `POST /hub/conversations/:id/messages/:messageId/ack`: caixa de entrada; o Hub confirma que **pegou** a mensagem de
   uma pessoa (que nasce `pending`). Só o executor; confirmar de novo devolve a mesma resposta (a primeira hora vale).
   Mensagem inexistente, de outro assunto ou apagada: 404 `message-not-found`.
@@ -637,8 +644,11 @@ active-cloud §4.3). O Hub continua sendo o executor principal; a nuvem só cobr
    mensagem dele no assunto depois do ack), uma varredura do servidor (a cada minuto) devolve a mensagem a `pending`
    (`requeuedAt` novo) e a nuvem de reserva a pega **na hora** (sem os 30 s: o agente já teve os 15 min) e responde só
    com conhecimento. Dali em diante o agente perdeu a vez, como um Hub que perdeu a mensagem: o passo do cérebro e a
-   renovação dão **409 `brain-step-not-owned`** e, pega pela nuvem, o ack dá **404 `message-not-found`**: **descarte**
-   o trabalho (as ações já executadas no PC ficam, registradas na auditoria). Um prazo vencido já vale antes da
+   renovação dão **409 `brain-step-not-owned`**, a resposta atrasada (`POST .../messages` com `answeringMessageId`)
+   também dá **409 `brain-step-not-owned`** (nunca uma segunda resposta) e, pega pela nuvem, o ack dá **404
+   `message-not-found`**: **descarte** o trabalho (as ações já executadas no PC ficam, registradas na auditoria).
+   "Respondida pelo agente" = uma mensagem dele com `answeringMessageId` = ela (nunca qualquer mensagem dele depois:
+   com duas confirmadas, responder uma não encerra a outra). Um prazo vencido já vale antes da
    varredura (passo e renovação 409 desde o fim do prazo). O ack de um aparelho (`appliance`) não tem prazo.
 
 **Assunto movido de espaço** (pelo dono, no app): o assunto antigo ganha lápide (chega no feed como `conversation` com

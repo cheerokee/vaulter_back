@@ -38,8 +38,10 @@ export abstract class ConversationMessageRepository {
    * conversation that `by` acknowledged and that has no later message authored by it in the conversation (it never
    * answered: it may have died with it in its queue) goes back to `pending`, so the next executor takes it. Returns
    * their ids. Inside `UnitOfWork.run`, with the conversation locked, in a PARTICIPANT's scope (the old executor may
-   * no longer see the conversation). For a Hub, every agent ack lease it holds in the conversation goes too (answered
-   * messages included): a lease always belongs to the current executor, which the lease sweep relies on.
+   * no longer see the conversation). An agent's ack (under a lease) counts as answered only by its own answer
+   * (`answeredBy`), never by any later message of the hub. For a Hub, every agent ack lease it holds in the
+   * conversation goes too (answered messages included): a lease always belongs to the current executor, which the
+   * lease sweep relies on.
    */
   abstract requeueAckedBy(
     scope: ConversationScope,
@@ -54,15 +56,24 @@ export abstract class ConversationMessageRepository {
   abstract listExpiredAgentLeases(limit: number): Promise<ExpiredAgentLease[]>;
   /**
    * The agent's ack ran out (spec pc-agent §5.3): every live person's message of the conversation whose lease ended
-   * (database clock) and that the acking hub did not answer (no message of it after the ack) goes back to `pending`
-   * (`requeued_at` new, the lease cleared), like `requeueAckedBy`; the other expired leases (answered or tombstoned
-   * messages) are just cleared, the ack untouched. Returns the requeued ids. Inside `UnitOfWork.run`, with the
-   * conversation locked, in a PARTICIPANT's scope.
+   * (database clock, read ONCE for the whole call) and that has no answer of the agent (`answeredBy`) goes back to
+   * `pending` (`requeued_at` new, ack and lease cleared), like `requeueAckedBy`; the other leases expired at that same
+   * instant (answered or tombstoned messages) are just cleared, the ack untouched. Returns the requeued ids and how many
+   * leases were only cleared. Inside `UnitOfWork.run`, with the conversation locked, in a PARTICIPANT's scope.
    */
   abstract requeueExpiredAgentLeases(
     scope: ConversationScope,
     conversationId: string,
-  ): Promise<string[]>;
+  ): Promise<{ requeued: string[]; cleared: number }>;
+  /**
+   * Whether the agent answered `messageId`: a hub message of the conversation with `answersMessageId` = it (tombstoned
+   * or not). The answer rule of a `pc` hub; an appliance keeps `answeredAfter`.
+   */
+  abstract answeredBy(
+    scope: ConversationScope,
+    conversationId: string,
+    messageId: string,
+  ): Promise<boolean>;
   /** Whether `by` (Hub or cloud) wrote a message in the conversation after `after` (it answered what it acked). */
   abstract answeredAfter(
     scope: ConversationScope,

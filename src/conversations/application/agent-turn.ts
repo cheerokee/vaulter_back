@@ -9,6 +9,7 @@ import {
 } from '../domain/conversation-errors.js';
 import { ConversationMessageRepository } from '../domain/conversation-message.repository.js';
 import type { ConversationMessage } from '../domain/conversation-message.js';
+import { requireAgentTurnMessage } from './agent-turn-rules.js';
 import { ConversationAccess } from './conversation-access.js';
 import { HubConversationScope } from './hub-conversation-scope.js';
 
@@ -32,8 +33,8 @@ export type AgentTurnView = {
  * 1. the hub is the conversation's executor, in an organization with an approved link (`HubConversationScope`), else
  *    404 `conversation-not-found`;
  * 2. the message is a live person's message of the conversation, acknowledged BY THIS HUB, with its lease
- *    (`AGENT_ACK_LEASE_MS`) still running by the database clock, and not answered by it ("answered by the executor" =
- *    a message of this hub after the `acked_at`), else 409 `brain-step-not-owned`. A lease past its end is over even
+ *    (`AGENT_ACK_LEASE_MS`) still running by the database clock, and not answered by it (a hub message whose
+ *    `answersMessageId` is this message: `requireAgentTurnMessage`), else 409 `brain-step-not-owned`. A lease past its end is over even
  *    before the sweep requeues the message: expiry never depends on when the sweep runs.
  * `requireTurn` only reads (no lock; inside the caller's unit of work when there is one, else its own short one).
  * `renewLease` locks the conversation `FOR NO KEY UPDATE` (like the ack) and re-checks everything under it. Never
@@ -110,29 +111,19 @@ export class AgentTurn {
   }
 
   /** The message is this hub's turn (rule 2 above), else 409 `brain-step-not-owned`. */
-  private async ownedMessage(
+  private ownedMessage(
     scope: ConversationScope,
     hubId: string,
     conversationId: string,
     messageId: string,
   ): Promise<ConversationMessage> {
-    const message = validate(messageId)
-      ? await this.messages.findById(scope, messageId)
-      : null;
-    if (
-      !message ||
-      message.conversationId !== conversationId ||
-      !message.isAgentTurnOf(hubId, await this.messages.databaseNow())
-    ) {
-      throw brainStepNotOwned();
-    }
-    const answered = await this.messages.answeredAfter(
+    if (!validate(messageId)) return Promise.reject(brainStepNotOwned());
+    return requireAgentTurnMessage(
+      this.messages,
       scope,
+      hubId,
       conversationId,
-      { kind: 'hub', hubId },
-      message.ackedAt!,
+      messageId,
     );
-    if (answered) throw brainStepNotOwned();
-    return message;
   }
 }

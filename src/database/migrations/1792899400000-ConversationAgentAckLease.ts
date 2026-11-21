@@ -13,6 +13,12 @@ const VISIBLE = `EXISTS (
 //   `requeueAckedBy` e na varredura). Coluna comum: os triggers de versão e de imutabilidade não mudam (renovar grava a
 //   linha e ela sai de novo nos feeds, como um ack).
 // - Índice parcial `ix_conversation_messages_agent_lease` (candidatos da varredura).
+// - `conversation_messages.answers_message_id` (fix round 1): a mensagem de um Hub `pc` diz em claro qual mensagem de
+//   pessoa ela responde (só o id; obrigatório para o `pc`, recusado para o aparelho, na borda e no caso de uso). CHECK:
+//   só em mensagem de Hub; FK composta (id, assunto, organização) como `replaces_message_id` (mesmo assunto). Para o
+//   agente, "respondida" = existe mensagem de Hub com `answers_message_id` = ela (turno, renovação, varredura e
+//   `requeueAckedBy` dos acks com prazo); o aparelho segue a regra antiga (mensagem dele depois). Imutável na prática:
+//   só o INSERT a grava.
 // - A varredura (`AgentLeaseSweepJob`, tarefa do pg-boss a cada minuto) precisa ACHAR os prazos vencidos sem ser
 //   participante nem executor, em todas as organizações. Chave de confiança só do backend, como `app.storage_reconcile`:
 //   `app.agent_lease_sweep = 'on'` abre o SELECT só das linhas com prazo (policy permissiva
@@ -34,6 +40,18 @@ export class ConversationAgentAckLease1792899400000 implements MigrationInterfac
       `CREATE INDEX "ix_conversation_messages_agent_lease" ON "conversation_messages" ("acked_lease_until") WHERE "acked_lease_until" IS NOT NULL AND NOT "pending"`,
     );
     await queryRunner.query(
+      `ALTER TABLE "conversation_messages" ADD "answers_message_id" uuid`,
+    );
+    await queryRunner.query(
+      `ALTER TABLE "conversation_messages" ADD CONSTRAINT "ck_conversation_messages_answers" CHECK (("answers_message_id" IS NULL) OR ("author_hub_id" IS NOT NULL))`,
+    );
+    await queryRunner.query(
+      `CREATE INDEX "fk_conversation_messages_answers_idx" ON "conversation_messages" ("answers_message_id")`,
+    );
+    await queryRunner.query(
+      `ALTER TABLE "conversation_messages" ADD CONSTRAINT "fk_conversation_messages_answers" FOREIGN KEY ("answers_message_id", "conversation_id", "organization_id") REFERENCES "conversation_messages" ("id", "conversation_id", "organization_id")`,
+    );
+    await queryRunner.query(
       `CREATE POLICY "conversation_message_agent_lease_read" ON "conversation_messages" FOR SELECT ` +
         `USING (${SWEEP} AND ${LEASED})`,
     );
@@ -50,6 +68,18 @@ export class ConversationAgentAckLease1792899400000 implements MigrationInterfac
     );
     await queryRunner.query(
       `DROP POLICY "conversation_message_agent_lease_read" ON "conversation_messages"`,
+    );
+    await queryRunner.query(
+      `ALTER TABLE "conversation_messages" DROP CONSTRAINT "fk_conversation_messages_answers"`,
+    );
+    await queryRunner.query(
+      `DROP INDEX "fk_conversation_messages_answers_idx"`,
+    );
+    await queryRunner.query(
+      `ALTER TABLE "conversation_messages" DROP CONSTRAINT "ck_conversation_messages_answers"`,
+    );
+    await queryRunner.query(
+      `ALTER TABLE "conversation_messages" DROP COLUMN "answers_message_id"`,
     );
     await queryRunner.query(
       `DROP INDEX "ix_conversation_messages_agent_lease"`,

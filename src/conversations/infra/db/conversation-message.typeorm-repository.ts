@@ -94,7 +94,9 @@ export class ConversationMessageTypeormRepository extends ConversationMessageRep
       by.kind === 'hub'
         ? [
             'msg.acked_by_hub_id = $3',
-            'reply.author_hub_id = $3 AND reply.sent_at > msg.sent_at',
+            // An agent's ack (under a lease) is answered only by its own answer (`answers_message_id`).
+            `reply.author_hub_id = $3 AND CASE WHEN msg.acked_lease_until IS NOT NULL
+               THEN reply.answers_message_id = msg.id ELSE reply.sent_at > msg.sent_at END`,
           ]
         : [
             'msg.acked_by_cloud',
@@ -168,36 +170,60 @@ export class ConversationMessageTypeormRepository extends ConversationMessageRep
     }));
   }
 
-  // "Respondida pelo executor" = mensagem do Hub que confirmou DEPOIS do ack (spec pc-agent §5.3), como o `answeredAfter`
-  // do turno: o agente responde uma por vez, depois do próprio ack.
+  // "Respondida pelo agente" = mensagem dele com `answers_message_id` = ela (spec pc-agent §5.3, fix round 1). Um
+  // instante só (`$3`, lido uma vez): o segundo UPDATE limpa exatamente os vencidos que o primeiro não devolveu à fila.
   async requeueExpiredAgentLeases(
     scope: ConversationScope,
     conversationId: string,
-  ): Promise<string[]> {
+  ): Promise<{ requeued: string[]; cleared: number }> {
     return inScope(this.dataSource, scope, async (m) => {
+      const [{ now }] = (await m.query(`SELECT clock_timestamp() AS now`)) as {
+        now: Date;
+      }[];
+      const params = [scope.organizationId, conversationId, now];
       const raw: unknown = await m.query(
         `UPDATE conversation_messages msg
             SET pending = true, acked_at = NULL, acked_by_hub_id = NULL, acked_by_cloud = false,
                 acked_lease_until = NULL, requeued_at = clock_timestamp(), updated_at = now()
           WHERE msg.organization_id = $1 AND msg.conversation_id = $2
-            AND msg.acked_lease_until IS NOT NULL AND msg.acked_lease_until <= clock_timestamp()
+            AND msg.acked_lease_until IS NOT NULL AND msg.acked_lease_until <= $3
             AND msg.author_user_id IS NOT NULL AND msg.deleted_at IS NULL
             AND NOT EXISTS (
               SELECT 1 FROM conversation_messages reply
                WHERE reply.organization_id = msg.organization_id AND reply.conversation_id = msg.conversation_id
-                 AND reply.author_hub_id = msg.acked_by_hub_id AND reply.sent_at > msg.acked_at)
+                 AND reply.answers_message_id = msg.id)
         RETURNING msg.id`,
-        [scope.organizationId, conversationId],
+        params,
       );
-      // What is left expired was answered (or tombstoned): only the lease goes, the ack stays.
-      await m.query(
+      // What is left expired at the same instant was answered (or tombstoned): only the lease goes, the ack stays.
+      const left: unknown = await m.query(
         `UPDATE conversation_messages SET acked_lease_until = NULL, updated_at = now()
           WHERE organization_id = $1 AND conversation_id = $2
-            AND acked_lease_until IS NOT NULL AND acked_lease_until <= clock_timestamp()`,
-        [scope.organizationId, conversationId],
+            AND acked_lease_until IS NOT NULL AND acked_lease_until <= $3
+        RETURNING id`,
+        params,
       );
-      return updatedRows<{ id: string }>(raw).map((r) => r.id);
+      return {
+        requeued: updatedRows<{ id: string }>(raw).map((r) => r.id),
+        cleared: updatedRows<{ id: string }>(left).length,
+      };
     });
+  }
+
+  async answeredBy(
+    scope: ConversationScope,
+    conversationId: string,
+    messageId: string,
+  ): Promise<boolean> {
+    const rows: unknown[] = await inScope(this.dataSource, scope, (m) =>
+      m.query(
+        `SELECT 1 FROM conversation_messages
+          WHERE organization_id = $1 AND conversation_id = $2 AND answers_message_id = $3
+          LIMIT 1`,
+        [scope.organizationId, conversationId, messageId],
+      ),
+    );
+    return rows.length > 0;
   }
 
   // Mesma regra do `requeueAckedBy` (mensagem do autor depois da confirmada, com ou sem lápide).

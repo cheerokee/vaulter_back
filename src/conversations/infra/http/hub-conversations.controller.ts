@@ -45,7 +45,7 @@ import {
   ReplaceHeaderDto,
   RequestAttachmentDto,
   RotateConversationKeyDto,
-  SendMessageDto,
+  SendHubMessageDto,
   StateDto,
   messageInput,
   rotationInput,
@@ -220,7 +220,7 @@ export class HubConversationsController {
   async doSend(
     @CurrentHub() hub: HubAuthContext,
     @Param('id', uuidPipe('id')) id: string,
-    @Body() dto: SendMessageDto,
+    @Body() dto: SendHubMessageDto,
     @Res({ passthrough: true }) res: Response,
   ) {
     const { view, created } = await this.sending.byHub(

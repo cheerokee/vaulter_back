@@ -147,7 +147,13 @@ export function conversationsKit(getApp: () => INestApplication) {
       spaceId: string,
       conversationId: string,
       keys: ConversationKeys,
-      opts: { id?: string; text?: string; keyVersion?: number } = {},
+      opts: {
+        id?: string;
+        text?: string;
+        keyVersion?: number;
+        /** The agent (a `pc` hub) names the acked message it answers. */
+        answeringMessageId?: string;
+      } = {},
     ) => {
       const id = opts.id ?? newId();
       const keyVersion = opts.keyVersion ?? keys.length;
@@ -162,6 +168,9 @@ export function conversationsKit(getApp: () => INestApplication) {
           keyVersion,
           opts.text ?? 'feito',
         ),
+        ...(opts.answeringMessageId
+          ? { answeringMessageId: opts.answeringMessageId }
+          : {}),
       };
       const res = await http()
         .post(`/hub/conversations/${conversationId}/messages`)

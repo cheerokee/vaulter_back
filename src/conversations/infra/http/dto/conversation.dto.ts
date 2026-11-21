@@ -302,6 +302,17 @@ export class SendMessageDto {
   replacesMessageId?: string | null;
 }
 
+/** The executor hub's message: the agent (a `pc` hub) says which acknowledged message it answers. */
+export class SendHubMessageDto extends SendMessageDto {
+  /**
+   * Required for a `pc` hub (the agent): the person's message it acknowledged and answers with this one (still its
+   * turn, else 409 `brain-step-not-owned`). Refused for an appliance (422 `validation-failed`).
+   */
+  @IsOptional()
+  @IsUUID()
+  answeringMessageId?: string;
+}
+
 /** A person's message: may ask the cloud to answer it right away ("responder pela nuvem", spec active-cloud §4.3). */
 export class SendUserMessageDto extends SendMessageDto {
   /** With the cloud reserve on, the cloud takes it at once instead of waiting for the Hub; ignored without it. */
@@ -317,7 +328,9 @@ export class SetCloudAnswerDto {
 }
 
 /** The use case input of a message (user and hub routes). */
-export function messageInput(dto: SendMessageDto | SendUserMessageDto) {
+export function messageInput(
+  dto: SendMessageDto | SendUserMessageDto | SendHubMessageDto,
+) {
   return {
     id: dto.id,
     keyVersion: dto.keyVersion,
@@ -325,6 +338,8 @@ export function messageInput(dto: SendMessageDto | SendUserMessageDto) {
     replacesMessageId: dto.replacesMessageId ?? null,
     cloudAnswerRequested:
       'cloudAnswer' in dto ? (dto.cloudAnswer ?? false) : false,
+    answeringMessageId:
+      'answeringMessageId' in dto ? (dto.answeringMessageId ?? null) : null,
   };
 }
 

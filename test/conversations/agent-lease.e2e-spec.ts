@@ -316,6 +316,7 @@ describe('conversations: the pc agent ack lease (e2e)', () => {
     expect(await sweep()).toEqual({
       conversations: 0,
       requeued: 0,
+      cleared: 0,
       skipped: 0,
     });
     expect(signals).toEqual([]);
@@ -326,7 +327,9 @@ describe('conversations: the pc agent ack lease (e2e)', () => {
     const conv = await create(pc);
     const m = await ask(conv.id, conv.keys);
     await expectStatus(k.hubAck(pcToken, conv.id, m), 200);
-    const answer = await k.hubSend(pcToken, spaceId, conv.id, conv.keys);
+    const answer = await k.hubSend(pcToken, spaceId, conv.id, conv.keys, {
+      answeringMessageId: m,
+    });
     await expectStatus(Promise.resolve(answer.res), 201);
     const acked = await row(m);
     await expire(m);
@@ -342,6 +345,82 @@ describe('conversations: the pc agent ack lease (e2e)', () => {
     });
     expect(r.acked_at).toEqual(acked.acked_at);
     expect(signals).toEqual([]);
+  });
+
+  it('a late answer after the sweep is 409 brain-step-not-owned and never a second answer', async () => {
+    const conv = await create(pc);
+    const m = await ask(conv.id, conv.keys);
+    await expectStatus(k.hubAck(pcToken, conv.id, m), 200);
+    await expire(m);
+    await sweep();
+    expect((await row(m)).pending).toBe(true);
+    const late = await k.hubSend(pcToken, spaceId, conv.id, conv.keys, {
+      answeringMessageId: m,
+    });
+    expectProblem(late.res, 409, 'brain-step-not-owned');
+    const [{ n }] = await (
+      await adminDataSource()
+    ).query(
+      `SELECT count(*)::int AS n FROM conversation_messages WHERE conversation_id = $1 AND author_hub_id IS NOT NULL`,
+      [conv.id],
+    );
+    expect(n).toBe(0);
+  });
+
+  it('a pc message must name the acked message it answers (422 validation-failed); an appliance must not', async () => {
+    const byPc = await create(pc);
+    const m = await ask(byPc.id, byPc.keys);
+    await expectStatus(k.hubAck(pcToken, byPc.id, m), 200);
+    const bare = await k.hubSend(pcToken, spaceId, byPc.id, byPc.keys);
+    expectProblem(bare.res, 422, 'validation-failed');
+
+    const byCasa = await create(casa);
+    const q = await ask(byCasa.id, byCasa.keys);
+    await expectStatus(k.hubAck(casaToken, byCasa.id, q), 200);
+    const named = await k.hubSend(casaToken, spaceId, byCasa.id, byCasa.keys, {
+      answeringMessageId: q,
+    });
+    expectProblem(named.res, 422, 'validation-failed');
+    const plain = await k.hubSend(casaToken, spaceId, byCasa.id, byCasa.keys);
+    await expectStatus(Promise.resolve(plain.res), 201);
+  });
+
+  it("two acked messages, one answered: the other is still the agent's turn and the sweep requeues it when its lease ends", async () => {
+    const conv = await create(pc);
+    const first = await ask(conv.id, conv.keys);
+    const second = await ask(conv.id, conv.keys);
+    await expectStatus(k.hubAck(pcToken, conv.id, first), 200);
+    await expectStatus(k.hubAck(pcToken, conv.id, second), 200);
+    const answer = await k.hubSend(pcToken, spaceId, conv.id, conv.keys, {
+      answeringMessageId: first,
+    });
+    await expectStatus(Promise.resolve(answer.res), 201);
+
+    await expect(
+      turn().requireTurn(pc.hubId, conv.id, first),
+    ).rejects.toMatchObject({ code: 'brain-step-not-owned' });
+    await expect(
+      turn().requireTurn(pc.hubId, conv.id, second),
+    ).resolves.toMatchObject({ messageId: second });
+
+    await expire(first);
+    await expire(second);
+    signals.length = 0;
+    await sweep();
+    expect(await row(first)).toMatchObject({
+      pending: false,
+      acked_by_hub_id: pc.hubId,
+      acked_lease_until: null,
+    });
+    expect(await row(second)).toMatchObject({
+      pending: true,
+      acked_by_hub_id: null,
+    });
+    expect(
+      signals
+        .filter((x) => x.conversationId === conv.id)
+        .map((x) => x.messageId),
+    ).toEqual([second]);
   });
 
   it('the sweep context reads only the message rows under a lease (no conversation, no other message)', async () => {
@@ -368,7 +447,9 @@ describe('conversations: the pc agent ack lease (e2e)', () => {
     const conv = await create(pc);
     const m = await ask(conv.id, conv.keys);
     await expectStatus(k.hubAck(pcToken, conv.id, m), 200);
-    const answer = await k.hubSend(pcToken, spaceId, conv.id, conv.keys);
+    const answer = await k.hubSend(pcToken, spaceId, conv.id, conv.keys, {
+      answeringMessageId: m,
+    });
     await expectStatus(Promise.resolve(answer.res), 201);
     expect((await row(m)).acked_lease_until).not.toBeNull();
     // The pc loses the space: it stops being the executor (`requeueAckedBy`).

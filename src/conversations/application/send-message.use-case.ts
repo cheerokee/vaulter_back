@@ -1,4 +1,6 @@
 import { Injectable } from '@nestjs/common';
+import { validate as isUuid } from 'uuid';
+import { HubDirectory } from '../../hubs/application/hub-directory.js';
 import type { Actor } from '../../identity/application/dto/actor.js';
 import type { HubAuthContext } from '../../shared/application/hub-auth-context.js';
 import { ConflictError } from '../../shared/domain/errors.js';
@@ -8,6 +10,7 @@ import { SpaceStorage } from '../../spaces/application/space-storage.js';
 import { SpaceStorageUsage } from '../../spaces/application/space-storage-usage.js';
 import type { ConversationScope } from '../domain/conversation-actor.js';
 import {
+  answeringMessageIdInvalid,
   assertSpaceFits,
   conversationNotFound,
   messageIdConflict,
@@ -21,6 +24,7 @@ import { ConversationRepository } from '../domain/conversation.repository.js';
 import type { Conversation } from '../domain/conversation.js';
 import { assertDeviceId, assertKeyVersion } from '../domain/device-id.js';
 import { assertEncryptedBlob } from '../domain/encrypted-blob.js';
+import { requireAgentTurnMessage } from './agent-turn-rules.js';
 import { ConversationAccess } from './conversation-access.js';
 import { ConversationCloudReserve } from './conversation-cloud-reserve.js';
 import { messageView, type MessageView } from './dto/message-view.js';
@@ -35,6 +39,11 @@ export type SendMessageInput = {
   replacesMessageId: string | null;
   /** "Responder pela nuvem" for this message (a person's only; ignored for the executor's own messages). */
   cloudAnswerRequested?: boolean;
+  /**
+   * The agent's answer (`byHub` of a `pc` hub, required there; refused for any other hub): the person's message this one
+   * answers, rechecked under the conversation lock to still be the agent's turn (spec pc-agent §5.3).
+   */
+  answeringMessageId?: string | null;
 };
 
 /** The cloud's answer must still be its own to give (`byCloud`'s `answering`): 409, nothing written. */
@@ -64,6 +73,12 @@ export class CloudAnswerNotOwnedError extends ConflictError {
 // 6. DEPOIS de gravar, lê o uso do espaço inteiro (porta `SpaceStorageUsage`: backup + assuntos; o trigger já contou
 //    esta mensagem e o contador do espaço serializa envios concorrentes) e confere que cabe: senão 422
 //    `space-storage-full` com `missingBytes`, e o unit of work desfaz tudo.
+// Hub `pc` (o agente, spec pc-agent §5.3): toda mensagem dele responde UMA mensagem de pessoa que ele confirmou
+// (`answeringMessageId`, obrigatório; num aparelho, recusado: 422 `validation-failed`). Sob a trava do assunto, depois
+// da idempotência (reenviar a mesma resposta continua 200), a pergunta tem de ser ainda a vez dele
+// (`requireAgentTurnMessage`: confirmada por ele, prazo correndo, sem resposta dele), senão 409 `brain-step-not-owned`
+// e nada gravado: a resposta atrasada de um agente cujo prazo venceu nunca vira uma segunda resposta. Grava
+// `answers_message_id` (só o id).
 @Injectable()
 export class SendMessageUseCase {
   constructor(
@@ -75,6 +90,7 @@ export class SendMessageUseCase {
     private readonly uow: UnitOfWork,
     private readonly spaceCloud: SpaceCloud,
     private readonly reserve: ConversationCloudReserve,
+    private readonly hubs: HubDirectory,
   ) {}
 
   async byUser(
@@ -104,6 +120,21 @@ export class SendMessageUseCase {
     input: SendMessageInput,
   ): Promise<{ view: MessageView; created: boolean }> {
     validate(input);
+    const answering = input.answeringMessageId ?? null;
+    const agent = (await this.hubs.kindOf(hub.hubId)) === 'pc';
+    if (agent && answering === null) {
+      throw answeringMessageIdInvalid(
+        'answeringMessageId is required: the agent answers one acknowledged message.',
+      );
+    }
+    if (!agent && answering !== null) {
+      throw answeringMessageIdInvalid(
+        'answeringMessageId is only for the agent (a pc hub).',
+      );
+    }
+    if (answering !== null && !isUuid(answering)) {
+      throw answeringMessageIdInvalid('answeringMessageId must be a UUID.');
+    }
     return this.uow.run(async () => {
       await this.uow.setContext({ hubId: hub.hubId });
       // Sem trava aqui: só para achar a organização e o espaço (imutáveis) antes de travar o espaço.
@@ -199,6 +230,8 @@ export class SendMessageUseCase {
     input: SendMessageInput,
   ): Promise<{ view: MessageView; created: boolean }> {
     const now = await this.messages.databaseNow();
+    const answering =
+      scope.actor.kind === 'hub' ? (input.answeringMessageId ?? null) : null;
     const message = ConversationMessage.create({
       id: input.id,
       organizationId: scope.organizationId,
@@ -208,6 +241,7 @@ export class SendMessageUseCase {
       encryptedBody: input.encryptedBody,
       replacesMessageId: input.replacesMessageId,
       cloudAnswerRequested: input.cloudAnswerRequested ?? false,
+      answersMessageId: answering,
       sentAt: now,
       now,
     });
@@ -222,6 +256,15 @@ export class SendMessageUseCase {
       throw messageIdConflict();
     }
 
+    if (answering !== null && scope.actor.kind === 'hub') {
+      await requireAgentTurnMessage(
+        this.messages,
+        scope,
+        scope.actor.hubId,
+        conversation.id,
+        answering,
+      );
+    }
     conversation.assertCanWrite(message.keyVersion);
     let replaced: ConversationMessage | null = null;
     if (message.replacesMessageId) {

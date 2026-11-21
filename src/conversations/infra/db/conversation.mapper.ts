@@ -90,6 +90,7 @@ export function messageToDomain(
       ackedByCloud: e.ackedByCloud,
       cloudAnswerRequested: e.cloudAnswerRequested,
       ackedLeaseUntil: e.ackedLeaseUntil,
+      answersMessageId: e.answersMessageId,
       requeuedAt: e.requeuedAt,
       sentAt: e.sentAt,
       createdAt: e.createdAt,
@@ -118,6 +119,7 @@ export function messageToInsert(
     ackedByHubId: m.ackedByHubId,
     ackedByCloud: m.ackedByCloud,
     cloudAnswerRequested: m.cloudAnswerRequested,
+    answersMessageId: m.answersMessageId,
     sentAt: m.sentAt,
     ...(m.createdAt ? { createdAt: m.createdAt } : {}),
   };

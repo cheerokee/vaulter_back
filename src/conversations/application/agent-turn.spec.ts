@@ -102,7 +102,7 @@ describe('AgentTurn', () => {
     findById: vi.fn(
       async (_s: ConversationScope, id: string) => found.get(id) ?? null,
     ),
-    answeredAfter: vi.fn(async () => answered),
+    answeredBy: vi.fn(async () => answered),
     save: vi.fn(async () => undefined),
   };
   const hubs = { ownerOf: vi.fn(async () => OLIVIA) };
@@ -139,13 +139,8 @@ describe('AgentTurn', () => {
         hubOwnerUserId: OLIVIA,
         cloudReserve: true,
       });
-      // "Answered by the executor" = a message of this hub after the ack.
-      expect(messages.answeredAfter).toHaveBeenCalledWith(
-        hubScope,
-        CONV,
-        { kind: 'hub', hubId: PC },
-        ACKED_AT,
-      );
+      // "Answered by the agent" = a hub message whose answersMessageId is this one (not any later hub message).
+      expect(messages.answeredBy).toHaveBeenCalledWith(hubScope, CONV, m.id);
     });
 
     it('not executor or unapproved link = 404 conversation-not-found', async () => {

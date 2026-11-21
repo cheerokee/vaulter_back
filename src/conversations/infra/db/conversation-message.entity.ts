@@ -65,6 +65,10 @@ import type { ConversationTypeormEntity } from './conversation.entity.js';
   'ck_conversation_messages_acked_lease',
   `("acked_lease_until" IS NULL) OR ("acked_by_hub_id" IS NOT NULL)`,
 )
+@Check(
+  'ck_conversation_messages_answers',
+  `("answers_message_id" IS NULL) OR ("author_hub_id" IS NOT NULL)`,
+)
 @Index('ix_conversation_messages_sync_version', ['syncVersion'])
 @Index('fk_conversation_messages_organizations_idx', ['organizationId'])
 @Index('fk_conversation_messages_conversations_idx', ['conversationId'])
@@ -72,6 +76,7 @@ import type { ConversationTypeormEntity } from './conversation.entity.js';
 @Index('fk_conversation_messages_author_hubs_idx', ['authorHubId'])
 @Index('fk_conversation_messages_replaces_idx', ['replacesMessageId'])
 @Index('fk_conversation_messages_acked_by_hubs_idx', ['ackedByHubId'])
+@Index('fk_conversation_messages_answers_idx', ['answersMessageId'])
 // Retention: tombstoned messages whose body is still kept.
 @Index('ix_conversation_messages_retention', ['deletedAt'], {
   where: `"deleted_at" IS NOT NULL AND "encrypted_body" IS NOT NULL`,
@@ -188,6 +193,33 @@ export class ConversationMessageTypeormEntity extends DeviceIdSyncableTypeormEnt
   /** The cloud (reserve executor) acknowledged it. */
   @Column({ type: 'boolean', default: false })
   ackedByCloud!: boolean;
+
+  /**
+   * The person's message a `pc` hub (the agent) answers with this one (migration ConversationAgentAckLease); only on a
+   * hub's message, same conversation.
+   */
+  @Column({ type: 'uuid', nullable: true })
+  answersMessageId!: string | null;
+
+  @ManyToOne('ConversationMessageTypeormEntity')
+  @JoinColumn([
+    {
+      name: 'answers_message_id',
+      referencedColumnName: 'id',
+      foreignKeyConstraintName: 'fk_conversation_messages_answers',
+    },
+    {
+      name: 'conversation_id',
+      referencedColumnName: 'conversationId',
+      foreignKeyConstraintName: 'fk_conversation_messages_answers',
+    },
+    {
+      name: 'organization_id',
+      referencedColumnName: 'organizationId',
+      foreignKeyConstraintName: 'fk_conversation_messages_answers',
+    },
+  ])
+  answersMessage?: ConversationMessageTypeormEntity;
 
   /**
    * Until when the ack of a `pc` hub (the agent) holds it, database clock (migration ConversationAgentAckLease); only

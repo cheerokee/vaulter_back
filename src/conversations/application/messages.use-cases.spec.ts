@@ -149,6 +149,7 @@ describe('message use cases', () => {
     save: vi.fn(async () => {
       trace.push('saveMessage');
     }),
+    answeredBy: vi.fn(async () => false),
   };
   const usage = new SpaceStorageUsage();
   usage.register('test', {
@@ -166,6 +167,8 @@ describe('message use cases', () => {
     setContext: vi.fn(async () => undefined),
   };
 
+  let hubKind: 'appliance' | 'pc' = 'appliance';
+  const hubs = { kindOf: vi.fn(async () => hubKind) };
   const send = new SendMessageUseCase(
     as<ConversationAccess>(access),
     as<SpaceStorage>(spaceStorage),
@@ -175,9 +178,8 @@ describe('message use cases', () => {
     as<UnitOfWork>(uow),
     as<SpaceCloud>({}),
     as<ConversationCloudReserve>({ signal: vi.fn() }),
+    as<HubDirectory>(hubs),
   );
-  let hubKind: 'appliance' | 'pc' = 'appliance';
-  const hubs = { kindOf: vi.fn(async () => hubKind) };
   const ack = new AckMessageUseCase(
     as<ConversationAccess>(access),
     as<ConversationMessageRepository>(messages),
@@ -254,6 +256,53 @@ describe('message use cases', () => {
         'lockSpace',
         'lockConversation',
       ]);
+    });
+
+    it('the agent (pc hub) names the acked message it answers: required, still its turn (else 409, nothing written); an appliance must not send it', async () => {
+      await expect(
+        send.byHub(hub, CONV, input({ answeringMessageId: newId() })),
+      ).rejects.toMatchObject({
+        constructor: DomainValidationError,
+        code: 'validation-failed',
+      });
+      hubKind = 'pc';
+      await expect(send.byHub(hub, CONV, input())).rejects.toMatchObject({
+        code: 'validation-failed',
+      });
+
+      const question = stored({ kind: 'user', userId: ANA });
+      question.ack(DB_NOW, { kind: 'hub', hubId: HUB }, { agentLease: true });
+      found.set(question.id, question);
+      // Already answered by the agent: the late answer is refused, nothing written.
+      messages.answeredBy.mockResolvedValueOnce(true);
+      await expect(
+        send.byHub(hub, CONV, input({ answeringMessageId: question.id })),
+      ).rejects.toMatchObject({
+        constructor: ConflictError,
+        code: 'brain-step-not-owned',
+      });
+      // Not acked by this hub (e.g. requeued by the lease sweep): the same 409.
+      const requeued = stored({ kind: 'user', userId: ANA });
+      found.set(requeued.id, requeued);
+      await expect(
+        send.byHub(hub, CONV, input({ answeringMessageId: requeued.id })),
+      ).rejects.toMatchObject({ code: 'brain-step-not-owned' });
+      expect(messages.insertIfAbsent).not.toHaveBeenCalled();
+
+      const answer = input({ answeringMessageId: question.id });
+      const { created } = await send.byHub(hub, CONV, answer);
+      expect(created).toBe(true);
+      expect(found.get(answer.id)?.answersMessageId).toBe(question.id);
+      expect(messages.answeredBy).toHaveBeenLastCalledWith(
+        hubScope,
+        CONV,
+        question.id,
+      );
+      // Resending the same answer stays idempotent even though the question is now answered.
+      messages.answeredBy.mockResolvedValue(true);
+      const again = await send.byHub(hub, CONV, answer);
+      expect(again.created).toBe(false);
+      messages.answeredBy.mockResolvedValue(false);
     });
 
     it('resending the same id with the same content is the same answer; nothing is written again', async () => {
