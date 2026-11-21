@@ -790,7 +790,10 @@ describe('cloud: the brain composer (e2e)', () => {
     // Retrieval: the question embedded once, the space's chunk in the prompt, only its id stored.
     expect(embedder.calls).toEqual([{ count: 1, kind: 'query' }]);
     expect(llm.calls).toHaveLength(1);
-    expect(llm.calls[0]!.system).toContain(CHUNK_TEXT);
+    // The chunk is data in the first user turn; the system prompt has only fixed text and tool names.
+    expect(JSON.stringify(llm.calls[0]!.messages[0])).toContain(CHUNK_TEXT);
+    expect(llm.calls[0]!.system).not.toContain(CHUNK_TEXT);
+    expect(llm.calls[0]!.system).not.toContain('Consulta um pedido no ERP.');
     expect(llm.calls[0]!.system).toContain('AGINDO NO PC');
     // Only what the policy allows is offered (the denied tool never reaches the model).
     expect(llm.calls[0]!.tools!.map((x) => x.name)).toEqual([llmToolName(ERP)]);
@@ -836,7 +839,7 @@ describe('cloud: the brain composer (e2e)', () => {
       policyVersion,
     });
     expect(embedder.calls).toEqual([{ count: 1, kind: 'query' }]);
-    expect(llm.calls[1]!.system).toContain(CHUNK_TEXT);
+    expect(JSON.stringify(llm.calls[1]!.messages[0])).toContain(CHUNK_TEXT);
     // The previous turns reach the model with the model-safe tool name.
     expect(JSON.stringify(llm.calls[1]!.messages)).toContain(TOOL_RESULT);
     expect(JSON.stringify(llm.calls[1]!.messages)).toContain(llmToolName(ERP));

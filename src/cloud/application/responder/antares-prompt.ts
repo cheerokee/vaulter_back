@@ -31,8 +31,7 @@ export function describeAudience(a: SpaceAudience): string {
   return `${people}${roles ? ` (${roles})` : ''}${hubs}`;
 }
 
-/** The chunks as tagged excerpts (legible: only in the prompt, never logged). */
-export function excerpts(chunks: readonly ChunkHit[]): string {
+function excerpts(chunks: readonly ChunkHit[]): string {
   if (chunks.length === 0) {
     return 'Nenhum trecho dos documentos do espaço parece relacionado à pergunta.';
   }

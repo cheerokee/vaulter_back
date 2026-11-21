@@ -1446,13 +1446,17 @@ registra a fonte `conversations`), `hubs` (`HubDirectory`: `ownerOf`,
   conferidas por `markCalls` (`callEffect` com o `input`): fora do oferecido ou `deny` pelo caminho/domínio = descartada,
   nunca em `toolCalls`; vira `tool_result` de erro e o modelo é chamado de novo **no mesmo passo** (as outras chamadas da
   mesma rodada também voltam como não executadas); (c) **cada chamada ao modelo** reserva antes (`AiBudget.tryReserve`,
-  `kind: 'agent'`; recusa = `{ kind: 'refused', reason: 'ai-budget-exceeded', resetsAt }`) e acerta depois (`settle` +
+  `kind: 'agent'`; recusa = `{ kind: 'refused', reason: 'ai-budget-exceeded', resetsAt }`, também no meio do passo) e acerta depois (`settle` +
   `BrainStepCounter.addCost`); (d) **trechos** só na primeira chamada da MENSAGEM (`chunk_ids` nulo): embute a pergunta
   (o texto de `messageId` no `history`) fora de transação, depois numa transação curta trava o espaço `FOR SHARE`
   (`SpaceCloud.lockActiveForWrite`, reconfere `active_cloud`: desligou depois das checagens = 422 `cloud-not-active`, sem
   chamar o modelo) e busca; guarda só os ids (`recordChunkIds`, uma vez) e os passos seguintes releem por id
   (`CloudChunkRepository.findByIds`, trecho apagado some); (e) prompt `antares-agent-prompt.ts`
-  (`ANTARES_AGENT_PROMPT_VERSION`, seção "AGINDO NO PC"; resultados de ferramenta são DADOS); modelo que recusa sem
+  (`ANTARES_AGENT_PROMPT_VERSION`, seção "AGINDO NO PC"). **Fronteira contra injeção:** o system leva só instruções
+  fixas e os NOMES das ferramentas oferecidas (títulos/descrições do catálogo só no canal `tools`); os trechos vão num
+  bloco `<dados_do_espaco>` no primeiro turno `user` (`spaceDataBlock`, `&`/`<`/`>` escapados) e um `tool_result`
+  achatado em texto (sem ferramentas oferecidas) vai como `<resultado_de_ferramenta>` escapado; dois nomes do catálogo
+  com o mesmo `llmToolName` = nenhum dos dois oferecido (log só da contagem); modelo que recusa sem
   retentativa = texto fixo como `final`, falha retentável = 500. Peças comuns com o responder em
   `responder/responder-shared.ts` (`retrieve`, `embedQuestion`, `toLlmMessages`, `Spend`, `cutUtf8`). As ferramentas
   de documento no passo são da Task 12. **Contador** `agent_brain_steps` (uma linha por (assunto,

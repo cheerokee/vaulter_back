@@ -49,6 +49,9 @@ import {
 import {
   ANTARES_AGENT_PROMPT_VERSION,
   antaresAgentSystemPrompt,
+  escapeData,
+  spaceDataBlock,
+  toolResultAsData,
 } from './antares-agent-prompt.js';
 import { BrainStepCounter } from './brain-step-counter.js';
 import { BrainComposer } from './brain-step.use-case.js';
@@ -56,9 +59,9 @@ import { BrainComposer } from './brain-step.use-case.js';
 /** Fixed texts (no model involved), pt-BR like the app. */
 export const AGENT_STEP_FAILED_TEXT =
   'Não consegui formular uma resposta agora. Tente de novo em instantes.';
-const NOT_OFFERED_RESULT =
+export const NOT_OFFERED_RESULT =
   'Recusada: esta ferramenta não foi oferecida neste passo (ou a política da organização nega estes argumentos). Nada foi executado. Use só as ferramentas oferecidas.';
-const NOT_RUN_RESULT =
+export const NOT_RUN_RESULT =
   'Não executada: esta rodada tinha uma chamada recusada. Chame de novo só as ferramentas oferecidas.';
 const NO_TOOLS_RESULT =
   'Nenhuma ferramenta do PC está disponível nesta pergunta: nada foi executado. Responda só com texto.';
@@ -121,12 +124,23 @@ export class BrainComposerImpl extends BrainComposer {
     const catalog = pcToolsAllowed
       ? await this.catalog.toolsOf(view.hubId)
       : [];
-    const offered = offeredDefs(
+    const { offered, collisions } = offeredDefs(
       catalog,
       policy.rules,
       view.hubOwnerUserId,
       pcToolsAllowed,
     );
+    if (collisions > 0) {
+      // Two catalog tools with the same model-safe name: neither is offered (only the count is logged).
+      this.logger.warn(
+        {
+          organizationId: view.organizationId,
+          messageId: view.messageId,
+          collisions,
+        },
+        'brain step: colliding tool names not offered',
+      );
+    }
     const tools = toLlmTools(offered);
     const storedChunkIds = await this.counter.chunkIdsOf(view);
     const messages = messagesOf(request, tools.length > 0);
@@ -175,17 +189,19 @@ export class BrainComposerImpl extends BrainComposer {
           this.estimate(system, messages, tools, firstRetrieval, request),
           async (spend) => {
             if (system === undefined) {
+              const chunks = await this.context(
+                view,
+                questionOf(request),
+                storedChunkIds,
+                spend,
+              );
               system = antaresAgentSystemPrompt({
-                chunks: await this.context(
-                  view,
-                  questionOf(request),
-                  storedChunkIds,
-                  spend,
-                ),
                 tools,
                 pcToolsAllowed,
                 now: await this.clock.now(),
               });
+              // The chunks are data: a delimited block in the first user turn, never the system prompt.
+              prependData(messages, spaceDataBlock(chunks));
             }
             const result = await this.llm.complete({
               system,
@@ -422,15 +438,32 @@ function toLlmBlock(
   if (block.type === 'tool_use') {
     return toolsOffered
       ? { ...block, name: llmToolName(block.name) }
-      : { type: 'text', text: `[Ferramenta ${block.name} chamada]` };
+      : {
+          type: 'text',
+          text: `[Ferramenta ${escapeData(block.name)} chamada]`,
+        };
   }
   if (block.type === 'tool_result' && !toolsOffered) {
     return {
       type: 'text',
-      text: `[Resultado de ferramenta${block.isError ? ' (erro)' : ''}]\n${block.content}`,
+      text: toolResultAsData(block.content, block.isError === true),
     };
   }
   return block;
+}
+
+/** Puts a data block at the start of the first user turn (or a user turn of its own when the messages start otherwise). */
+function prependData(messages: LlmMessage[], data: string): void {
+  const first = messages[0];
+  if (!first || first.role !== 'user') {
+    messages.unshift({ role: 'user', content: data });
+    return;
+  }
+  const rest: LlmContentBlock[] =
+    typeof first.content === 'string'
+      ? [{ type: 'text', text: first.content }]
+      : first.content;
+  first.content = [{ type: 'text', text: data }, ...rest];
 }
 
 /** Appends a message, joining it to the last one when they have the same role (the model APIs want them alternating). */

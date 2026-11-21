@@ -1,6 +1,11 @@
 import type { AgentRule } from '../../../agents/domain/agent-policy.js';
 import type { AgentToolDef } from '../../../agents/domain/agent-tool.js';
-import { llmToolName, markCalls, offerTools } from './agent-tool-offer.js';
+import {
+  llmToolName,
+  markCalls,
+  offerTools,
+  offeredDefs,
+} from './agent-tool-offer.js';
 
 const OWNER = '01900000-0000-7000-8000-000000000001';
 
@@ -130,5 +135,26 @@ describe('agent tool offer (spec pc-agent §5.3, §5.5)', () => {
     );
     expect(out).toEqual([]);
     expect(dropped).toHaveLength(1);
+  });
+
+  it('two catalog tools with the same model-safe name are neither offered (only the count reported)', () => {
+    // A real 8-hex collision of the hash, with the same sanitized prefix (found offline).
+    const a = tool('mcp:s/,..,,.,....,,.,,,,,,', 'mcp');
+    const b = tool('mcp:s/.,,,...,,.,......,,,', 'mcp');
+    expect(llmToolName(a.name)).toBe(llmToolName(b.name));
+    const everything = [rule({ kind: 'tool', pattern: 'mcp:*' }, 'allow')];
+    const { offered, collisions } = offeredDefs(
+      [catalog[0]!, a, b],
+      everything,
+      OWNER,
+      true,
+    );
+    expect([...offered.values()].map((d) => d.name)).toEqual([
+      'mcp:erp/consultar',
+    ]);
+    expect(collisions).toBe(2);
+    expect(
+      offerTools([a, b], everything, OWNER, true).map((t) => t.name),
+    ).toEqual([]);
   });
 });

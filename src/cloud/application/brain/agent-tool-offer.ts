@@ -27,21 +27,35 @@ export function llmToolName(name: string): string {
   return `${name.replace(/[^a-zA-Z0-9-]/g, '_').slice(0, 55)}_${hash.slice(0, 8)}`;
 }
 
-/** The catalog tools the model may call: by name, not `deny` for `userId`; none when PC tools are not allowed. */
+/**
+ * The catalog tools the model may call: by name, not `deny` for `userId`; none when PC tools are not allowed. Two
+ * catalog tools that map to the same model-safe name (`llmToolName`) are BOTH left out (a call could not be told apart);
+ * `collisions` = how many tools were left out for that (the caller logs only the count).
+ */
 export function offeredDefs(
   catalog: readonly AgentToolDef[],
   rules: AgentRule[],
   userId: string,
   pcToolsAllowed: boolean,
-): Map<string, AgentToolDef> {
-  const out = new Map<string, AgentToolDef>();
-  if (!pcToolsAllowed) return out;
+): { offered: Map<string, AgentToolDef>; collisions: number } {
+  const offered = new Map<string, AgentToolDef>();
+  if (!pcToolsAllowed) return { offered, collisions: 0 };
+  const byKey = new Map<string, AgentToolDef[]>();
   for (const def of catalog) {
-    if (toolEffect(rules, userId, def.name) !== 'deny') {
-      out.set(llmToolName(def.name), def);
+    const key = llmToolName(def.name);
+    byKey.set(key, [...(byKey.get(key) ?? []), def]);
+  }
+  let collisions = 0;
+  for (const [key, defs] of byKey) {
+    if (defs.length > 1) {
+      collisions += defs.length;
+      continue;
+    }
+    if (toolEffect(rules, userId, defs[0]!.name) !== 'deny') {
+      offered.set(key, defs[0]!);
     }
   }
-  return out;
+  return { offered, collisions };
 }
 
 /** The offered tools as the model sees them: the model-safe name, the catalog name in the description, the schema. */
@@ -62,7 +76,9 @@ export function offerTools(
   userId: string,
   pcToolsAllowed: boolean,
 ): LlmTool[] {
-  return toLlmTools(offeredDefs(catalog, rules, userId, pcToolsAllowed));
+  return toLlmTools(
+    offeredDefs(catalog, rules, userId, pcToolsAllowed).offered,
+  );
 }
 
 /**

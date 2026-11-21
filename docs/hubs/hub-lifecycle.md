@@ -791,7 +791,9 @@ passo, pede ao back o que fazer: o back monta o prompt, busca os trechos do espa
   16). Atingido o limite no meio de um passo, a resposta é `final` com o último texto do modelo. O agente confere de novo
   pela política local antes de executar. Os trechos do espaço são buscados uma vez por mensagem (na primeira chamada) e
   reusados nos passos seguintes. Um 422 `cloud-not-active` pode vir também depois da checagem 4 (o espaço saiu da nuvem
-  ativa durante o passo): a chamada já foi contada e nada foi cobrado do modelo.
+  ativa durante o passo): a chamada já foi contada e nada foi cobrado do modelo. Cada chamada ao modelo reserva o
+  orçamento antes, então `refused` também pode chegar **no meio de um passo**, depois de chamadas anteriores ao modelo no
+  mesmo passo (já cobradas e contadas): o agente trata como qualquer `refused`.
 
 ## 13. Reset de fábrica
 
