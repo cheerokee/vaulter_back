@@ -142,6 +142,11 @@ export const RATE_LIMITS = {
    * (`hubIdTracker`). O agente renova enquanto uma confirmação espera na bandeja, bem antes dos 15 min do prazo.
    */
   agentLease: { limit: 600, ttl: HOUR },
+  /**
+   * Passo do cérebro do agente (`POST /hub/conversations/:id/brain/step`, só `pc`): 600/h por Hub (`hubIdTracker`). Até
+   * 16 chamadas por mensagem (`BRAIN_MAX_CALLS`): ~37 respostas completas por hora no pior caso.
+   */
+  brainStep: { limit: 600, ttl: HOUR },
 } as const;
 
 /** Nome do throttler extra, cobrado só nas rotas marcadas com @ThrottleByEmail(). */

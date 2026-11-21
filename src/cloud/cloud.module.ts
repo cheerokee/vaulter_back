@@ -1,10 +1,20 @@
 import { Module } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
+import { AgentsModule } from '../agents/agents.module.js';
 import { ConversationsModule } from '../conversations/conversations.module.js';
 import { OrganizationsModule } from '../organizations/organizations.module.js';
 import { SpacesModule } from '../spaces/spaces.module.js';
 import { StorageModule } from '../storage/storage.module.js';
+import { BrainStepCounter } from './application/brain/brain-step-counter.js';
+import {
+  BrainComposer,
+  BrainStepUseCase,
+  NotImplementedBrainComposer,
+} from './application/brain/brain-step.use-case.js';
+import { AgentBrainStepTypeormEntity } from './infra/db/agent-brain-step.entity.js';
+import { AgentBrainStepSqlRepository } from './infra/db/agent-brain-step.sql-repository.js';
+import { BrainStepController } from './infra/http/brain-step.controller.js';
 import { BackupPlaintextReader } from './application/indexing/backup-plaintext-reader.js';
 import { CloudIndexingQueue } from './application/indexing/cloud-indexing-queue.js';
 import { CloudIndexingWorkers } from './application/indexing/cloud-indexing.workers.js';
@@ -116,6 +126,8 @@ export function createLanguageModel(config: ConfigService): LanguageModel {
  * reserve -> call -> settle/release; usage ledger; `GET /organizations/:id/ai-usage`; indexing pauses/resumes). Task 7:
  * the cloud answers conversations as the reserve executor (`AnswerConversationJob`, through `conversations`'
  * `CloudConversationExecutor`) and records documents (`CloudDocumentWriter`, through `storage`'s `ServerBackupWriter`).
+ * pc-agent Task 10: the PC agent's brain step route (`BrainStepUseCase`: turn, cloud, term, call-limit and size checks,
+ * through `conversations`' `AgentTurn`); the composition behind the `BrainComposer` port is Task 11.
  */
 @Module({
   imports: [
@@ -124,6 +136,8 @@ export function createLanguageModel(config: ConfigService): LanguageModel {
     SpacesModule,
     StorageModule,
     ConversationsModule,
+    // Passo do cérebro do agente do PC (Task 10/11): catálogo e política do agente, só pela application/ exportada.
+    AgentsModule,
     TypeOrmModule.forFeature([
       CloudServerKeyTypeormEntity,
       CloudTermTypeormEntity,
@@ -134,6 +148,7 @@ export function createLanguageModel(config: ConfigService): LanguageModel {
       CloudChunkTypeormEntity,
       AiReservationTypeormEntity,
       AiUsageTypeormEntity,
+      AgentBrainStepTypeormEntity,
     ]),
   ],
   controllers: [
@@ -142,6 +157,7 @@ export function createLanguageModel(config: ConfigService): LanguageModel {
     CloudTermsController,
     SpaceCloudController,
     AiUsageController,
+    BrainStepController,
   ],
   providers: [
     { provide: CloudTermRepository, useClass: CloudTermTypeormRepository },
@@ -190,6 +206,10 @@ export function createLanguageModel(config: ConfigService): LanguageModel {
     CloudDocumentWriter,
     AnswerConversationJob,
     CloudResponderWorkers,
+    // Passo do cérebro do agente do PC (spec pc-agent §5.3): checagens e contador; a composição é da Task 11.
+    { provide: BrainStepCounter, useClass: AgentBrainStepSqlRepository },
+    { provide: BrainComposer, useClass: NotImplementedBrainComposer },
+    BrainStepUseCase,
     KmsKeyEnvelope,
     ServerKeyTypeormStore,
     { provide: ServerKeyring, useClass: KmsServerKeyring },

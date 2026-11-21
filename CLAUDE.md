@@ -1231,7 +1231,8 @@ registra a fonte `conversations`), `hubs` (`HubDirectory`: `ownerOf`,
   versão do prompt.
 - **Fronteiras:** depende de `spaces` (`SpaceCloud`: estado, `lockActiveForWrite`, `keyVersions`, `audience`;
   `SpaceAccess`), `storage` (`BackupContentReader`, `ServerBackupWriter`), `conversations` (`CloudConversationExecutor`,
-  `SendMessageUseCase.byCloud`) e `organizations` (`OrganizationAccess`, `OrganizationDirectory.aiBudget/lockAiBudget`,
+  `SendMessageUseCase.byCloud`, `HubConversationScope`, `AgentTurn`), `agents` (`AgentToolCatalog`, `AgentPolicyReader`)
+  e `organizations` (`OrganizationAccess`, `OrganizationDirectory.aiBudget/lockAiBudget`,
   `AuditLog`, a porta `OrganizationAiSpend`), só pelo que exportam; **ninguém importa `cloud`**. Os outros módulos
   falam com ele por contratos em `src/shared/application/`: o `cloud` **assina** `SpaceKeyRotatedHooks` (guarda a cópia
   do servidor da troca de chave do espaço), `BackupObjectsChangedHooks` (reindexa), `AiBudgetRaisedHooks` (retoma a
@@ -1423,9 +1424,27 @@ registra a fonte `conversations`), `hubs` (`HubDirectory`: `ownerOf`,
   movem por DI). Nada legível em log (só ids, contagens, códigos, versão do prompt). e2e em
   `test/cloud/responder.e2e-spec.ts` (LLM e embedder falsos).
 
+- **Passo do cérebro do agente do PC** (spec pc-agent §5.3; `application/brain/`, migration `CreateAgentBrainSteps`):
+  `POST /hub/conversations/:id/brain/step` (`BrainStepController`, `@PcHubOnly()`, `RATE_LIMITS.brainStep` 600/h por Hub,
+  corpo JSON de até 256 KiB só nessa rota: `BRAIN_STEP_BODY_MAX_BYTES` em `JSON_BODY_LIMITS`, = `BRAIN_BODY_MAX_BYTES` do
+  domínio). `BrainStepUseCase` confere **na ordem da spec, antes de qualquer custo**: (1) `HubConversationScope.organizationOf`
+  (executor + vínculo aprovado, senão 404 `conversation-not-found`); (2) `SpaceCloud.modeOf` = `active_cloud` (422
+  `cloud-not-active`) e `CloudTermAcceptanceRepository.hasAgentCoverage` (422 `cloud-terms-agent-not-accepted`); (3)
+  `AgentTurn.requireTurn` (409 `brain-step-not-owned`; prazo do ack incluído); (4) `BrainStepCounter.consume` (422
+  `brain-step-limit`); (5) `assertToolResultSizes` (cada `tool_result` até 32 KiB em UTF-8, 422 `validation-failed` com
+  `turn`/`block`, nunca o conteúdo). Depois a porta `BrainComposer` (`compose(view, request)`; a ligação padrão
+  `NotImplementedBrainComposer` lança até a Task 11; os e2e a trocam por DI) e `AgentTurn.renewLease` (passo que
+  responde renova o prazo; checagem recusada não renova). **Contador** `agent_brain_steps` (uma linha por (assunto,
+  mensagem): `calls`, `cost_micro_usd`, `chunk_ids uuid[]`; só ids e números; RLS por organização; sem FK para assunto e
+  mensagem): `consume` = UM comando `INSERT ... ON CONFLICT DO UPDATE SET calls = calls + 1 WHERE calls < BRAIN_MAX_CALLS
+  RETURNING` numa transação curta própria (lança dentro de um unit of work), nenhuma linha = `'limit'`; conta chamadas,
+  não o `stepIndex` (repetir conta de novo); `addCost` soma o custo acertado. O `cloud` importa o `AgentsModule` (o
+  catálogo e a política, Task 11). e2e em `test/cloud/brain-step.e2e-spec.ts`.
+
 ## Módulo `agents`
 `src/agents/` (o agente do PC, que age como um Hub `pc`). Spec: `docs/superpowers/specs/2026-11-21-pc-agent-design.md`
-(§5.4 = catálogo). Catálogo, política da organização e auditoria das ações existem; o passo do cérebro entra na próxima tarefa.
+(§5.4 = catálogo). Catálogo, política da organização e auditoria das ações existem; o passo do cérebro é do `cloud`
+(veja "Passo do cérebro do agente" lá).
 - **Fronteiras:** `agents` depende de `hubs` (`HubAccess`, `HubDirectory`), `organizations` (`OrganizationAccess`) e
   `conversations` (só a porta exportada `HubConversationScope`); **nunca importa `cloud`**; o `cloud` importa `agents`
   só pela `application/` exportada (`AgentToolCatalog`); `hubs`, `organizations` e `conversations` nunca importam
@@ -1720,6 +1739,7 @@ Os valores do `.env.example` para os segredos são **só de desenvolvimento**; p
   | `POST /hub/link-codes` | 30/h por Hub (`hubIdTracker`) |
   | `GET /hub/sync` | 120/h por Hub (`hubIdTracker`) |
   | `PUT /hub/agent/tools` (catálogo do agente, só Hub `pc`) | 60/h por Hub (`hubIdTracker`) |
+  | `POST /hub/conversations/:id/brain/step` (passo do cérebro do agente, só Hub `pc`) | 600/h por Hub (`hubIdTracker`) |
   | `POST /hub/user-sessions` (login de pessoa pelo Hub) | 10/min por Hub (`hubIdTracker`) **e** 5/min por e-mail normalizado (contador **próprio** da rota, separado do `/auth/login`) |
   | `POST /hub/spaces/:spaceId/uploads` e `POST /spaces/:spaceId/backup/uploads` (intenção de envio do backup) | 600/h por Hub (`hubIdTracker`) / por usuário (`userIdTracker`), contador próprio por rota |
   | `POST .../uploads/confirm` (confirmação do envio, as mesmas duas formas) | 600/h por Hub / por usuário |

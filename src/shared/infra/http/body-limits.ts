@@ -12,6 +12,13 @@ export const AGENT_TOOLS_BODY_MAX_BYTES = 2 * 1024 * 1024;
  */
 export const AGENT_POLICY_BODY_MAX_BYTES = 2 * 1024 * 1024;
 
+/**
+ * `POST /hub/conversations/:id/brain/step`: the history (up to 40 messages) and the previous turns of the answer with
+ * their tool results (each up to 32 KiB) in one request (spec pc-agent §5.3). Same value as `BRAIN_BODY_MAX_BYTES` (the
+ * cloud domain, which `shared` does not import).
+ */
+export const BRAIN_STEP_BODY_MAX_BYTES = 256 * 1024;
+
 export type JsonBodyLimit = {
   method: string;
   /** Exact path (no query string, no trailing slash) or a RegExp tested against the path. */
@@ -21,7 +28,7 @@ export type JsonBodyLimit = {
 
 /**
  * Routes whose JSON body may exceed Express's default (100 kB). Everything else keeps the default. A route that needs
- * more adds its entry here (the brain step will add 256 KiB for `POST /hub/conversations/:id/brain/step`).
+ * more adds its entry here.
  */
 export const JSON_BODY_LIMITS: readonly JsonBodyLimit[] = [
   {
@@ -33,6 +40,11 @@ export const JSON_BODY_LIMITS: readonly JsonBodyLimit[] = [
     method: 'PUT',
     path: /^\/organizations\/[^/]+\/agent-policy$/,
     limitBytes: AGENT_POLICY_BODY_MAX_BYTES,
+  },
+  {
+    method: 'POST',
+    path: /^\/hub\/conversations\/[^/]+\/brain\/step$/,
+    limitBytes: BRAIN_STEP_BODY_MAX_BYTES,
   },
 ];
 

@@ -751,6 +751,37 @@ servidor guarda só o rastro, nunca o conteúdo.
   `appliance`). Mais novas primeiro, cursor, `limit` 1..100 (padrão 20); item `{ id, hubId, userId (o dono do agente),
   spaceId, conversationId, messageId, toolName, effect, decision, startedAt, durationMs, policyVersion, recordedAt }`.
 
+## Agente do PC: passo do cérebro
+
+Spec `docs/superpowers/specs/2026-11-21-pc-agent-design.md` §5.3. O agente conduz o laço da resposta no PC e, a cada
+passo, pede ao back o que fazer: o back monta o prompt, busca os trechos do espaço, chama o modelo e acerta o orçamento,
+**sem guardar nada do conteúdo**.
+
+- `POST /hub/conversations/:id/brain/step` (token de Hub, só `pc`, **600/h por Hub**; um `appliance` recebe o 404 do Nest
+  para rota inexistente, `Cannot POST /hub/conversations/<id>/brain/step`). Corpo JSON de até **256 KiB** (413 acima;
+  as outras rotas seguem nos 100 kB):
+  `{ messageId, stepIndex, history: [ { id, author: "person"|"hub"|"cloud", authorUserId?, text } ], turns: [ { role:
+  "assistant"|"user", content: [ blocos ] } ] }`. `messageId` = a mensagem de pessoa que o agente confirmou (ack) e está
+  respondendo; `stepIndex` (inteiro >= 0) só serve ao registro; `history` até 40 mensagens decifradas no PC; `turns` até
+  32, os passos anteriores desta resposta, com blocos `{ type: "text", text }`, `{ type: "tool_use", id, name, input }`
+  ou `{ type: "tool_result", toolUseId, content, isError? }` (exatamente esses campos; `id`/`name`/`toolUseId` até 200
+  caracteres). Formato inválido: 422 `validation-failed`.
+- **O que o back confere, nesta ordem, antes de qualquer custo:** (1) o Hub é o executor do assunto, em organização com
+  vínculo aprovado, senão 404 `conversation-not-found`; (2) o espaço está na nuvem ativa, senão 422 `cloud-not-active`, e
+  a organização aceitou um termo que cobre o agente, senão 422 `cloud-terms-agent-not-accepted`; (3) `messageId` é
+  mensagem de pessoa confirmada **por este Hub**, com o prazo do ack correndo e sem resposta dele, senão 409
+  `brain-step-not-owned` (descartar o trabalho: a nuvem de reserva responde); (4) menos de **16 chamadas ao modelo**
+  nesta mensagem, senão 422 `brain-step-limit` (o back conta chamadas, não o `stepIndex`: repetir um passo depois de uma
+  queda conta e é cobrado de novo); (5) cada resultado de ferramenta até **32 KiB** em UTF-8, senão 422
+  `validation-failed` (o agente corta antes, com aviso no texto; a chamada da checagem 4 já foi contada).
+- **Resposta 200:** `{ kind: "final", text, policyVersion }` (o agente cifra e manda como mensagem do executor, com
+  `answeringMessageId`), `{ kind: "tools", text?, toolCalls: [ { id, name, input, effect: "allow"|"confirm" } ],
+  policyVersion }` (executa `allow`, pede confirmação na bandeja para `confirm`, registra em `POST /hub/agent/actions` e
+  chama o próximo passo com os resultados) ou `{ kind: "refused", reason: "ai-budget-exceeded", resetsAt }` (manda a
+  mensagem fixa do orçamento). Um passo que responde **renova o prazo do ack** (agora + 15 min); um passo recusado não
+  renova, e o prazo segue correndo: vencido, a mensagem volta à fila (veja o item 9 de "A nuvem como executor de
+  reserva").
+
 ## 13. Reset de fábrica
 
 Um aparelho desregistrado **não pode ser reivindicado de novo com as mesmas chaves**: a apresentação dá 409
