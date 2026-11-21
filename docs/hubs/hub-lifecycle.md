@@ -659,6 +659,26 @@ servidor não lê nada).
 7. **Embeddings:** mesmo modelo (`nomic-embed-text`), sem prefixo de tarefa, mesma divisão em trechos (`space-manifest.md`,
    "Trechos e embeddings"); mudar isso é mudança conjunta com reindexação dos dois lados.
 
+## Agente do PC: catálogo de ferramentas
+
+Só para um Hub `kind: "pc"` (o agente; spec `docs/superpowers/specs/2026-11-21-pc-agent-design.md` §5.4). Um Hub
+`appliance` que chame estas rotas recebe o **404 do Nest para rota inexistente** (`Cannot PUT /hub/agent/tools`, o mesmo
+corpo de qualquer rota que não existe), nunca um 403: o aparelho não descobre que a rota existe.
+
+- `PUT /hub/agent/tools` (token de Hub, **60/h por Hub**) com `{ "tools": [ { name, title, description, inputSchema,
+  category } ] }`, **até 200**; responde **204** e a lista nova **substitui** a anterior (o que saiu ganha lápide; lista
+  vazia limpa o catálogo). `category` é `mcp`, `browser` ou `folder`; o nome leva o prefixo da categoria:
+  `mcp:<servidor>/<ferramenta>`, `browser:<ação>` ou `folder:<read|write|list>`; nomes sem repetição. O `inputSchema` de
+  `folder:*` precisa declarar `properties.path` e o de `browser:*`, `properties.url` (a política da organização casa
+  caminhos e URLs). Limites de texto: nome e título até 200 caracteres, descrição até 2000, `inputSchema` até 8 KiB
+  serializado. Qualquer violação é 422 `validation-failed` com o `index` da ferramenta inválida (nada é gravado; o
+  catálogo anterior continua). O corpo é limitado pelo limite geral do JSON (100 kB): 200 ferramentas com schemas grandes
+  não cabem num pedido só.
+- Quem lê: o dono, `GET /hubs/:id/agent/tools` (404 `hub-not-found` para qualquer outra pessoa e para um Hub que não é
+  `pc`), e o admin com `org.agents.manage`, `GET /organizations/:orgId/agent/tools` -> `{ items: [{ name, title }] }`
+  das ferramentas dos agentes com vínculo aprovado, sem repetir nome e **sem dizer de quem** (nenhum id de Hub ou de
+  dono). Publicar não é auditado e o conteúdo nunca vai a log.
+
 ## 13. Reset de fábrica
 
 Um aparelho desregistrado **não pode ser reivindicado de novo com as mesmas chaves**: a apresentação dá 409
@@ -681,6 +701,7 @@ Assim nada do dono anterior chega a um dono novo.
 | `POST /hub/link-codes` | 30/h | Hub |
 | `POST /hub/user-sessions` | 10/min e 5/min | Hub e e-mail |
 | `GET /hub/sync` | 120/h | Hub |
+| `PUT /hub/agent/tools` (só `pc`) | 60/h | Hub |
 | `POST /hub/spaces/:spaceId/uploads` | 600/h | Hub |
 | `POST /hub/spaces/:spaceId/uploads/confirm` | 600/h | Hub |
 | `POST /hub/spaces/:spaceId/objects/delete` | 120/h | Hub |

@@ -121,6 +121,11 @@ export const RATE_LIMITS = {
    * do admin; cada leitura soma o livro do mês).
    */
   aiUsageRead: { limit: 600, ttl: HOUR },
+  /**
+   * Catálogo de ferramentas do agente do PC (`PUT /hub/agent/tools`, só `pc`): 60/h por Hub (`hubIdTracker`). O agente
+   * publica ao conectar e quando os servidores MCP mudam; cada pedido substitui a lista inteira.
+   */
+  agentTools: { limit: 60, ttl: HOUR },
 } as const;
 
 /** Nome do throttler extra, cobrado só nas rotas marcadas com @ThrottleByEmail(). */

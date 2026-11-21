@@ -1399,6 +1399,35 @@ registra a fonte `conversations`), `hubs` (`HubDirectory`: `ownerOf`,
   movem por DI). Nada legível em log (só ids, contagens, códigos, versão do prompt). e2e em
   `test/cloud/responder.e2e-spec.ts` (LLM e embedder falsos).
 
+## Módulo `agents`
+`src/agents/` (o agente do PC, que age como um Hub `pc`). Spec: `docs/superpowers/specs/2026-11-21-pc-agent-design.md`
+(§5.4 = catálogo). Só o catálogo existe até agora; ACL, política, auditoria e passo do cérebro entram nas próximas tarefas.
+- **Fronteiras:** `agents` depende de `hubs` (`HubAccess`, `HubDirectory`), `organizations` (`OrganizationAccess`) e,
+  nas próximas tarefas, `conversations` (só as portas exportadas); **nunca importa `cloud`**; o `cloud` importa `agents`
+  só pela `application/` exportada (`AgentToolCatalog`); `hubs`, `organizations` e `conversations` nunca importam
+  `agents`. O domínio é puro. Plaintext (histórico, resultados de ferramenta, trechos, prompt, argumentos, caminhos, URLs)
+  nunca em log, Sentry, auditoria, payload de tarefa, banco ou resposta de erro: só ids, contagens, nomes de ferramenta,
+  códigos e versões.
+- **`@PcHubOnly()`** (`src/shared/infra/http/pc-hub-only.guard.ts`; já inclui `@HubAuth()`): Hub que não é `pc` recebe
+  o **404 do Nest para rota inexistente** (`Cannot PUT /hub/agent/tools`, mesmo corpo que `PlatformPermissionGuard`),
+  indistinguível de uma rota que não existe. O `PcHubOnlyGuard` é **global** (APP_GUARD do `AgentsModule`, depois do
+  `HubsModule` e antes do `ThrottlingModule`: o 404 vem antes do throttler contar) e lê o tipo pela porta `HubKindLookup`
+  (ligada a `HubDirectory.kindOf(hubId)`). Toda rota nova do agente usa `@PcHubOnly()`.
+- **Catálogo** (`PUT /hub/agent/tools`, `PublishAgentToolsUseCase`; `assertAgentTools` no domínio, 422 `validation-failed`
+  com o `index`): até 200 ferramentas, nome com o prefixo da categoria (`mcp:<servidor>/<ferramenta>`, `browser:<ação>`,
+  `folder:<read|write|list>`), `folder` exige `inputSchema.properties.path` e `browser`, `.url`. Substitui a lista inteira
+  num `uow.run` (lápide no que saiu, upsert do resto: nome que volta revive a linha). Tabela `agent_tools` (migration
+  `CreateAgentTools`; `owner_user_id` desnormalizado com FK composta para `hubs (id, owner_user_id)`; `UNIQUE (hub_id, name)`;
+  sem `organization_id` nem sync): metadado de software, legível, com RLS do dono do Hub (`app.user_id`) ou do próprio Hub
+  (`app.hub_id`). Rate limit `agentTools` 60/h por Hub.
+- **Leitura:** `AgentToolCatalog.toolsOf(hubId)` (exportado, lê no contexto do próprio Hub, **não autoriza**: quem chama
+  já autorizou). `GET /hubs/:id/agent/tools` é do dono (404 `hub-not-found` para outros e para `appliance`);
+  `GET /organizations/:orgId/agent/tools` (`org.agents.manage`: 404 não membro, 403 sem a permissão) devolve nomes e títulos
+  das ferramentas dos agentes com vínculo aprovado, **sem hubId nem dono** (`HubDirectory.approvedHubIdsOf`, que o `hubs`
+  exporta para isso). `HubDirectory.kindOf(hubId)` devolve o tipo (`null` se desconhecido).
+- **Testes:** `src/agents/domain/agent-tool.spec.ts`, e2e em `test/agents/tools.e2e-spec.ts`; helper `agentsKit(getApp)`
+  em `test/support/agents-kit.ts` (`publishTools(hub, tools)`, `defaultTools()`: uma ferramenta de cada categoria).
+
 ## Banco de dados (TypeORM + migrations)
 - **Pool:** o do driver `pg`, com tamanho explícito `DB_POOL_MAX_CONNECTIONS` (10 por instância; instâncias × (10 + 1 da conexão LISTEN dos assuntos + 4 do pool do pg-boss, `JOB_QUEUE_POOL_MAX`) abaixo
   do `max_connections` do banco) e `connectionTimeoutMillis` = `DB_POOL_CONNECTION_TIMEOUT_MS` (10 s), ambos em
@@ -1635,6 +1664,7 @@ Os valores do `.env.example` para os segredos são **só de desenvolvimento**; p
   | `POST /hubs/link-requests` | 10/h por usuário |
   | `POST /hub/link-codes` | 30/h por Hub (`hubIdTracker`) |
   | `GET /hub/sync` | 120/h por Hub (`hubIdTracker`) |
+  | `PUT /hub/agent/tools` (catálogo do agente, só Hub `pc`) | 60/h por Hub (`hubIdTracker`) |
   | `POST /hub/user-sessions` (login de pessoa pelo Hub) | 10/min por Hub (`hubIdTracker`) **e** 5/min por e-mail normalizado (contador **próprio** da rota, separado do `/auth/login`) |
   | `POST /hub/spaces/:spaceId/uploads` e `POST /spaces/:spaceId/backup/uploads` (intenção de envio do backup) | 600/h por Hub (`hubIdTracker`) / por usuário (`userIdTracker`), contador próprio por rota |
   | `POST .../uploads/confirm` (confirmação do envio, as mesmas duas formas) | 600/h por Hub / por usuário |

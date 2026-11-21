@@ -3,6 +3,7 @@ import { validate } from 'uuid';
 import { UnitOfWork } from '../../shared/infra/db/unit-of-work.js';
 import { HubOrganizationRepository } from '../domain/hub-organization.repository.js';
 import { HubSpaceRepository } from '../domain/hub-space.repository.js';
+import type { HubKind } from '../domain/hub.js';
 import { HubRepository } from '../domain/hub.repository.js';
 
 // Fatos sobre um Hub para os outros módulos (`storage`, `conversations`), exportado. NÃO autoriza ninguém: quem chama
@@ -24,6 +25,24 @@ export class HubDirectory {
       { hubId, userId: '', organizationId: '' },
       async () => (await this.hubs.findById(hubId))?.ownerUserId ?? null,
     );
+  }
+
+  /** Kind of the hub (`appliance` or `pc`; deregistered included), read in the hub's own context; null when unknown. */
+  kindOf(hubId: string): Promise<HubKind | null> {
+    if (!validate(hubId)) return Promise.resolve(null);
+    return this.uow.withContext(
+      { hubId, userId: '', organizationId: '' },
+      async () => (await this.hubs.findById(hubId))?.kind ?? null,
+    );
+  }
+
+  /**
+   * Hubs with an approved, live link to the organization, in id order, read in the organization scope (no lock).
+   * Empty for a malformed id. NOT an authorization: the caller already checked the permission it needs.
+   */
+  approvedHubIdsOf(organizationId: string): Promise<string[]> {
+    if (!validate(organizationId)) return Promise.resolve([]);
+    return this.links.listApprovedHubIdsOfOrganization(organizationId);
   }
 
   /**
