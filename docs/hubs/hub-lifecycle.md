@@ -405,6 +405,8 @@ nuvem é reservado ao servidor (enviar ou apagar com ele: 422 `object-id-reserve
   **Hub `pc` (agente) nunca é compartilhável:** só o dono o vê. `PUT /hubs/:id/roles/:userId` num `pc` é 422
   `agent-not-shareable` (antes de gravar); não há `hub_user` implícito, então um membro de organização vinculada recebe 404
   `hub-not-found` em `GET /hubs/:id` e 401 `invalid-credentials` em `POST /hub/user-sessions`.
+  O `pc` também não aparece no `GET /hubs` de quem não é dono, e o `GET /hub/sync` dele traz só o dono como pessoa
+  (itens `member` e papéis de outras pessoas, e o material de chave delas, nunca chegam a um `pc`).
 
 ## 11. Troca da chave de um espaço (app)
 

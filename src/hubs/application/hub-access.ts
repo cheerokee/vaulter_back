@@ -38,7 +38,7 @@ export class HubAccess {
       if (!hub || hub.isDeregistered) return null;
       if (hub.ownerUserId === userId) return { hub, role: 'hub_owner' };
       // A pc hub (agent) belongs to its owner only: no explicit role can exist and there is no implicit hub_user.
-      if (hub.kind !== 'appliance') return null;
+      if (hub.kind === 'pc') return null;
       const explicit = await this.roles.roleOf(hubId, userId);
       return { hub, role: explicit ?? 'hub_user' };
     });

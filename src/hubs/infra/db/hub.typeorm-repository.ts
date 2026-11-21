@@ -107,7 +107,7 @@ export class HubTypeormRepository extends HubRepository {
     return names;
   }
 
-  // O filtro explícito (dono ou vínculo aprovado com organização de que a pessoa é membro ativo) é a primeira
+  // Hub `pc` só do dono. O filtro explícito (dono ou vínculo aprovado com organização de que a pessoa é membro ativo) é a primeira
   // trava; o RLS do `app.user_id` é a segunda. Ordem por id (v7 = ordem de criação).
   async listForUser(
     userId: string,
@@ -118,12 +118,12 @@ export class HubTypeormRepository extends HubRepository {
     const rows: HubRow[] = await currentManager(this.dataSource).query(
       `SELECT h.* FROM hubs h
         WHERE h.deleted_at IS NULL
-          AND (h.owner_user_id = $1 OR EXISTS (
+          AND (h.owner_user_id = $1 OR (h.kind = 'appliance' AND EXISTS (
                 SELECT 1 FROM hub_organization ho
                   JOIN user_organization uo
                     ON uo.organization_id = ho.organization_id
                    AND uo.user_id = $1 AND uo.deleted_at IS NULL
-                 WHERE ho.hub_id = h.id AND ho.status = 'approved' AND ho.deleted_at IS NULL))
+                 WHERE ho.hub_id = h.id AND ho.status = 'approved' AND ho.deleted_at IS NULL)))
           AND ($2::uuid IS NULL OR h.id > $2::uuid)
         ORDER BY h.id ASC
         LIMIT $3`,

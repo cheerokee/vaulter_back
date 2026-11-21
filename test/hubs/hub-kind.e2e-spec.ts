@@ -120,5 +120,31 @@ describe('hub kind (e2e)', () => {
       c.http().get(`/hubs/${box.hubId}`).set(c.bearer(ana.token)),
       200,
     );
+
+    // GET /hubs: the member lists the appliance but not the pc; the owner lists both
+    const listed = async (token: string) =>
+      (
+        (await expectStatus(c.http().get('/hubs').set(c.bearer(token)), 200))
+          .body.items as { id: string }[]
+      ).map((i) => i.id);
+    const memberList = await listed(ana.token);
+    expect(memberList).toContain(box.hubId);
+    expect(memberList).not.toContain(pc.hubId);
+    expect(await listed(olivia.token)).toEqual(
+      expect.arrayContaining([pc.hubId, box.hubId]),
+    );
+
+    // GET /hub/sync: the pc knows only its owner (no other member, key blob or role); the appliance gets the member
+    const people = async (hubId: string) => {
+      const token = (await app.get(HubTokenService).issue(hubId)).token;
+      const page = await h.syncAll(token);
+      return page.items
+        .filter((i) => i.type === 'member' && !i.deleted)
+        .map((i) => i.data.userId);
+    };
+    const pcPeople = await people(pc.hubId);
+    expect(pcPeople.length).toBeGreaterThan(0);
+    expect(new Set(pcPeople)).toEqual(new Set([olivia.userId]));
+    expect(await people(box.hubId)).toContain(ana.userId);
   });
 });

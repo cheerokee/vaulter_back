@@ -238,6 +238,8 @@ async function readOrganization(
         ),
     ),
   );
+  // A pc hub (agent) only knows its owner: no other member, role or key material reaches it (the same filter on
+  // the organization/space role rows below).
   // Member = (organization, user). Its version is the greatest of the membership row, the user row (key material:
   // a password change re-wraps the private key and must reach the hub) and every role row it embeds (organization
   // roles here and this hub's role), tombstones included, so any of those changes re-sends the member.
@@ -265,6 +267,7 @@ async function readOrganization(
                     OR (ra.scope_type = 'hub' AND ra.hub_id = $1))), 0)) AS sv
            ) v
           WHERE uo.organization_id = $4 AND v.sv > $2::bigint AND NOT uo.sync_pending AND NOT u.sync_pending
+            AND NOT EXISTS (SELECT 1 FROM hubs ph WHERE ph.id = $1 AND ph.kind = 'pc' AND ph.owner_user_id <> uo.user_id)
           ORDER BY v.sv LIMIT $3`,
       (r) =>
         item(
@@ -294,6 +297,7 @@ async function readOrganization(
            FROM role_assignments ra JOIN roles r ON r.id = ra.role_id
           WHERE ra.organization_id = $4 AND ra.sync_version > $2::bigint AND NOT ra.sync_pending
             AND (ra.user_id IS NOT NULL OR ra.room_hub_id = $1)
+            AND NOT EXISTS (SELECT 1 FROM hubs ph WHERE ph.id = $1 AND ph.kind = 'pc' AND ph.owner_user_id <> ra.user_id)
             AND (ra.scope_type = 'organization'
               OR (ra.scope_type = 'space' AND EXISTS (
                     SELECT 1 FROM hub_space hs
