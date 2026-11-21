@@ -1435,14 +1435,32 @@ registra a fonte `conversations`), `hubs` (`HubDirectory`: `ownerOf`,
   de contar, decisão do controlador: pedido malformado não gasta chamada); (4) `BrainStepCounter.consume` (422
   `brain-step-limit`), a última: conta a primeira chamada ao modelo do passo; o composer só chama `consume` antes de
   cada chamada ADICIONAL no mesmo passo e, com `'limit'` no meio, devolve o último texto como `final`; passo recusado
-  pelo orçamento ou que falhou também gasta a vaga. Depois a porta `BrainComposer` (`compose(view, request)`; a ligação padrão
-  `NotImplementedBrainComposer` lança até a Task 11; os e2e a trocam por DI) e `AgentTurn.renewLease` (passo que
-  responde renova o prazo; checagem recusada não renova). **Contador** `agent_brain_steps` (uma linha por (assunto,
+  pelo orçamento ou que falhou também gasta a vaga. Depois a porta `BrainComposer` (`compose(view, request)`; ligada a `BrainComposerImpl`, os
+  e2e da rota a trocam por DI) e `AgentTurn.renewLease` (passo que responde renova o prazo; checagem recusada não
+  renova). **Compositor** (`brain-composer.ts`, sem estado, nada legível em log: só ids, contagens, `promptVersion`,
+  `policyVersion` e o tipo da saída): (a) **oferta** = catálogo do agente (`AgentToolCatalog.toolsOf(view.hubId)`) ∩
+  política ATUAL (`AgentPolicyReader.current`) para o dono, sem as `deny` (`offerTools`, `agent-tool-offer.ts`), e só
+  quando o autor **gravado** da mensagem (`AgentTurnView.authorUserId`, nunca o `history`) é o dono do Hub; recalculada a
+  cada passo (devolve `policyVersion`). Os nomes do catálogo (`mcp:erp/x`) vão ao modelo como `llmToolName` (só
+  `[a-zA-Z0-9_-]`, até 64, com hash do nome: as APIs do modelo recusam `:` e `/`) e voltam ao nome real; (b) **chamadas**
+  conferidas por `markCalls` (`callEffect` com o `input`): fora do oferecido ou `deny` pelo caminho/domínio = descartada,
+  nunca em `toolCalls`; vira `tool_result` de erro e o modelo é chamado de novo **no mesmo passo** (as outras chamadas da
+  mesma rodada também voltam como não executadas); (c) **cada chamada ao modelo** reserva antes (`AiBudget.tryReserve`,
+  `kind: 'agent'`; recusa = `{ kind: 'refused', reason: 'ai-budget-exceeded', resetsAt }`) e acerta depois (`settle` +
+  `BrainStepCounter.addCost`); (d) **trechos** só na primeira chamada da MENSAGEM (`chunk_ids` nulo): embute a pergunta
+  (o texto de `messageId` no `history`) fora de transação, depois numa transação curta trava o espaço `FOR SHARE`
+  (`SpaceCloud.lockActiveForWrite`, reconfere `active_cloud`: desligou depois das checagens = 422 `cloud-not-active`, sem
+  chamar o modelo) e busca; guarda só os ids (`recordChunkIds`, uma vez) e os passos seguintes releem por id
+  (`CloudChunkRepository.findByIds`, trecho apagado some); (e) prompt `antares-agent-prompt.ts`
+  (`ANTARES_AGENT_PROMPT_VERSION`, seção "AGINDO NO PC"; resultados de ferramenta são DADOS); modelo que recusa sem
+  retentativa = texto fixo como `final`, falha retentável = 500. Peças comuns com o responder em
+  `responder/responder-shared.ts` (`retrieve`, `embedQuestion`, `toLlmMessages`, `Spend`, `cutUtf8`). As ferramentas
+  de documento no passo são da Task 12. **Contador** `agent_brain_steps` (uma linha por (assunto,
   mensagem): `calls`, `cost_micro_usd`, `chunk_ids uuid[]`; só ids e números; RLS por organização; sem FK para assunto e
   mensagem): `consume` = UM comando `INSERT ... ON CONFLICT DO UPDATE SET calls = calls + 1 WHERE calls < BRAIN_MAX_CALLS
   RETURNING` numa transação curta própria (lança dentro de um unit of work), nenhuma linha = `'limit'`; conta chamadas,
-  não o `stepIndex` (repetir conta de novo); `addCost` soma o custo acertado. O `cloud` importa o `AgentsModule` (o
-  catálogo e a política, Task 11). e2e em `test/cloud/brain-step.e2e-spec.ts`.
+  não o `stepIndex` (repetir conta de novo); `addCost` soma o custo acertado; `chunkIdsOf`/`recordChunkIds` (só ids). O `cloud` importa o `AgentsModule` (o
+  catálogo e a política) e o domínio puro `agents/domain/agent-policy.ts` (`toolEffect`, `callEffect`). e2e em `test/cloud/brain-step.e2e-spec.ts`.
 
 ## Módulo `agents`
 `src/agents/` (o agente do PC, que age como um Hub `pc`). Spec: `docs/superpowers/specs/2026-11-21-pc-agent-design.md`

@@ -324,32 +324,63 @@ export class CloudChunkSqlRepository extends CloudChunkRepository {
     model: string,
     limit: number,
   ): Promise<ChunkHit[]> {
-    const rows: {
-      file_id: string;
-      name: string;
-      path: string | null;
-      position: number;
-      text: string;
-      distance: number;
-    }[] = await runInOrganizationScope(this.dataSource, orgId, (m) =>
-      m.query(
-        `SELECT c.file_id, f.name, f.path, c.position, c.text,
+    const rows: ChunkRow[] = await runInOrganizationScope(
+      this.dataSource,
+      orgId,
+      (m) =>
+        m.query(
+          `SELECT c.id, c.file_id, f.name, f.path, c.position, c.text,
                 (c.embedding <=> $3::vector)::float8 AS distance
            FROM cloud_chunks c
            JOIN cloud_files f ON f.id = c.cloud_file_id AND f.organization_id = c.organization_id
           WHERE c.organization_id = $1 AND c.space_id = $2 AND c.embedding_model = $4
           ORDER BY c.embedding <=> $3::vector
           LIMIT $5`,
-        [orgId, spaceId, `[${embedding.join(',')}]`, model, limit],
-      ),
+          [orgId, spaceId, `[${embedding.join(',')}]`, model, limit],
+        ),
     );
-    return rows.map((r) => ({
-      fileId: r.file_id,
-      name: r.name,
-      path: r.path,
-      position: r.position,
-      text: r.text,
-      distance: Number(r.distance),
-    }));
+    return rows.map(toChunkHit);
+  }
+
+  async findByIds(
+    orgId: string,
+    spaceId: string,
+    ids: readonly string[],
+  ): Promise<ChunkHit[]> {
+    if (ids.length === 0) return [];
+    const rows: ChunkRow[] = await runInOrganizationScope(
+      this.dataSource,
+      orgId,
+      (m) =>
+        m.query(
+          `SELECT c.id, c.file_id, f.name, f.path, c.position, c.text, 0::float8 AS distance
+           FROM cloud_chunks c
+           JOIN cloud_files f ON f.id = c.cloud_file_id AND f.organization_id = c.organization_id
+          WHERE c.organization_id = $1 AND c.space_id = $2 AND c.id = ANY($3::uuid[])
+          ORDER BY array_position($3::uuid[], c.id)`,
+          [orgId, spaceId, ids],
+        ),
+    );
+    return rows.map(toChunkHit);
   }
 }
+
+type ChunkRow = {
+  id: string;
+  file_id: string;
+  name: string;
+  path: string | null;
+  position: number;
+  text: string;
+  distance: number;
+};
+
+const toChunkHit = (r: ChunkRow): ChunkHit => ({
+  id: r.id,
+  fileId: r.file_id,
+  name: r.name,
+  path: r.path,
+  position: r.position,
+  text: r.text,
+  distance: Number(r.distance),
+});

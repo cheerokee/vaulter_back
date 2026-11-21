@@ -59,4 +59,31 @@ export class AgentBrainStepSqlRepository extends BrainStepCounter {
       ),
     );
   }
+
+  async chunkIdsOf(view: AgentTurnView): Promise<string[] | null> {
+    const rows: { chunk_ids: string[] | null }[] = await runInOrganizationScope(
+      this.dataSource,
+      view.organizationId,
+      (m) =>
+        m.query(
+          `SELECT chunk_ids FROM agent_brain_steps
+            WHERE organization_id = $1 AND conversation_id = $2 AND message_id = $3`,
+          [view.organizationId, view.conversationId, view.messageId],
+        ),
+    );
+    return rows[0]?.chunk_ids ?? null;
+  }
+
+  async recordChunkIds(
+    view: AgentTurnView,
+    chunkIds: readonly string[],
+  ): Promise<void> {
+    await runInOrganizationScope(this.dataSource, view.organizationId, (m) =>
+      m.query(
+        `UPDATE agent_brain_steps SET chunk_ids = $4::uuid[], updated_at = now()
+          WHERE organization_id = $1 AND conversation_id = $2 AND message_id = $3 AND chunk_ids IS NULL`,
+        [view.organizationId, view.conversationId, view.messageId, chunkIds],
+      ),
+    );
+  }
 }

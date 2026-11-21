@@ -45,12 +45,14 @@ export abstract class CloudFileRepository {
 
 /** A chunk found by similarity (legible: never logged). */
 export type ChunkHit = {
+  /** The chunk's own id (the brain step keeps only these ids between steps). */
+  id: string;
   fileId: string;
   name: string;
   path: string | null;
   position: number;
   text: string;
-  /** Cosine distance (0 = same direction). */
+  /** Cosine distance (0 = same direction); 0 when read by id (`findByIds`: not compared). */
   distance: number;
 };
 
@@ -80,5 +82,14 @@ export abstract class CloudChunkRepository {
     embedding: readonly number[],
     model: string,
     limit: number,
+  ): Promise<ChunkHit[]>;
+  /**
+   * The chunks of THIS space with these ids, in the order of `ids` (the brain step re-reads the chunks found by its
+   * first call). A chunk gone since (re-indexed, file deleted, space switched off) simply drops out.
+   */
+  abstract findByIds(
+    orgId: string,
+    spaceId: string,
+    ids: readonly string[],
   ): Promise<ChunkHit[]>;
 }

@@ -20,6 +20,8 @@ export type AgentTurnView = {
   conversationId: string;
   /** The person's message the agent acked and is answering. */
   messageId: string;
+  /** The `pc` hub holding the turn (the conversation's executor): whose tool catalog the brain step reads. */
+  hubId: string;
   /** Its RECORDED author (never what the agent claims): PC tools only when this is the hub owner (spec pc-agent §5.2). */
   authorUserId: string;
   hubOwnerUserId: string;
@@ -73,6 +75,7 @@ export class AgentTurn {
         spaceId: conversation.spaceId,
         conversationId: conversation.id,
         messageId: message.id,
+        hubId,
         authorUserId: message.authorUserId!,
         hubOwnerUserId,
         cloudReserve: conversation.cloudReserve,

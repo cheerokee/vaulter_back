@@ -19,8 +19,8 @@ import { BrainStepCounter } from './brain-step-counter.js';
 /**
  * What the back does once every check passed (spec pc-agent §5.3, "O que o back faz"): reserve the budget, retrieve the
  * space's chunks, build the versioned prompt with the allowed tools, call the model once (plus the back-side document
- * tools) and settle. Out of any transaction; keeps nothing of the content. Implemented by Task 11; replaced by a fake
- * through DI in the e2e.
+ * tools) and settle. Out of any transaction; keeps nothing of the content. Implemented by `BrainComposerImpl`
+ * (brain-composer.ts); replaced by a fake through DI in the route's e2e.
  *
  * Counting contract (`BrainStepCounter`, `BRAIN_MAX_CALLS` per message):
  * - the route already consumed ONE slot before calling `compose`: it pays for the step's first model call;
@@ -35,14 +35,6 @@ export abstract class BrainComposer {
     view: AgentTurnView,
     request: BrainStepRequest,
   ): Promise<BrainStepResponse>;
-}
-
-/** Default binding until Task 11 lands: the route answers 500 instead of pretending to think. */
-@Injectable()
-export class NotImplementedBrainComposer extends BrainComposer {
-  compose(): Promise<BrainStepResponse> {
-    return Promise.reject(new Error('The brain composer is not implemented'));
-  }
 }
 
 /**

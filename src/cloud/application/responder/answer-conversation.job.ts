@@ -15,10 +15,7 @@ import {
   confirmedProposal,
   type HistoryMessage,
 } from '../../domain/document-gate.js';
-import {
-  CloudChunkRepository,
-  type ChunkHit,
-} from '../../domain/indexing.repositories.js';
+import { CloudChunkRepository } from '../../domain/indexing.repositories.js';
 import {
   decodeMessage,
   encodeMessage,
@@ -51,7 +48,6 @@ import {
   LanguageModel,
   LanguageModelError,
   type LlmContentBlock,
-  type LlmMessage,
   type LlmToolCall,
 } from '../ports/language-model.js';
 import { ServerKeyring } from '../ports/server-keyring.js';
@@ -67,6 +63,7 @@ import {
   type AnswerConversationPayload,
 } from './cloud-responder-queue.js';
 import { ResponderClock } from './responder-clock.js';
+import { cutUtf8, retrieve, Spend, toLlmMessages } from './responder-shared.js';
 
 /** Fixed, non-sensitive texts of the cloud (no model involved). pt-BR, like the app. */
 export const BUDGET_NOTICE_TEXT =
@@ -80,20 +77,6 @@ const TOOL_ROUND_TRIP_CHARS = 2 * DOCUMENT_MAX_BYTES;
 const CHARS_PER_TOKEN = 2;
 
 type StepOutcome = 'continue' | 'stop';
-
-/** Accumulates what the calls of one answer cost (the reservation is settled with the sum). */
-class Spend {
-  inputTokens = 0;
-  outputTokens = 0;
-  costMicroUsd = 0n;
-  calls = 0;
-  add(cost: bigint, usage: { inputTokens: number; outputTokens: number }) {
-    this.inputTokens += usage.inputTokens;
-    this.outputTokens += usage.outputTokens;
-    this.costMicroUsd += cost;
-    this.calls += 1;
-  }
-}
 
 type Keys = Map<number, Uint8Array>;
 
@@ -376,7 +359,12 @@ export class AnswerConversationJob {
   ): Promise<MessageContent> {
     const question = history.find((m) => m.id === target.id);
     if (!question) return { text: ANSWER_FAILED_TEXT };
-    const hits = await this.retrieve(p, question.content.text, spend);
+    const hits = await retrieve(
+      { embedder: this.embedder, pricing: this.pricing, chunks: this.chunks },
+      p,
+      question.content.text,
+      spend,
+    );
     const system = antaresCloudSystemPrompt({
       audience: await this.spaceCloud.audience(p.organizationId, p.spaceId),
       chunks: hits,
@@ -439,32 +427,6 @@ export class AnswerConversationJob {
     if (recorded) content.documentRecorded = recorded;
     else if (proposal) content.documentProposal = proposal;
     return content;
-  }
-
-  private async retrieve(
-    p: AnswerConversationPayload,
-    question: string,
-    spend: Spend,
-  ): Promise<ChunkHit[]> {
-    const query = question.slice(0, RESPONDER_MESSAGE_MAX_CHARS);
-    if (!query.trim()) return [];
-    const embedded = await this.embedder.embed([query], 'query');
-    spend.add(
-      this.pricing.costMicroUsd(
-        { inputTokens: embedded.inputTokens, outputTokens: 0 },
-        embedded.model,
-      ),
-      { inputTokens: 0, outputTokens: 0 },
-    );
-    const vector = embedded.vectors[0];
-    if (!vector) return [];
-    return this.chunks.search(
-      p.organizationId,
-      p.spaceId,
-      vector,
-      embedded.model,
-      RESPONDER_CONTEXT_CHUNKS,
-    );
   }
 
   private async runTool(
@@ -731,47 +693,4 @@ function recordFailureMessage(code: string): string {
     default:
       return 'Não deu para gravar agora. Avise a pessoa.';
   }
-}
-
-/** Cuts a text to at most `max` UTF-8 bytes (on a character boundary). */
-function cutUtf8(text: string, max: number): string {
-  if (utf8Bytes(text) <= max) return text;
-  let out = text;
-  while (utf8Bytes(out) > max) out = out.slice(0, Math.floor(out.length * 0.9));
-  return out;
-}
-
-/**
- * The history as model turns: people = `user` (labelled "Pessoa N" when there are several), the cloud and the Hub =
- * `assistant`; a proposal and a button decision are spelled out so the model knows the ids. Consecutive turns of the
- * same role are joined, and the conversation starts and ends with the person (the message being answered).
- */
-function toLlmMessages(history: readonly HistoryMessage[]): LlmMessage[] {
-  const people = new Map<string, number>();
-  for (const m of history) {
-    if (m.authorUserId && !people.has(m.authorUserId)) {
-      people.set(m.authorUserId, people.size + 1);
-    }
-  }
-  const turns: { role: 'user' | 'assistant'; text: string }[] = [];
-  for (const m of history) {
-    const role = m.author === 'person' ? 'user' : 'assistant';
-    let text = m.content.text.slice(0, RESPONDER_MESSAGE_MAX_CHARS);
-    if (role === 'user' && people.size > 1) {
-      text = `[Pessoa ${people.get(m.authorUserId!)}] ${text}`;
-    }
-    const proposal = m.content.documentProposal;
-    if (proposal) {
-      text += `\n[Proposta de documento ${proposal.proposalId}: "${proposal.title}"${proposal.confidential ? ', confidencial' : ''}]`;
-    }
-    const decision = m.content.documentDecision;
-    if (decision) {
-      text += `\n[Botão: ${decision.decision === 'record' ? 'gravar' : 'não gravar'} a proposta ${decision.proposalId}]`;
-    }
-    const last = turns[turns.length - 1];
-    if (last && last.role === role) last.text += `\n\n${text}`;
-    else turns.push({ role, text });
-  }
-  while (turns.length > 0 && turns[0]!.role !== 'user') turns.shift();
-  return turns.map((t) => ({ role: t.role, content: t.text }));
 }

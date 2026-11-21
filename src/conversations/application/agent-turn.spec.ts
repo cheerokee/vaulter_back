@@ -135,6 +135,7 @@ describe('AgentTurn', () => {
         spaceId: SPACE,
         conversationId: CONV,
         messageId: m.id,
+        hubId: PC,
         authorUserId: ANA,
         hubOwnerUserId: OLIVIA,
         cloudReserve: true,

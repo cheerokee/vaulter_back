@@ -7,10 +7,10 @@ import { OrganizationsModule } from '../organizations/organizations.module.js';
 import { SpacesModule } from '../spaces/spaces.module.js';
 import { StorageModule } from '../storage/storage.module.js';
 import { BrainStepCounter } from './application/brain/brain-step-counter.js';
+import { BrainComposerImpl } from './application/brain/brain-composer.js';
 import {
   BrainComposer,
   BrainStepUseCase,
-  NotImplementedBrainComposer,
 } from './application/brain/brain-step.use-case.js';
 import { AgentBrainStepTypeormEntity } from './infra/db/agent-brain-step.entity.js';
 import { AgentBrainStepSqlRepository } from './infra/db/agent-brain-step.sql-repository.js';
@@ -127,7 +127,8 @@ export function createLanguageModel(config: ConfigService): LanguageModel {
  * the cloud answers conversations as the reserve executor (`AnswerConversationJob`, through `conversations`'
  * `CloudConversationExecutor`) and records documents (`CloudDocumentWriter`, through `storage`'s `ServerBackupWriter`).
  * pc-agent Task 10: the PC agent's brain step route (`BrainStepUseCase`: turn, cloud, term, call-limit and size checks,
- * through `conversations`' `AgentTurn`); the composition behind the `BrainComposer` port is Task 11.
+ * through `conversations`' `AgentTurn`); Task 11: the composer behind the `BrainComposer` port (`BrainComposerImpl`:
+ * ACL-filtered PC tools from `agents`' catalog and policy, retrieval, the agent prompt, the model loop, the budget).
  */
 @Module({
   imports: [
@@ -206,9 +207,10 @@ export function createLanguageModel(config: ConfigService): LanguageModel {
     CloudDocumentWriter,
     AnswerConversationJob,
     CloudResponderWorkers,
-    // Passo do cérebro do agente do PC (spec pc-agent §5.3): checagens e contador; a composição é da Task 11.
+    // Passo do cérebro do agente do PC (spec pc-agent §5.3): checagens, contador e o compositor (oferta pela ACL, busca,
+    // prompt, modelo, orçamento).
     { provide: BrainStepCounter, useClass: AgentBrainStepSqlRepository },
-    { provide: BrainComposer, useClass: NotImplementedBrainComposer },
+    { provide: BrainComposer, useClass: BrainComposerImpl },
     BrainStepUseCase,
     KmsKeyEnvelope,
     ServerKeyTypeormStore,

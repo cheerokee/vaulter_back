@@ -782,6 +782,16 @@ passo, pede ao back o que fazer: o back monta o prompt, busca os trechos do espa
   mensagem fixa do orçamento). Um passo que responde **renova o prazo do ack** (agora + 15 min); um passo recusado não
   renova, e o prazo segue correndo: vencido, a mensagem volta à fila (veja o item 9 de "A nuvem como executor de
   reserva").
+- **O que o back oferece ao modelo:** as ferramentas do catálogo do agente (`PUT /hub/agent/tools`) que a política
+  atual da organização não nega para o dono, e **só quando a pergunta (`messageId`) é do dono do agente** (pelo autor
+  gravado da mensagem, não pelo `history`); a pergunta de outro participante é respondida só com conhecimento. Cada passo
+  recalcula com a política atual e devolve a versão em `policyVersion`. Em `toolCalls` vêm só chamadas a ferramentas
+  oferecidas, com o nome do catálogo e o `effect` já com o `path`/`url` avaliados; uma chamada fora disso o back
+  descarta e resolve com o modelo dentro do próprio passo (o agente nunca a vê; cada chamada extra ao modelo conta nas
+  16). Atingido o limite no meio de um passo, a resposta é `final` com o último texto do modelo. O agente confere de novo
+  pela política local antes de executar. Os trechos do espaço são buscados uma vez por mensagem (na primeira chamada) e
+  reusados nos passos seguintes. Um 422 `cloud-not-active` pode vir também depois da checagem 4 (o espaço saiu da nuvem
+  ativa durante o passo): a chamada já foi contada e nada foi cobrado do modelo.
 
 ## 13. Reset de fábrica
 

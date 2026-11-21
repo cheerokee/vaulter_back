@@ -201,6 +201,7 @@ describe('conversations: the pc agent ack lease (e2e)', () => {
       spaceId,
       conversationId: conv.id,
       messageId: m,
+      hubId: pc.hubId,
       authorUserId: ana.userId,
       hubOwnerUserId: olivia.userId,
       cloudReserve: true,
