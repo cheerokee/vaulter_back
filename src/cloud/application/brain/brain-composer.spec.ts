@@ -10,14 +10,23 @@ import type { SpaceCloud } from '../../../spaces/application/space-cloud.js';
 import { AiPricing } from '../../domain/ai-pricing.js';
 import type { BrainStepRequest } from '../../domain/brain-step.js';
 import type { ChunkHit } from '../../domain/indexing.repositories.js';
-import { encodeMessage } from '../../domain/message-plaintext.js';
+import { proposalContentSha256 } from '../../domain/document-gate.js';
+import {
+  encodeMessage,
+  type DocumentProposal,
+  type MessageContent,
+} from '../../domain/message-plaintext.js';
 import { FakeEmbedder } from '../../testing/fake-embedder.js';
 import { FakeLanguageModel } from '../../testing/fake-language-model.js';
 import type { AiBudget } from '../ai-budget.js';
-import type { CloudCipher } from '../ports/cloud-cipher.js';
+import {
+  ConversationBlobOpenError,
+  type CloudCipher,
+} from '../ports/cloud-cipher.js';
 import type { ServerKeyring } from '../ports/server-keyring.js';
 import type { CloudDocumentWriter } from '../responder/cloud-document-writer.js';
 import type { ResponderClock } from '../responder/responder-clock.js';
+import type { AgentIssuedProposals } from './agent-issued-proposals.js';
 import { llmToolName } from './agent-tool-offer.js';
 import {
   AGENT_STEP_FAILED_TEXT,
@@ -67,8 +76,12 @@ function setup(
   opts: {
     author?: string;
     storedChunkIds?: string[] | null;
-    /** The conversation is in the cloud's reach (its server-decrypted history: the question only). */
+    /** The conversation is in the cloud's reach (its server-decrypted history: the question only, unless `before`). */
     serverHistory?: boolean;
+    /** Decrypted messages before the question (the server history), oldest first. */
+    before?: { id: string; author: 'hub' | 'cloud'; content: MessageContent }[];
+    /** The question cannot be decrypted. */
+    questionUnreadable?: boolean;
   } = {},
 ) {
   const view: AgentTurnView = {
@@ -123,6 +136,14 @@ function setup(
             conversation: { id: view.conversationId, spaceId: view.spaceId },
             serverKeyCopies: [{ keyVersion: 1, wrappedKey: 'copy' }],
             messages: [
+              ...(opts.before ?? []).map((m) => ({
+                id: m.id,
+                authorUserId: null,
+                authorHubId: m.author === 'hub' ? newId() : null,
+                authorCloud: m.author === 'cloud',
+                keyVersion: 1,
+                encryptedBody: 'AA',
+              })),
               {
                 id: view.messageId,
                 authorUserId: view.authorUserId,
@@ -139,9 +160,20 @@ function setup(
   const key = new Uint8Array(32).fill(9);
   const keyring = { openSealed: vi.fn().mockResolvedValue(key) };
   const cipher = {
-    openMessage: vi.fn().mockResolvedValue(encodeMessage({ text: QUESTION })),
+    openMessage: vi.fn((_key: Uint8Array, ad: { messageId: string }) => {
+      const earlier = opts.before?.find((m) => m.id === ad.messageId);
+      if (earlier) return Promise.resolve(encodeMessage(earlier.content));
+      if (opts.questionUnreadable) {
+        return Promise.reject(new ConversationBlobOpenError());
+      }
+      return Promise.resolve(encodeMessage({ text: QUESTION }));
+    }),
   };
   const documents = { record: vi.fn() };
+  const proposals = {
+    record: vi.fn(),
+    hashesOf: vi.fn().mockResolvedValue(new Map<string, string>()),
+  };
   const llm = new FakeLanguageModel();
   const embedder = new FakeEmbedder();
   const composer = new BrainComposerImpl(
@@ -160,6 +192,7 @@ function setup(
     keyring as unknown as ServerKeyring,
     cipher as unknown as CloudCipher,
     documents as unknown as CloudDocumentWriter,
+    proposals as unknown as AgentIssuedProposals,
   );
   const request: BrainStepRequest = {
     messageId: view.messageId,
@@ -190,6 +223,7 @@ function setup(
     executor,
     key,
     documents,
+    proposals,
   };
 }
 
@@ -586,6 +620,14 @@ describe('BrainComposerImpl', () => {
     });
     expect(t.counter.consume).toHaveBeenCalledTimes(1);
     expect(t.documents.record).not.toHaveBeenCalled();
+    // The issued proposal is recorded by id and content hash only.
+    const issued = (res as { documentProposal: DocumentProposal })
+      .documentProposal;
+    expect(t.proposals.record).toHaveBeenCalledWith(
+      t.view,
+      issued.proposalId,
+      proposalContentSha256(issued),
+    );
   });
 
   it('record_document without a confirmed proposal in the server history writes nothing', async () => {
@@ -608,5 +650,73 @@ describe('BrainComposerImpl', () => {
     expect(JSON.stringify(t.llm.calls[1]!.messages.at(-1))).toContain(
       'no-proposal',
     );
+  });
+
+  describe("an executor hub's proposal counts only when this back issued it with that content", () => {
+    const proposal: DocumentProposal = {
+      proposalId: newId(),
+      title: 'Ata',
+      content: '# Ata',
+      confidential: false,
+    };
+    const run = async (issuedHash: string | null) => {
+      const t = setup({
+        serverHistory: true,
+        before: [
+          {
+            id: newId(),
+            author: 'hub',
+            content: { text: 'Posso gravar?', documentProposal: proposal },
+          },
+        ],
+      });
+      if (issuedHash) {
+        t.proposals.hashesOf.mockResolvedValue(
+          new Map([[proposal.proposalId, issuedHash]]),
+        );
+      }
+      t.llm.enqueue(
+        {
+          toolCalls: [
+            {
+              id: 'r1',
+              name: 'record_document',
+              input: { proposalId: proposal.proposalId },
+            },
+          ],
+        },
+        { text: 'Pronto.' },
+      );
+      await t.composer.compose(t.view, t.request);
+      expect(t.proposals.hashesOf).toHaveBeenCalledWith(t.view, [
+        proposal.proposalId,
+      ]);
+      return t;
+    };
+
+    it('issued with the same content: recorded', async () => {
+      const t = await run(proposalContentSha256(proposal));
+      expect(t.documents.record).toHaveBeenCalledTimes(1);
+    });
+
+    it('never issued, or issued with other content: stripped and refused', async () => {
+      for (const hash of [
+        null,
+        proposalContentSha256({ ...proposal, content: '# Outra' }),
+      ]) {
+        const t = await run(hash);
+        expect(t.documents.record).not.toHaveBeenCalled();
+        expect(JSON.stringify(t.llm.calls[1]!.messages.at(-1))).toContain(
+          'no-proposal',
+        );
+      }
+    });
+  });
+
+  it('a question the server cannot decrypt is not embedded (no retrieval)', async () => {
+    const t = setup({ serverHistory: true, questionUnreadable: true });
+    t.llm.enqueue({ text: 'Ok.' });
+    await t.composer.compose(t.view, t.request);
+    expect(t.embedder.calls).toEqual([]);
   });
 });

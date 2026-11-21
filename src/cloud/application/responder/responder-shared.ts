@@ -148,14 +148,23 @@ export function toLlmMessages(
   return turns.map((t) => ({ role: t.role, content: t.text }));
 }
 
+/** The entries `decryptHistory` could not open (their text is a placeholder, never the person's). */
+const unreadableEntries = new WeakSet<HistoryMessage>();
+
+/** Whether `decryptHistory` could not open this entry (e.g. no retrieval on a placeholder question). */
+export function isUnreadable(message: HistoryMessage): boolean {
+  return unreadableEntries.has(message);
+}
+
 /**
  * The conversation's own history up to the message `targetId` (the most recent `RESPONDER_HISTORY_MESSAGES`), decrypted
  * by the server with `keys`. A message that does not open keeps its place as "[mensagem ilegível]" (the confirmation
- * gate's "immediately before" never skips over it); only the count is logged. A network-free call, but run it outside a
- * unit of work anyway (the keys were opened from the KMS-backed keyring).
+ * gate's "immediately before" never skips over it; `isUnreadable` tells it apart); only the count is logged, under
+ * `label`. A network-free call, but run it outside a unit of work anyway (the keys were opened from the KMS-backed
+ * keyring).
  */
 export async function decryptHistory(
-  deps: { cipher: CloudCipher; logger: Logger },
+  deps: { cipher: CloudCipher; logger: Logger; label: string },
   read: CloudConversationRead,
   targetId: string,
   keys: ServerKeys,
@@ -170,12 +179,16 @@ export async function decryptHistory(
   for (const m of slice) {
     const author = m.authorCloud ? 'cloud' : m.authorHubId ? 'hub' : 'person';
     // An unreadable message keeps its place (the confirmation gate's "immediately before" never skips over it).
-    const unreadableEntry = (): HistoryMessage => ({
-      id: m.id,
-      author,
-      authorUserId: m.authorUserId,
-      content: { text: '[mensagem ilegível]' },
-    });
+    const unreadableEntry = (): HistoryMessage => {
+      const entry: HistoryMessage = {
+        id: m.id,
+        author,
+        authorUserId: m.authorUserId,
+        content: { text: '[mensagem ilegível]' },
+      };
+      unreadableEntries.add(entry);
+      return entry;
+    };
     const key = keys.get(m.keyVersion);
     if (!key) {
       unreadable += 1;
@@ -211,7 +224,7 @@ export async function decryptHistory(
   if (unreadable > 0) {
     deps.logger.warn(
       { conversationId: read.conversation.id, unreadable },
-      'cloud answer: history messages skipped',
+      deps.label,
     );
   }
   return out;

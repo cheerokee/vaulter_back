@@ -253,7 +253,11 @@ export class AnswerConversationJob {
         );
       }
       const history = await decryptHistory(
-        { cipher: this.cipher, logger: this.logger },
+        {
+          cipher: this.cipher,
+          logger: this.logger,
+          label: 'cloud answer: history messages skipped',
+        },
         read,
         target.id,
         keys,

@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import type { DocumentProposal, MessageContent } from './message-plaintext.js';
 
 /** A message of the conversation's history, decrypted (legible: never logged). */
@@ -53,4 +54,18 @@ export function confirmedProposal(
     return { refused: 'declined' };
   }
   return { proposal: previous.content.documentProposal };
+}
+
+/**
+ * SHA-256 (hex) of a proposal's canonical content: what the gate later records (title and content) plus the
+ * confidentiality flag shown with it. The brain step stores it with the proposal id it issued (`agent_issued_proposals`)
+ * and accepts an executor hub's proposal only when its recomputed hash matches.
+ */
+export function proposalContentSha256(proposal: DocumentProposal): string {
+  return createHash('sha256')
+    .update(
+      JSON.stringify([proposal.title, proposal.content, proposal.confidential]),
+      'utf8',
+    )
+    .digest('hex');
 }

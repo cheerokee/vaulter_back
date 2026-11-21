@@ -1093,15 +1093,35 @@ describe('cloud: the brain composer (e2e)', () => {
         [documentObjectIdFor(proposalId)],
       )) as { uploaded_by_user_id: string }[];
     /**
-     * The agent answers the acked question with a proposal (its message carries `documentProposal`), `who` replies with
-     * `reply(proposalId)` (the v1 plaintext) and the agent acks the reply: the turn on the reply.
+     * The agent answers the acked question with a proposal in its message, `who` replies with `reply(proposalId)` (the
+     * v1 plaintext) and the agent acks the reply: the turn on the reply. `issued` (default): the proposal the back
+     * returned from a real step (`propose_document`); `made-up`: a proposal the agent invented; `altered`: the issued
+     * proposal with other content.
      */
     const proposeThenReply = async (
       t: Awaited<ReturnType<typeof turn>>,
       who: KeyedUser,
       reply: (proposalId: string) => Record<string, unknown>,
+      mode: 'issued' | 'made-up' | 'altered' = 'issued',
     ) => {
-      const proposalId = newId();
+      let proposal: Record<string, unknown> = { proposalId: newId(), ...DOC };
+      if (mode !== 'made-up') {
+        llm.enqueue(
+          { toolCalls: [{ id: 'p1', name: 'propose_document', input: DOC }] },
+          { text: 'Posso gravar a ata?' },
+        );
+        const proposed = await expectStatus(
+          step(t.conversationId, body(who, t.messageId)),
+          200,
+        );
+        proposal = proposed.body.documentProposal as Record<string, unknown>;
+        expect(proposal).toMatchObject(DOC);
+        if (mode === 'altered') {
+          proposal = { ...proposal, content: '# Ata\n\nOutra coisa.' };
+        }
+        llm.reset();
+      }
+      const proposalId = proposal.proposalId as string;
       const answer = await k.hubSend(
         pcToken,
         spaceId,
@@ -1111,7 +1131,7 @@ describe('cloud: the brain composer (e2e)', () => {
           answeringMessageId: t.messageId,
           text: JSON.stringify({
             text: 'Posso gravar a ata?',
-            documentProposal: { proposalId, ...DOC },
+            documentProposal: proposal,
           }),
         },
       );
@@ -1261,6 +1281,43 @@ describe('cloud: the brain composer (e2e)', () => {
       expect(JSON.stringify(llm.calls[0]!.messages)).toContain(QUESTION);
       expect(await documentVersions(proposalId)).toEqual([]);
     });
+
+    for (const mode of ['made-up', 'altered'] as const) {
+      it(`a ${mode} proposal in the agent's own message is never recorded, even after a "yes" (Review Focus 1)`, async () => {
+        const t = await turn(olivia);
+        const { proposalId, messageId } = await proposeThenReply(
+          t,
+          olivia,
+          () => ({ text: 'sim, pode gravar' }),
+          mode,
+        );
+        llm.enqueue(
+          {
+            toolCalls: [
+              { id: 'r1', name: 'record_document', input: { proposalId } },
+            ],
+          },
+          { text: 'Não consegui gravar.' },
+        );
+        const res = await expectStatus(
+          step(t.conversationId, body(olivia, messageId)),
+          200,
+        );
+        expect(res.body).toEqual({
+          kind: 'final',
+          text: 'Não consegui gravar.',
+          policyVersion,
+        });
+        const refused = lastToolResult(1);
+        expect(refused.isError).toBe(true);
+        expect(refused.content).toContain('no-proposal');
+        // The unverified proposal is not even shown to the model.
+        expect(JSON.stringify(llm.calls[0]!.messages)).not.toContain(
+          proposalId,
+        );
+        expect(await documentVersions(proposalId)).toEqual([]);
+      });
+    }
 
     it('a documentDecision declining wins over the model', async () => {
       const t = await turn(olivia);

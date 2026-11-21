@@ -1468,7 +1468,12 @@ registra a fonte `conversations`), `hubs` (`HubDirectory`: `ownerOf`,
   sem ela, `tool_result` de erro com `recordFailureMessage`), nunca saem em `toolCalls`; nomes reservados (nenhuma
   ferramenta do catálogo com o mesmo `llmToolName` é oferecida); chamada do PC na mesma rodada volta como não executada;
   cada chamada extra ao modelo passa por `consume` e pelo orçamento. A resposta (`final`/`tools`) leva
-  `documentProposal`/`documentRecorded` para o agente pôr no texto em claro da mensagem dele. **Contador** `agent_brain_steps` (uma linha por (assunto,
+  `documentProposal`/`documentRecorded` para o agente pôr no texto em claro da mensagem dele. **Proposta do agente só
+  vale se o back a emitiu:** `propose_document` grava em `agent_issued_proposals` (migration
+  `CreateAgentIssuedProposals`: `(conversation_id, proposal_id)` único, `content_sha256` = `proposalContentSha256`
+  (título, conteúdo, `confidential`), só ids e hash, RLS por organização, runtime só SELECT/INSERT; porta
+  `AgentIssuedProposals`), e uma proposta numa mensagem `hub` do histórico do servidor sem linha com o mesmo hash é
+  tirada antes do modelo e da trava (`verifiedHubProposals`); o responder continua aceitando só as da nuvem. **Contador** `agent_brain_steps` (uma linha por (assunto,
   mensagem): `calls`, `cost_micro_usd`, `chunk_ids uuid[]`; só ids e números; RLS por organização; sem FK para assunto e
   mensagem): `consume` = UM comando `INSERT ... ON CONFLICT DO UPDATE SET calls = calls + 1 WHERE calls < BRAIN_MAX_CALLS
   RETURNING` numa transação curta própria (lança dentro de um unit of work), nenhuma linha = `'limit'`; conta chamadas,

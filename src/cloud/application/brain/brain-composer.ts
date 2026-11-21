@@ -17,7 +17,10 @@ import {
   type BrainStepRequest,
   type BrainStepResponse,
 } from '../../domain/brain-step.js';
-import type { HistoryMessage } from '../../domain/document-gate.js';
+import {
+  proposalContentSha256,
+  type HistoryMessage,
+} from '../../domain/document-gate.js';
 import {
   CloudChunkRepository,
   type ChunkHit,
@@ -47,6 +50,7 @@ import {
   cutUtf8,
   decryptHistory,
   embedQuestion,
+  isUnreadable,
   runDocumentTool,
   Spend,
   toLlmMessages,
@@ -65,6 +69,7 @@ import {
   spaceDataBlock,
   toolResultAsData,
 } from './antares-agent-prompt.js';
+import { AgentIssuedProposals } from './agent-issued-proposals.js';
 import { BrainStepCounter } from './brain-step-counter.js';
 import { BrainComposer } from './brain-step.use-case.js';
 
@@ -142,6 +147,7 @@ export class BrainComposerImpl extends BrainComposer {
     private readonly keyring: ServerKeyring,
     private readonly cipher: CloudCipher,
     private readonly documents: CloudDocumentWriter,
+    private readonly proposals: AgentIssuedProposals,
   ) {
     super();
   }
@@ -182,7 +188,7 @@ export class BrainComposerImpl extends BrainComposer {
     const pcTools = toLlmTools(offered);
     const tools = docsOffered ? [...pcTools, ...RESPONDER_TOOLS] : pcTools;
     const question = serverHistory
-      ? (serverHistory.find((m) => m.id === view.messageId)?.content.text ?? '')
+      ? serverQuestion(serverHistory, view.messageId)
       : questionOf(request);
     const storedChunkIds = await this.counter.chunkIdsOf(view);
     const messages = messagesOf(request, tools.length > 0, serverHistory);
@@ -323,6 +329,14 @@ export class BrainComposerImpl extends BrainComposer {
           call,
           ['cloud', 'hub'],
         );
+        if (outcome.proposal) {
+          // Only the id and a hash: what lets the next message's confirmation trust the agent's copy of it.
+          await this.proposals.record(
+            view,
+            outcome.proposal.proposalId,
+            proposalContentSha256(outcome.proposal),
+          );
+        }
         if (outcome.recorded) {
           docs.documentRecorded = outcome.recorded;
           delete docs.documentProposal;
@@ -350,7 +364,7 @@ export class BrainComposerImpl extends BrainComposer {
   /**
    * The conversation's history decrypted by the SERVER (the cloud reserve's copies of its key), up to `messageId`, or
    * null when out of the cloud's reach (reserve or space switched off) or the message is not in the read window: then
-   * no document tool is offered. The read is a short transaction of its own; the keys are opened (KMS-backed keyring)
+   * no document tool is offered. Executor proposals this back did not issue are stripped (`verifiedHubProposals`). The read is a short transaction of its own; the keys are opened (KMS-backed keyring)
    * and the messages decrypted outside it, and the keys are zeroed right after.
    */
   private async serverHistory(
@@ -366,6 +380,7 @@ export class BrainComposerImpl extends BrainComposer {
       return null;
     }
     const keys: ServerKeys = new Map();
+    let history: HistoryMessage[];
     try {
       for (const copy of read.serverKeyCopies) {
         keys.set(
@@ -373,8 +388,12 @@ export class BrainComposerImpl extends BrainComposer {
           await this.keyring.openSealed(copy.wrappedKey),
         );
       }
-      return await decryptHistory(
-        { cipher: this.cipher, logger: this.logger },
+      history = await decryptHistory(
+        {
+          cipher: this.cipher,
+          logger: this.logger,
+          label: 'brain step: history messages skipped',
+        },
         read,
         view.messageId,
         keys,
@@ -382,6 +401,37 @@ export class BrainComposerImpl extends BrainComposer {
     } finally {
       for (const k of keys.values()) k.fill(0);
     }
+    return this.verifiedHubProposals(view, history);
+  }
+
+  /**
+   * Strips from `history` every executor (`hub`) proposal this back did not issue for the conversation with that exact
+   * content (`agent_issued_proposals`): a made-up or altered proposal in the agent's own message is neither shown to the
+   * model nor confirmable. The cloud's own proposals stay (the server wrote those messages).
+   */
+  private async verifiedHubProposals(
+    view: AgentTurnView,
+    history: HistoryMessage[],
+  ): Promise<HistoryMessage[]> {
+    const claimed = history.filter(
+      (m) => m.author === 'hub' && m.content.documentProposal,
+    );
+    if (claimed.length === 0) return history;
+    const issued = await this.proposals.hashesOf(
+      view,
+      claimed.map((m) => m.content.documentProposal!.proposalId),
+    );
+    return history.map((m) => {
+      const proposal = m.author === 'hub' ? m.content.documentProposal : null;
+      if (
+        !proposal ||
+        issued.get(proposal.proposalId) === proposalContentSha256(proposal)
+      ) {
+        return m;
+      }
+      const { documentProposal: _forged, ...content } = m.content;
+      return { ...m, content };
+    });
   }
 
   /** One paid model call: reserve before, settle (and add to the message's row) or release after. */
@@ -537,6 +587,15 @@ function fallbackText(docs: BrainDocumentOutcome): string {
     return `Posso gravar o documento "${docs.documentProposal.title}" no espaço?`;
   }
   return AGENT_STEP_FAILED_TEXT;
+}
+
+/** The question from the server's history ('' when it is missing or could not be decrypted: no retrieval). */
+function serverQuestion(
+  history: readonly HistoryMessage[],
+  messageId: string,
+): string {
+  const target = history.find((m) => m.id === messageId);
+  return target && !isUnreadable(target) ? target.content.text : '';
 }
 
 /**

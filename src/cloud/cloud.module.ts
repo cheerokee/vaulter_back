@@ -6,7 +6,10 @@ import { ConversationsModule } from '../conversations/conversations.module.js';
 import { OrganizationsModule } from '../organizations/organizations.module.js';
 import { SpacesModule } from '../spaces/spaces.module.js';
 import { StorageModule } from '../storage/storage.module.js';
+import { AgentIssuedProposals } from './application/brain/agent-issued-proposals.js';
 import { BrainStepCounter } from './application/brain/brain-step-counter.js';
+import { AgentIssuedProposalTypeormEntity } from './infra/db/agent-issued-proposal.entity.js';
+import { AgentIssuedProposalSqlRepository } from './infra/db/agent-issued-proposal.sql-repository.js';
 import { BrainComposerImpl } from './application/brain/brain-composer.js';
 import {
   BrainComposer,
@@ -150,6 +153,7 @@ export function createLanguageModel(config: ConfigService): LanguageModel {
       AiReservationTypeormEntity,
       AiUsageTypeormEntity,
       AgentBrainStepTypeormEntity,
+      AgentIssuedProposalTypeormEntity,
     ]),
   ],
   controllers: [
@@ -210,6 +214,10 @@ export function createLanguageModel(config: ConfigService): LanguageModel {
     // Passo do cérebro do agente do PC (spec pc-agent §5.3): checagens, contador e o compositor (oferta pela ACL, busca,
     // prompt, modelo, orçamento).
     { provide: BrainStepCounter, useClass: AgentBrainStepSqlRepository },
+    {
+      provide: AgentIssuedProposals,
+      useClass: AgentIssuedProposalSqlRepository,
+    },
     { provide: BrainComposer, useClass: BrainComposerImpl },
     BrainStepUseCase,
     KmsKeyEnvelope,
