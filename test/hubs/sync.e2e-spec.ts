@@ -710,5 +710,9 @@ describe('hub sync (e2e)', () => {
 
     // an appliance never receives it
     expect(await policyItems(box)).toEqual([]);
+
+    // a pc of another owner that is not linked to the organization never receives it
+    const stranger = await hc.onboard(carl.token, 'PC do Carl', { kind: 'pc' });
+    expect(await policyItems(stranger)).toEqual([]);
   });
 });

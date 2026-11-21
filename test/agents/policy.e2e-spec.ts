@@ -283,4 +283,57 @@ describe('agent policy of the organization (e2e)', () => {
     )) as [{ del: boolean; sel: boolean }];
     expect({ del, sel }).toEqual({ del: false, sel: true });
   });
+
+  it('a session opened through a hub never rewrites the policy (same 404 as an outsider); reading stays allowed', async () => {
+    const before = (await expectStatus(get(olivia.token), 200)).body
+      .version as number;
+    const login = await expectStatus(
+      h.loginPerson(
+        await h.authenticate(pc),
+        olivia.email,
+        olivia.account.authProof,
+      ),
+      200,
+    );
+    const hubSession = login.body.session.accessToken as string;
+    const refused = await put(hubSession, { baseVersion: before, rules: [] });
+    expect(refused.status).toBe(404);
+    expect(refused.body.type).toMatch(/\/organization-not-found$/);
+    expect((await expectStatus(get(hubSession), 200)).body.version).toBe(
+      before,
+    );
+    expect((await expectStatus(get(olivia.token), 200)).body.version).toBe(
+      before,
+    );
+  });
+
+  it('an organization with a pending link to the pc is not in GET /hub/agent/policy', async () => {
+    const carl = await c.spaces.signUpKeyed('carl@example.com', 'Carl');
+    const org = await c.spaces.orgWithKit(carl, 'Fechada');
+    await c.spaces.joinOrg(carl, org.orgId, olivia);
+    await expectStatus(
+      c
+        .http()
+        .patch(`/organizations/${org.orgId}`)
+        .set(c.bearer(carl.token))
+        .send({ hubLinkPolicy: 'admin_approved' }),
+      200,
+    );
+    const link = await expectStatus(
+      c
+        .http()
+        .post(`/hubs/${pc.hubId}/organizations`)
+        .set(c.bearer(olivia.token))
+        .send({ organizationId: org.orgId }),
+      201,
+    );
+    expect(link.body.status).toBe('pending');
+    const res = await hubPolicy(pc);
+    expect(res.status).toBe(200);
+    const orgs = (res.body.items as { organizationId: string }[]).map(
+      (i) => i.organizationId,
+    );
+    expect(orgs).not.toContain(org.orgId);
+    expect(orgs).toContain(orgId);
+  });
 });

@@ -60,6 +60,15 @@ export class ReplaceAgentPolicyUseCase {
     organizationId: string,
     input: { baseVersion: number; rules: unknown },
   ): Promise<AgentPolicyView> {
+    // A session opened through a Hub (`actor.hubId`) never rewrites the ACL (a pc agent acting with its owner's hub
+    // session must not change its own limits): the same 404 an outsider gets, as the cloud does with its decisions
+    // (`refuseHubSession`, which `agents` cannot import). Checked first, before any read. Reading stays allowed.
+    if (actor.hubId) {
+      throw new NotFoundError(
+        'organization-not-found',
+        'The organization was not found.',
+      );
+    }
     await this.access.requirePermission(
       organizationId,
       actor.userId,

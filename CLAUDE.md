@@ -1429,7 +1429,7 @@ registra a fonte `conversations`), `hubs` (`HubDirectory`: `ownerOf`,
   (`UNIQUE (organization_id, version)`, `rules` jsonb já validado por `parseAgentRules`, `changed_by_user_id`), **só de
   acréscimo** (runtime: SELECT/INSERT e UPDATE só de `sync_version`/`sync_pending`, o do COMMIT; sem DELETE), RLS por
   organização, versão no COMMIT no feed único (`addCommitOrderedSyncVersion`; entrou em `HUB_SYNC_TABLES`).
-  `PUT /organizations/:orgId/agent-policy` `{ baseVersion, rules }` (`org.agents.manage`, 404 não membro/403; corpo até
+  `PUT /organizations/:orgId/agent-policy` `{ baseVersion, rules }` (`org.agents.manage`, 404 não membro/403; **sessão aberta por um Hub = 404 `organization-not-found`, antes de tudo** (como `refuseHubSession` do `cloud`, que o `agents` não pode importar); corpo até
   2 MiB, `AGENT_POLICY_BODY_MAX_BYTES`): formato -> permissão -> `parseAgentRules` (422 `agent-policy-invalid` com
   `invalidRules`) -> `uow.run`: `OrganizationDirectory.lockForAgentPolicy(orgId)` (linha da organização `FOR NO KEY
   UPDATE`, **folha** como `lockAiBudget`) -> `nextPolicyVersion` (409 `agent-policy-version-stale`) -> INSERT -> auditoria

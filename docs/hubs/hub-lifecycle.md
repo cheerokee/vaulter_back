@@ -699,7 +699,8 @@ regras `allow`/`confirm`/`deny` sobre ferramentas, pastas e domínios) é gravad
   (`org.agents.manage`; 60/h por usuário; corpo de até **2 MiB**, `AGENT_POLICY_BODY_MAX_BYTES`, 500 regras no máximo)
   substitui a política inteira por `baseVersion + 1`: 409 `agent-policy-version-stale` se `baseVersion` não é a versão
   atual (`0` quando ainda não há política), 422 `agent-policy-invalid` com `invalidRules` (índices; `[]` quando o erro é a
-  lista). `GET .../agent-policy` (todo membro; 600/h) -> `{ organizationId, version, rules }` com a política inteira.
+  lista). **Sessão aberta por um Hub** (`POST /hub/user-sessions`) nunca troca a política: o `PUT` dá o mesmo 404
+  `organization-not-found` de quem está fora (o agente, com a sessão do dono, não reescreve a própria ACL). `GET .../agent-policy` (todo membro, inclusive sessão de Hub; 600/h) -> `{ organizationId, version, rules }` com a política inteira.
   Cada troca é auditada (`organization.agent_policy.changed`, só `{ version, ruleCount }`).
 
 ## 13. Reset de fábrica
