@@ -38,6 +38,13 @@ const isRecord = (v: unknown): v is Record<string, unknown> =>
 const mostRestrictive = (a: AgentEffect, b: AgentEffect): AgentEffect =>
   RESTRICTIVENESS[a] >= RESTRICTIVENESS[b] ? a : b;
 
+/**
+ * Case folding for the comparisons of `confirm` and `deny` rules (never `allow`). `toLowerCase` alone misses
+ * folds that case-insensitive file systems apply (long s, dotless i, ligatures, Kelvin sign); upper then lower
+ * catches them. Always applied to both sides, after NFC.
+ */
+const fold = (s: string) => s.toUpperCase().toLowerCase();
+
 // ---------------------------------------------------------------- paths
 
 /** Splits a normalized path into segments; '' (the released folder itself) has none. */
@@ -103,7 +110,7 @@ function folderRuleMatches(
   path: string[],
 ): boolean {
   const same = (a: string, b: string) =>
-    a === b || (effect !== 'allow' && a.toLowerCase() === b.toLowerCase());
+    a === b || (effect !== 'allow' && fold(a) === fold(b));
   if (
     rule.subtree
       ? path.length < rule.segments.length
@@ -172,8 +179,8 @@ function toolPatternMatches(
   name: string,
 ) {
   if (effect !== 'allow') {
-    pattern = pattern.toLowerCase();
-    name = name.toLowerCase();
+    pattern = fold(pattern);
+    name = fold(name);
   }
   return pattern.endsWith('*')
     ? name.startsWith(pattern.slice(0, -1))

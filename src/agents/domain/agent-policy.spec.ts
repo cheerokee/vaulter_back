@@ -268,6 +268,35 @@ describe('agent policy', () => {
     ).toBe('confirm');
   });
 
+  it('unicode case folding: restrictive rules match long s, dotless i and ligatures', () => {
+    const base = [
+      rule(all, tool('*'), 'allow'),
+      rule(all, folder('./'), 'allow'),
+    ];
+    const cases: [string, AgentEffect, string, AgentEffect][] = [
+      ['secret/', 'deny', '\u017fecret/x', 'deny'],
+      ['Secret/', 'deny', '\u017fecret/x', 'deny'],
+      ['office/', 'deny', 'o\ufb03ce/x', 'deny'],
+      ['admin/', 'confirm', 'adm\u0131n/x', 'confirm'],
+      ['k/', 'deny', '\u212a/x', 'deny'],
+    ];
+    for (const [ruleName, effect, path, expected] of cases) {
+      const rules = [...base, rule(all, folder(ruleName), effect)];
+      expect(callEffect(rules, U, read, { path })).toBe(expected);
+    }
+    // allow stays case-exact
+    expect(
+      callEffect(
+        [...base.slice(0, 1), rule(all, folder('secret/'), 'allow')],
+        U,
+        read,
+        {
+          path: '\u017fecret/x',
+        },
+      ),
+    ).toBe('deny');
+  });
+
   it('unicode: NFD and NFC spellings are the same path, in both directions', () => {
     const nfc = 'Relat\u00f3rios';
     const nfd = 'Relato\u0301rios';

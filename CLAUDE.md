@@ -1425,6 +1425,9 @@ registra a fonte `conversations`), `hubs` (`HubDirectory`: `ownerOf`,
   `GET /organizations/:orgId/agent/tools` (`org.agents.manage`: 404 não membro, 403 sem a permissão) devolve nomes e títulos
   das ferramentas dos agentes com vínculo aprovado, **sem hubId nem dono** (`HubDirectory.approvedHubIdsOf`, que o `hubs`
   exporta para isso). `HubDirectory.kindOf(hubId)` devolve o tipo (`null` se desconhecido).
+- **ACL (`agent-policy.ts`):** apertar `parseAgentRules`/`normalizeAgentPath` depois pode invalidar políticas já gravadas
+  (os avaliadores negam tudo para quem tem regra inválida, na organização inteira); mudança no validador exige um passo
+  de revalidação das políticas armazenadas.
 - **Testes:** `src/agents/domain/agent-tool.spec.ts`, e2e em `test/agents/tools.e2e-spec.ts`; helper `agentsKit(getApp)`
   em `test/support/agents-kit.ts` (`publishTools(hub, tools)`, `defaultTools()`: uma ferramenta de cada categoria).
 
