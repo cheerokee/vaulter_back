@@ -47,15 +47,18 @@ const segmentsOf = (path: string) => (path === '' ? [] : path.split('/'));
  * Normalizes a path relative to the released folder: backslashes become `/`, `.` segments and duplicate slashes go
  * away, `a/../b` resolves to `b`. Returns `null` (invalid) for: non-text or empty input, absolute paths (leading `/`,
  * which also covers UNC), drive letters, anything with `..` escaping the folder, control characters, `:` anywhere and
- * segments Windows would silently rewrite (trailing dot or space). `.` alone is the released folder itself (`''`).
+ * segments Windows would silently rewrite (trailing dot or space), Windows wildcards (`* ? < > | "`) and 8.3
+ * short-name aliases (`~1`). The text is NFC-normalized first. `.` alone is the released folder itself (`''`).
  */
 export function normalizeAgentPath(raw: unknown): string | null {
   if (typeof raw !== 'string' || raw.length === 0 || raw.length > PATH_MAX) {
     return null;
   }
+  // NFC, so a decomposed (NFD) spelling cannot dodge a rule written composed, and the other way around
+  const text = raw.normalize('NFC');
   // eslint-disable-next-line no-control-regex
-  if (/[\u0000-\u001f\u007f:]/.test(raw)) return null;
-  const unified = raw.replace(/\\/g, '/');
+  if (/[\u0000-\u001f\u007f:]/.test(text)) return null;
+  const unified = text.replace(/\\/g, '/');
   if (unified.startsWith('/')) return null;
   const out: string[] = [];
   for (const segment of unified.split('/')) {
@@ -65,6 +68,8 @@ export function normalizeAgentPath(raw: unknown): string | null {
       continue;
     }
     if (/[. ]$/.test(segment)) return null;
+    // Windows wildcards and 8.3 short-name aliases (`SECRET~1`) would reach folders the rules name differently
+    if (/[*?<>|"]/.test(segment) || /~\d+(\.|$)/.test(segment)) return null;
     out.push(segment);
   }
   return out.join('/');
@@ -89,8 +94,8 @@ const canonicalFolderRulePath = ({ segments, subtree }: FolderRulePath) =>
 
 /**
  * Whether a folder rule covers the path. A subtree rule covers the folder itself and everything under it; a rule
- * without the slash covers that exact path. Case is exact, except for `deny` rules, which also match ignoring case:
- * on Windows and macOS `Secret/` and `secret/` are the same folder and a deny must not be sidestepped by it.
+ * without the slash covers that exact path. Case is exact only for `allow` rules; `confirm` and `deny` also match ignoring
+ * case: on Windows and macOS `Secret/` and `secret/` are the same folder and a restriction must not be sidestepped.
  */
 function folderRuleMatches(
   rule: FolderRulePath,
@@ -98,7 +103,7 @@ function folderRuleMatches(
   path: string[],
 ): boolean {
   const same = (a: string, b: string) =>
-    a === b || (effect === 'deny' && a.toLowerCase() === b.toLowerCase());
+    a === b || (effect !== 'allow' && a.toLowerCase() === b.toLowerCase());
   if (
     rule.subtree
       ? path.length < rule.segments.length
@@ -160,10 +165,20 @@ function validToolPattern(raw: unknown): raw is string {
   return star === -1 || star === raw.length - 1;
 }
 
-const toolPatternMatches = (pattern: string, name: string) =>
-  pattern.endsWith('*')
+/** Exact for `allow`; `confirm` and `deny` also match ignoring case (same principle as folders). */
+function toolPatternMatches(
+  pattern: string,
+  effect: AgentEffect,
+  name: string,
+) {
+  if (effect !== 'allow') {
+    pattern = pattern.toLowerCase();
+    name = name.toLowerCase();
+  }
+  return pattern.endsWith('*')
     ? name.startsWith(pattern.slice(0, -1))
     : pattern === name;
+}
 
 // ---------------------------------------------------------------- parsing
 
@@ -259,9 +274,32 @@ export function parseAgentRules(raw: unknown): AgentRule[] {
 export function rulesFor(rules: AgentRule[], userId: string): AgentRule[] {
   return rules.filter(
     (r) =>
-      r.subject.kind === 'all' ||
-      (r.subject.kind === 'user' && r.subject.userId === userId),
+      isRecord(r) &&
+      isRecord(r.subject) &&
+      (r.subject.kind === 'all' ||
+        (r.subject.kind === 'user' && r.subject.userId === userId)),
   );
+}
+
+/**
+ * The applicable rules, re-validated (rules may not have gone through `parseAgentRules`). `null` when anything
+ * unreadable is found (unknown effect, bad pattern, bad path, malformed subject): the caller denies.
+ */
+function scoped(rules: AgentRule[], userId: string): AgentRule[] | null {
+  if (!Array.isArray(rules)) return null;
+  const out: AgentRule[] = [];
+  for (const raw of rules as unknown[]) {
+    if (!isRecord(raw) || !isRecord(raw.subject)) return null;
+    const rule = parseRule(raw);
+    if (rule === null) return null;
+    if (
+      rule.subject.kind === 'all' ||
+      (rule.subject.kind === 'user' && rule.subject.userId === userId)
+    ) {
+      out.push(rule);
+    }
+  }
+  return out;
 }
 
 type Candidate = { effect: AgentEffect; specificity: number; user: boolean };
@@ -290,10 +328,15 @@ export function toolEffect(
   userId: string,
   toolName: string,
 ): AgentEffect {
+  const applicable = scoped(rules, userId);
+  if (applicable === null) return 'deny';
   const candidates: Candidate[] = [];
-  for (const rule of rulesFor(rules, userId)) {
+  for (const rule of applicable) {
     const res = rule.resource;
-    if (res.kind !== 'tool' || !toolPatternMatches(res.pattern, toolName)) {
+    if (
+      res.kind !== 'tool' ||
+      !toolPatternMatches(res.pattern, rule.effect, toolName)
+    ) {
       continue;
     }
     candidates.push({
@@ -313,8 +356,10 @@ function pathEffect(rules: AgentRule[], userId: string, input: unknown) {
   const normalized = normalizeAgentPath(input.path);
   if (normalized === null) return 'deny';
   const path = segmentsOf(normalized);
+  const applicable = scoped(rules, userId);
+  if (applicable === null) return 'deny';
   const candidates: Candidate[] = [];
-  for (const rule of rulesFor(rules, userId)) {
+  for (const rule of applicable) {
     if (rule.resource.kind !== 'folder') continue;
     const parsed = parseFolderRulePath(rule.resource.path);
     if (!parsed || !folderRuleMatches(parsed, rule.effect, path)) continue;
@@ -332,8 +377,10 @@ function domainEffect(rules: AgentRule[], userId: string, input: unknown) {
   if (!isRecord(input)) return 'deny';
   const host = hostOfUrl(input.url);
   if (host === null) return 'deny';
+  const applicable = scoped(rules, userId);
+  if (applicable === null) return 'deny';
   const candidates: Candidate[] = [];
-  for (const rule of rulesFor(rules, userId)) {
+  for (const rule of applicable) {
     if (rule.resource.kind !== 'domain') continue;
     const parsed = parseHostRule(rule.resource.host);
     if (!parsed || !hostRuleMatches(parsed, host)) continue;

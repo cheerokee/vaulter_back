@@ -247,6 +247,103 @@ describe('agent policy', () => {
     expect(callEffect(rules, U, read, { path: 'x/../a/y' })).toBe('allow');
   });
 
+  it('confirm and deny match case variants; only allow is case-exact', () => {
+    const rules = [
+      rule(all, tool('*'), 'allow'),
+      rule(all, folder('./'), 'allow'),
+      rule(all, folder('Docs/Private/'), 'confirm'),
+    ];
+    expect(callEffect(rules, U, read, { path: 'docs/private/x' })).toBe(
+      'confirm',
+    );
+    expect(
+      toolEffect(
+        [
+          rule(all, tool('*'), 'allow'),
+          rule(all, tool('mcp:ERP/*'), 'confirm'),
+        ],
+        U,
+        'mcp:erp/x',
+      ),
+    ).toBe('confirm');
+  });
+
+  it('unicode: NFD and NFC spellings are the same path, in both directions', () => {
+    const nfc = 'Relat\u00f3rios';
+    const nfd = 'Relato\u0301rios';
+    const base = [
+      rule(all, tool('*'), 'allow'),
+      rule(all, folder('./'), 'allow'),
+    ];
+    for (const [ruleName, callName] of [
+      [nfc, nfd],
+      [nfd, nfc],
+    ]) {
+      const rules = [...base, rule(all, folder(`${ruleName}/`), 'deny')];
+      expect(callEffect(rules, U, read, { path: `${callName}/x` })).toBe(
+        'deny',
+      );
+    }
+    expect(normalizeAgentPath(nfd)).toBe(nfc);
+  });
+
+  it('unvalidated rules fail closed', () => {
+    const base = [
+      rule(all, tool('*'), 'allow'),
+      rule(all, folder('./'), 'allow'),
+    ];
+    const bad = [
+      rule(all, folder('/secret/'), 'deny'),
+      rule(all, tool('a*b'), 'allow'),
+      {
+        subject: all,
+        resource: tool('*'),
+        effect: 'Deny',
+      } as unknown as AgentRule,
+      {
+        subject: { kind: 'x' },
+        resource: tool('*'),
+        effect: 'allow',
+      } as unknown as AgentRule,
+      {
+        subject: user('o'),
+        resource: tool('*'),
+        effect: 'Deny',
+      } as unknown as AgentRule,
+      null as unknown as AgentRule,
+    ];
+    for (const b of bad) {
+      expect(callEffect([...base, b], U, read, { path: 'secret/x' })).toBe(
+        'deny',
+      );
+      expect(toolEffect([...base, b], U, 'mcp:erp/x')).toBe('deny');
+      expect(callEffect([...base, b], U, open, { url: 'https://x.com/' })).toBe(
+        'deny',
+      );
+    }
+  });
+
+  it('windows wildcards and 8.3 aliases are invalid paths', () => {
+    const rules = [
+      rule(all, tool('*'), 'allow'),
+      rule(all, folder('./'), 'allow'),
+      rule(all, folder('Secret Folder/'), 'deny'),
+    ];
+    for (const path of [
+      'SECRET~1/x',
+      'Secret*/x',
+      'a?/x',
+      'a<b',
+      'a|b',
+      'a"b',
+      'DOCUME~12.TXT',
+    ]) {
+      expect(normalizeAgentPath(path)).toBeNull();
+      expect(callEffect(rules, U, read, { path })).toBe('deny');
+    }
+    expect(normalizeAgentPath('a~b/c~d.txt')).toBe('a~b/c~d.txt');
+  });
+
   it('normalizeAgentPath turns backslashes into slashes and removes ./ and duplicate slashes', () => {
     expect(normalizeAgentPath('a\\b\\c.txt')).toBe('a/b/c.txt');
     expect(normalizeAgentPath('./a//b/./c')).toBe('a/b/c');
