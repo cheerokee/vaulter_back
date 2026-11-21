@@ -5,6 +5,7 @@ export const EnrollmentMapper = {
   toDomain(row: HubEnrollmentTypeormEntity): Enrollment {
     return Enrollment.restore(
       {
+        kind: row.kind,
         signingPublicKey: row.signingPublicKey,
         encryptionPublicKey: row.encryptionPublicKey,
         nonce: row.nonce,
@@ -22,6 +23,7 @@ export const EnrollmentMapper = {
     return {
       id: e.id,
       createdAt: e.createdAt,
+      kind: e.kind,
       signingPublicKey: e.signingPublicKey,
       encryptionPublicKey: e.encryptionPublicKey,
       nonce: e.nonce,

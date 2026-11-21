@@ -112,7 +112,7 @@ export class HubSyncSqlReader extends HubSyncReader {
         batches.push(
           await batch(
             m,
-            `SELECT id, name, owner_user_id, encryption_public_key, signing_public_key,
+            `SELECT id, name, kind, owner_user_id, encryption_public_key, signing_public_key,
                     deleted_at IS NOT NULL AS deleted, sync_version::text AS sv
                FROM hubs WHERE id = $1 AND sync_version > $2::bigint AND NOT sync_pending
               ORDER BY sync_version LIMIT $3`,
@@ -123,6 +123,7 @@ export class HubSyncSqlReader extends HubSyncReader {
                 { id: r.id },
                 {
                   name: r.name,
+                  kind: r.kind,
                   ownerUserId: r.owner_user_id,
                   encryptionPublicKey: r.encryption_public_key,
                   signingPublicKey: r.signing_public_key,

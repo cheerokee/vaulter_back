@@ -12,6 +12,7 @@ import { SpaceRoomService } from '../../spaces/application/space-room.service.js
 import { HubOrganizationRepository } from '../domain/hub-organization.repository.js';
 import { HubRoleRepository } from '../domain/hub-role.repository.js';
 import { HubSpaceRepository } from '../domain/hub-space.repository.js';
+import type { HubKind } from '../domain/hub.js';
 import { HubRepository } from '../domain/hub.repository.js';
 import { hubNotFound } from './hub-errors.js';
 import { HubPersonSessions } from './hub-person-sessions.js';
@@ -21,6 +22,7 @@ import { ownerAuditOrganization } from './owner-audit.js';
 export type HubAdministrationSummary = {
   hubId: string;
   name: string;
+  kind: HubKind;
   ownerUserId: string;
   deregistered: boolean;
   /** Organizations with an approved live link, in id order. */
@@ -157,6 +159,7 @@ export class HubAdministration {
       return {
         hubId: hub.id,
         name: hub.name,
+        kind: hub.kind,
         ownerUserId: hub.ownerUserId,
         deregistered: hub.isDeregistered,
         organizationIds: [...(await this.links.listActiveOrgIds(hubId))].sort(),

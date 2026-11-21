@@ -17,6 +17,7 @@ export function hubResponse(v: HubView) {
   return {
     id: v.id,
     name: v.name,
+    kind: v.kind,
     ownerUserId: v.ownerUserId,
     encryptionPublicKey: v.encryptionPublicKey,
     lastSeenAt: iso(v.lastSeenAt),

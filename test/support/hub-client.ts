@@ -31,16 +31,22 @@ const fail = (what: string, res: request.Response): never => {
   );
 };
 
-/** Body of `POST /hub-enrollments`, signed with `hub-enroll-v1` (any field overridable to forge a request). */
+/** Body of `POST /hub-enrollments`, signed with `hub-enroll-v1`, or `-v2` with `kind` (any field overridable to forge a request). */
 export async function enrollBody(
   identity: HubIdentity,
-  over: { nonce?: string; timestamp?: string; signature?: string } = {},
+  over: {
+    nonce?: string;
+    timestamp?: string;
+    signature?: string;
+    kind?: 'appliance' | 'pc';
+  } = {},
 ): Promise<{
   signingPublicKey: string;
   encryptionPublicKey: string;
   nonce: string;
   timestamp: string;
   signature: string;
+  kind?: 'appliance' | 'pc';
 }> {
   const nonce = over.nonce ?? randomBytes(16).toString('base64url');
   const timestamp = over.timestamp ?? new Date().toISOString();
@@ -49,8 +55,14 @@ export async function enrollBody(
     encryptionPublicKey: identity.encryptionPublicKey,
     nonce,
     timestamp,
+    ...(over.kind === undefined ? {} : { kind: over.kind }),
     signature:
-      over.signature ?? (await signEnrollment(identity, { nonce, timestamp })),
+      over.signature ??
+      (await signEnrollment(identity, {
+        nonce,
+        timestamp,
+        ...(over.kind === undefined ? {} : { kind: over.kind }),
+      })),
   };
 }
 
@@ -164,9 +176,11 @@ export function hubClient(getApp: () => INestApplication) {
   };
 
   /** First boot + enrollment: a fresh device identity and its claim code. */
-  const enrolled = async (): Promise<EnrolledHub> => {
+  const enrolled = async (
+    over: { kind?: 'appliance' | 'pc' } = {},
+  ): Promise<EnrolledHub> => {
     const identity = await createHubIdentity();
-    const res = await enroll(identity);
+    const res = await enroll(identity, over);
     if (res.status !== 201) fail('enroll', res);
     return {
       identity,
@@ -194,8 +208,12 @@ export function hubClient(getApp: () => INestApplication) {
      * The whole onboarding over HTTP: the device enrolls, the owner's app claims it by code (`POST /hubs/claim`) and
      * the device learns its hub id from the status.
      */
-    onboard: async (ownerToken: string, name = 'Sala'): Promise<ClaimedHub> => {
-      const device = await enrolled();
+    onboard: async (
+      ownerToken: string,
+      name = 'Sala',
+      opts: { kind?: 'appliance' | 'pc' } = {},
+    ): Promise<ClaimedHub> => {
+      const device = await enrolled(opts);
       const res = await http()
         .post('/hubs/claim')
         .set(bearer(ownerToken))

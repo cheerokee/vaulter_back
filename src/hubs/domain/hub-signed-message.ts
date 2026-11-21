@@ -4,6 +4,7 @@
  */
 export const HUB_LABELS = {
   enroll: 'hub-enroll-v1',
+  enrollV2: 'hub-enroll-v2',
   status: 'hub-status-v1',
   auth: 'hub-auth-v1',
 } as const;

@@ -200,6 +200,7 @@ describe('hubs over HTTP (e2e)', () => {
       expect(claim.body).toEqual({
         id: expect.any(String),
         name: 'Sala',
+        kind: 'appliance',
         ownerUserId: olivia.userId,
         encryptionPublicKey: identity.encryptionPublicKey,
         lastSeenAt: null,

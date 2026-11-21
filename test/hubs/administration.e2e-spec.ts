@@ -95,6 +95,7 @@ describe('HubAdministration (e2e)', () => {
     await expect(hubAdmin().summary(hub.hubId)).resolves.toEqual({
       hubId: hub.hubId,
       name: 'Sala',
+      kind: 'appliance',
       ownerUserId: olivia.userId,
       deregistered: false,
       organizationIds: [personalId, a.orgId].sort(),
@@ -186,6 +187,7 @@ describe('HubAdministration (e2e)', () => {
     await expect(hubAdmin().summary(hub.hubId)).resolves.toEqual({
       hubId: hub.hubId,
       name: 'Sala',
+      kind: 'appliance',
       ownerUserId: olivia.userId,
       deregistered: true,
       organizationIds: [],

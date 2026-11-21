@@ -2,7 +2,14 @@ import { DomainValidationError } from '../../shared/domain/errors.js';
 import { Entity } from '../../shared/domain/entity.js';
 import type { Enrollment } from './enrollment.js';
 
+/** What the Hub is: the appliance (Raspberry Pi) or a PC acting as a Hub. Declared at enrollment, immutable. */
+export type HubKind = 'appliance' | 'pc';
+
+export const HUB_KINDS: readonly HubKind[] = ['appliance', 'pc'];
+
 export type HubProps = {
+  /** Absent in restored props of old callers = `appliance`. */
+  kind?: HubKind;
   ownerUserId: string;
   name: string;
   signingPublicKey: string;
@@ -43,6 +50,7 @@ export class Hub extends Entity<HubProps> {
     return new Hub({
       ownerUserId: input.ownerUserId,
       name: assertHubName(input.name),
+      kind: input.enrollment.kind,
       signingPublicKey: input.enrollment.signingPublicKey,
       encryptionPublicKey: input.enrollment.encryptionPublicKey,
       lastSeenAt: null,
@@ -57,6 +65,9 @@ export class Hub extends Entity<HubProps> {
 
   get ownerUserId(): string {
     return this.props.ownerUserId;
+  }
+  get kind(): HubKind {
+    return this.props.kind ?? 'appliance';
   }
   get name(): string {
     return this.props.name;

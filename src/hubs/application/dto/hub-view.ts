@@ -1,9 +1,10 @@
-import type { Hub } from '../../domain/hub.js';
+import type { Hub, HubKind } from '../../domain/hub.js';
 import type { HubRole } from '../hub-access.js';
 
 export type HubView = {
   id: string;
   name: string;
+  kind: HubKind;
   ownerUserId: string;
   encryptionPublicKey: string;
   lastSeenAt: Date | null;
@@ -14,6 +15,7 @@ export function toHubView(hub: Hub): HubView {
   return {
     id: hub.id,
     name: hub.name,
+    kind: hub.kind,
     ownerUserId: hub.ownerUserId,
     encryptionPublicKey: hub.encryptionPublicKey,
     lastSeenAt: hub.lastSeenAt,

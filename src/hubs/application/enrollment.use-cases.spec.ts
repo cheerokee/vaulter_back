@@ -75,6 +75,7 @@ describe('EnrollHubUseCase', () => {
       timestamp: string;
       nonce: string;
       signer: HubIdentity;
+      kind: 'appliance' | 'pc';
     }> = {},
   ) => {
     const timestamp = over.timestamp ?? iso(0);
@@ -84,9 +85,62 @@ describe('EnrollHubUseCase', () => {
       encryptionPublicKey: hub.encryptionPublicKey,
       nonce,
       timestamp,
-      signature: await signEnrollment(over.signer ?? hub, { nonce, timestamp }),
+      ...(over.kind ? { kind: over.kind } : {}),
+      signature: await signEnrollment(over.signer ?? hub, {
+        nonce,
+        timestamp,
+        ...(over.kind ? { kind: over.kind } : {}),
+      }),
     };
   };
+
+  it('accepts hub-enroll-v2 with kind pc and stores it on the enrollment', async () => {
+    const spy = vi.spyOn(verifier, 'verify');
+    await useCase().execute(await input({ kind: 'pc' }));
+    const stored = enrollments.create.mock.calls[0]![0] as Enrollment;
+    expect(stored.kind).toBe('pc');
+    expect(spy).toHaveBeenCalledWith(
+      'hub-enroll-v2',
+      {
+        encryptionPublicKey: hub.encryptionPublicKey,
+        kind: 'pc',
+        nonce: NONCE,
+        signingPublicKey: hub.signingPublicKey,
+        timestamp: iso(0),
+      },
+      expect.any(String),
+      hub.signingPublicKey,
+    );
+    spy.mockRestore();
+  });
+
+  it('treats a body without kind as hub-enroll-v1 appliance', async () => {
+    const spy = vi.spyOn(verifier, 'verify');
+    await useCase().execute(await input());
+    const stored = enrollments.create.mock.calls[0]![0] as Enrollment;
+    expect(stored.kind).toBe('appliance');
+    const [label, fields] = spy.mock.calls[0]!;
+    expect(label).toBe('hub-enroll-v1');
+    expect(fields).not.toHaveProperty('kind');
+    spy.mockRestore();
+  });
+
+  it('rejects a v2 signature presented without kind', async () => {
+    const signed = await input({ kind: 'pc' });
+    const { kind: _kind, ...withoutKind } = signed;
+    await expect(useCase().execute(withoutKind)).rejects.toMatchObject({
+      constructor: UnauthenticatedError,
+      code: 'hub-signature-invalid',
+    });
+    expect(enrollments.create).not.toHaveBeenCalled();
+  });
+
+  it('rejects a kind that is signed but unknown', async () => {
+    await expect(
+      useCase().execute({ ...(await input()), kind: 'toaster' as never }),
+    ).rejects.toMatchObject({ code: 'kind-invalid' });
+    expect(enrollments.create).not.toHaveBeenCalled();
+  });
 
   it('creates a pending enrollment and returns the code once (only its hash is stored)', async () => {
     const result = await useCase().execute(await input());

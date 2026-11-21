@@ -1,5 +1,5 @@
 import { byteCount } from '../../../shared/infra/db/byte-count.js';
-import { Hub } from '../../domain/hub.js';
+import { Hub, type HubKind } from '../../domain/hub.js';
 import type { HubTypeormEntity } from './hub.entity.js';
 
 /** Raw row of `SELECT h.* FROM hubs h` (snake_case, as the pg driver returns it). */
@@ -7,6 +7,7 @@ export type HubRow = {
   id: string;
   owner_user_id: string;
   name: string;
+  kind: HubKind;
   signing_public_key: string;
   encryption_public_key: string;
   last_seen_at: Date | null;
@@ -22,6 +23,7 @@ export const HubMapper = {
       {
         ownerUserId: row.ownerUserId,
         name: row.name,
+        kind: row.kind,
         signingPublicKey: row.signingPublicKey,
         encryptionPublicKey: row.encryptionPublicKey,
         lastSeenAt: row.lastSeenAt,
@@ -42,6 +44,7 @@ export const HubMapper = {
       {
         ownerUserId: row.owner_user_id,
         name: row.name,
+        kind: row.kind,
         signingPublicKey: row.signing_public_key,
         encryptionPublicKey: row.encryption_public_key,
         lastSeenAt: row.last_seen_at,
@@ -64,6 +67,7 @@ export const HubMapper = {
       createdAt: hub.createdAt,
       ownerUserId: hub.ownerUserId,
       name: hub.name,
+      kind: hub.kind,
       signingPublicKey: hub.signingPublicKey,
       encryptionPublicKey: hub.encryptionPublicKey,
       lastSeenAt: hub.lastSeenAt,

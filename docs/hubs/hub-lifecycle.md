@@ -48,9 +48,16 @@ quem implementa o lado do Hub (`vaulter-hub-back`) e o app.
   "encryptionPublicKey": "<43 chars>",
   "nonce": "<16 bytes aleatórios, 22 chars>",
   "timestamp": "2026-11-02T12:00:00.000Z",
-  "signature": "<86 chars: hub-enroll-v1 sobre as duas chaves, o nonce e o timestamp>"
+  "kind": "pc",
+  "signature": "<86 chars: hub-enroll-v1 sobre as duas chaves, o nonce e o timestamp; com kind, hub-enroll-v2 e o kind também>"
 }
 ```
+
+`kind` é opcional: `"appliance"` ou `"pc"` (outro valor é 422 `validation-failed`). Sem `kind` vale o `hub-enroll-v1` e o
+Hub é um `appliance`; com `kind` a assinatura é `hub-enroll-v2` (o tipo entra nos campos assinados). Uma assinatura v2
+sem `kind` no corpo é 401 `hub-signature-invalid`. O `kind` vai da apresentação para o Hub no claim e é imutável
+(`hubs.kind` fica fora do GRANT de UPDATE); aparece em `GET /hubs`, `GET /hubs/:id`, no item `hub` do `GET /hub/sync` e
+no resumo da plataforma.
 
 Resposta 201:
 

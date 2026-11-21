@@ -1,6 +1,7 @@
 import { Check, Column, Entity, Index, JoinColumn, ManyToOne } from 'typeorm';
 import { BaseTypeormEntity } from '../../../shared/infra/db/base.entity.js';
 import type { EnrollmentStatus } from '../../domain/enrollment.js';
+import type { HubKind } from '../../domain/hub.js';
 import { HubTypeormEntity } from './hub.entity.js';
 
 // Apresentação de um Hub sem dono. Só do backend: sem RLS (não é dado de cliente; só a chave/o hash a alcançam)
@@ -28,10 +29,14 @@ import { HubTypeormEntity } from './hub.entity.js';
   unique: true,
   where: `"status" = 'pending'`,
 })
+@Check('ck_hub_enrollments_kind', `"kind" IN ('appliance', 'pc')`)
 @Index('fk_hub_enrollments_hubs_idx', ['claimedHubId'])
 export class HubEnrollmentTypeormEntity extends BaseTypeormEntity {
   @Column({ type: 'varchar', length: 64 })
   signingPublicKey!: string;
+
+  @Column({ type: 'varchar', length: 16, default: 'appliance' })
+  kind!: HubKind;
 
   @Column({ type: 'text' })
   encryptionPublicKey!: string;

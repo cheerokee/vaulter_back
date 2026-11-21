@@ -30,6 +30,7 @@ export class HubEnrollmentsController {
       encryptionPublicKey: dto.encryptionPublicKey,
       nonce: dto.nonce,
       timestamp: dto.timestamp,
+      ...(dto.kind === undefined ? {} : { kind: dto.kind }),
       signature: dto.signature,
     });
     return {

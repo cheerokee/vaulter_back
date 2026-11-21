@@ -193,6 +193,7 @@ describe('hub sync (e2e)', () => {
         data: {
           id: hub.hubId,
           name: 'Sala',
+          kind: 'appliance',
           ownerUserId: olivia.userId,
           encryptionPublicKey: hub.identity.encryptionPublicKey,
           signingPublicKey: hub.identity.signingPublicKey,

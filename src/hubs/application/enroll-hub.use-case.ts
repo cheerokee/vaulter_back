@@ -16,6 +16,7 @@ import {
   isFreshHubTimestamp,
   isIsoUtcTimestamp,
 } from '../domain/hub-signed-message.js';
+import { HUB_KINDS, type HubKind } from '../domain/hub.js';
 import { HubRepository } from '../domain/hub.repository.js';
 import { UnitOfWork } from '../../shared/infra/db/unit-of-work.js';
 import { HubCodeHasher } from './ports/hub-code-hasher.js';
@@ -28,7 +29,11 @@ export type EnrollHubInput = {
   nonce: string;
   /** ISO 8601 UTC; must be within ±5 min of the server clock. */
   timestamp: string;
-  /** Ed25519 over `hub-enroll-v1` and the four fields above. */
+  /**
+   * Declared kind. Present = `hub-enroll-v2` (the signature covers it); absent = `hub-enroll-v1`, an appliance.
+   */
+  kind?: HubKind;
+  /** Ed25519 over `hub-enroll-v1` (or `hub-enroll-v2` with `kind`) and the fields above. */
   signature: string;
 };
 
@@ -86,9 +91,20 @@ export class EnrollHubUseCase {
         'The timestamp is too far from the server clock.',
       );
     }
+    if (input.kind !== undefined && !HUB_KINDS.includes(input.kind)) {
+      throw new DomainValidationError(
+        'kind-invalid',
+        'The kind must be appliance or pc.',
+      );
+    }
     const signed = await this.verifier.verify(
-      HUB_LABELS.enroll,
-      { ...keys, nonce, timestamp: input.timestamp },
+      input.kind === undefined ? HUB_LABELS.enroll : HUB_LABELS.enrollV2,
+      {
+        ...keys,
+        nonce,
+        timestamp: input.timestamp,
+        ...(input.kind === undefined ? {} : { kind: input.kind }),
+      },
       input.signature,
       keys.signingPublicKey,
     );
@@ -109,6 +125,7 @@ export class EnrollHubUseCase {
         nonce,
         codeHash: await this.codes.hash(claimCode),
         now,
+        kind: input.kind ?? 'appliance',
       });
       try {
         // Uma transação: se a gravação falhar (ex.: nonce repetido de um replay), a pendente anterior não expira.

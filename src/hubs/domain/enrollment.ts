@@ -1,5 +1,6 @@
 import { DomainValidationError } from '../../shared/domain/errors.js';
 import { Entity } from '../../shared/domain/entity.js';
+import type { HubKind } from './hub.js';
 import {
   assertEncryptionPublicKey,
   assertSigningPublicKey,
@@ -23,6 +24,8 @@ export function claimCodeInvalid(): DomainValidationError {
 export type EnrollmentStatus = 'pending' | 'claimed' | 'expired';
 
 export type EnrollmentProps = {
+  /** Declared by `hub-enroll-v2`; a v1 presentation is an `appliance`. */
+  kind?: HubKind;
   signingPublicKey: string;
   encryptionPublicKey: string;
   nonce: string;
@@ -39,6 +42,7 @@ export class Enrollment extends Entity<EnrollmentProps> {
     nonce: string;
     codeHash: string;
     now: Date;
+    kind?: HubKind;
   }): Enrollment {
     if (typeof input.nonce !== 'string' || input.nonce.length === 0) {
       throw new DomainValidationError(
@@ -47,6 +51,7 @@ export class Enrollment extends Entity<EnrollmentProps> {
       );
     }
     return new Enrollment({
+      kind: input.kind ?? 'appliance',
       signingPublicKey: assertSigningPublicKey(input.keys.signingPublicKey),
       encryptionPublicKey: assertEncryptionPublicKey(
         input.keys.encryptionPublicKey,
@@ -64,6 +69,9 @@ export class Enrollment extends Entity<EnrollmentProps> {
     return new Enrollment(props, id);
   }
 
+  get kind(): HubKind {
+    return this.props.kind ?? 'appliance';
+  }
   get signingPublicKey(): string {
     return this.props.signingPublicKey;
   }

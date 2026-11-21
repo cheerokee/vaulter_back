@@ -19,6 +19,7 @@ import {
   ValidateNested,
 } from 'class-validator';
 import { CursorPaginationQuery } from '../../../../shared/infra/http/cursor-pagination.query.js';
+import { HUB_KINDS, type HubKind } from '../../../domain/hub.js';
 import {
   HUB_STORAGE_CAPACITY_MAX_BYTES,
   HUB_STORAGE_CAPACITY_MIN_BYTES,
@@ -71,7 +72,12 @@ export class EnrollHubDto {
   @MaxLength(64)
   timestamp!: string;
 
-  /** `hub-enroll-v1` over the keys, the nonce and the timestamp (docs/crypto/hub-identity.md). */
+  /** Absent = `hub-enroll-v1` (appliance). Present = `hub-enroll-v2`: the signature covers it. */
+  @IsOptional()
+  @IsIn(HUB_KINDS)
+  kind?: HubKind;
+
+  /** `hub-enroll-v1` (or `-v2` with `kind`) over the keys, the nonce and the timestamp (docs/crypto/hub-identity.md). */
   @IsString()
   @Matches(SIGNATURE)
   signature!: string;

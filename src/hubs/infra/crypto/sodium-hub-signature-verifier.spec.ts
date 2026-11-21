@@ -25,6 +25,10 @@ const VECTOR = {
     '8wQttPW9-f7bcvb-5wDeT6bwGU8ZHApDzVzrIPUCBmu79BY7I48NLHSkt20zeXRvzwBAYj8zOahLR-t4Si94Ag',
 };
 
+// hub-enroll-v2 vector (same keys, `kind: "pc"`), docs/crypto/hub-identity.md.
+const VECTOR_V2_SIGNATURE =
+  'TWEcP6sMoCj179Bqw9l58KHUqk_acCcYH9juHtY3Ab8ctNQe9YcQHbKOh9A9UzIgOhRipTWeIf0qFlLdKuOKDQ';
+
 describe('SodiumHubSignatureVerifier', () => {
   it('has a random, full-order decoy key that never validates a real signature', async () => {
     const sodium = await getSodium();
@@ -65,6 +69,32 @@ describe('SodiumHubSignatureVerifier', () => {
         VECTOR.signingPublicKey,
       ),
     ).toBe(true);
+  });
+
+  it('verifies the hub-enroll-v2 vector, which only holds with the kind and the v2 label', async () => {
+    const { signature: _v1, ...v1 } = VECTOR;
+    const fields = { ...v1, kind: 'pc' };
+    const id = await createHubIdentity(SEED);
+    expect(
+      await signEnrollment(id, {
+        nonce: VECTOR.nonce,
+        timestamp: VECTOR.timestamp,
+        kind: 'pc',
+      }),
+    ).toBe(VECTOR_V2_SIGNATURE);
+    const verify = (label: string, f: HubSignedFields) =>
+      verifier.verify(
+        label as never,
+        f,
+        VECTOR_V2_SIGNATURE,
+        VECTOR.signingPublicKey,
+      );
+    expect(await verify(HUB_LABELS.enrollV2, fields)).toBe(true);
+    expect(await verify(HUB_LABELS.enroll, fields)).toBe(false);
+    expect(await verify(HUB_LABELS.enrollV2, v1)).toBe(false);
+    expect(
+      await verify(HUB_LABELS.enrollV2, { ...fields, kind: 'appliance' }),
+    ).toBe(false);
   });
 
   it('verifies status and auth messages regardless of key order', async () => {

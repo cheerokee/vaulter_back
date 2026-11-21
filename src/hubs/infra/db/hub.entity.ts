@@ -7,6 +7,7 @@ import {
   ManyToOne,
   Unique,
 } from 'typeorm';
+import type { HubKind } from '../../domain/hub.js';
 import { CommitOrderedSyncableTypeormEntity } from '../../../shared/infra/db/base.entity.js';
 
 // Sincronizável e sem organization_id (o Hub não é de organização). RLS (migration CreateHubs): dono, o próprio
@@ -20,6 +21,7 @@ import { CommitOrderedSyncableTypeormEntity } from '../../../shared/infra/db/bas
 @Index('fk_hubs_users_idx', ['ownerUserId'])
 @Index('ix_hubs_sync_version', ['syncVersion'])
 @Check('ck_hubs_storage_capacity_bytes', `"storage_capacity_bytes" > 0`)
+@Check('ck_hubs_kind', `"kind" IN ('appliance', 'pc')`)
 export class HubTypeormEntity extends CommitOrderedSyncableTypeormEntity {
   @Column({ type: 'uuid' })
   ownerUserId!: string;
@@ -34,6 +36,10 @@ export class HubTypeormEntity extends CommitOrderedSyncableTypeormEntity {
 
   @Column({ type: 'varchar', length: 255 })
   name!: string;
+
+  // Declarado na apresentação (hub-enroll-v2), imutável: fora do GRANT de UPDATE por coluna.
+  @Column({ type: 'varchar', length: 16, default: 'appliance' })
+  kind!: HubKind;
 
   @Column({ type: 'text' })
   encryptionPublicKey!: string;

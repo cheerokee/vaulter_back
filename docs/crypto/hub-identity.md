@@ -61,6 +61,7 @@ assinatura = crypto_sign_detached(bytes, chavePrivadaDeAssinatura)
 | Rótulo          | Campos assinados                                                | Uso                 |
 | --------------- | --------------------------------------------------------------- | ------------------- |
 | `hub-enroll-v1` | `signingPublicKey`, `encryptionPublicKey`, `nonce`, `timestamp` | apresentação do Hub |
+| `hub-enroll-v2` | os do v1 mais `kind` (`appliance` ou `pc`) | apresentação do Hub, declarando o tipo |
 | `hub-status-v1` | `enrollmentId`, `timestamp`                                     | consulta de status  |
 | `hub-auth-v1`   | `hubId`, `challenge`                                            | autenticação do Hub |
 
@@ -100,6 +101,23 @@ Semente: bytes `00 01 02 ... 1f` (32 bytes). Chaves: `crypto_sign_seed_keypair(s
 
 Ed25519 é determinístico: a mesma entrada gera sempre esta assinatura. O spec
 `sodium-hub-signature-verifier.spec.ts` confere o vetor.
+
+### Vetor do `hub-enroll-v2`
+
+Mesma semente, mesmas chaves, `nonce` e `timestamp` do vetor acima, mais `kind: "pc"`.
+
+- rótulo: `hub-enroll-v2`
+- JSON canônico:
+
+```
+{"encryptionPublicKey":"RwHQhIhFH1RaQJ-1iuPlhYHKQKw_fxFGmM1x3qxzygE","kind":"pc","nonce":"AAECAwQFBgcICQoLDA0ODw","signingPublicKey":"A6EHv_POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg","timestamp":"2026-11-01T12:00:00.000Z"}
+```
+
+- assinatura (base64url): `TWEcP6sMoCj179Bqw9l58KHUqk_acCcYH9juHtY3Ab8ctNQe9YcQHbKOh9A9UzIgOhRipTWeIf0qFlLdKuOKDQ`
+- assinatura (hex): `4d611c3fab0ca028f5efd06ac3d979f0a1d4aa4fda7027181fd8ee1ed63701bf1cb4d41ef587101db28e87d03d5332203a1462a5359e21fd2a1652dd2ae38a0d`
+
+O `hub-enroll-v1` segue válido (sem `kind` no corpo, o Hub é um `appliance`); o `v2` só vale com `kind` no corpo, e uma
+assinatura v2 apresentada sem `kind` é recusada como assinatura inválida. O spec do verificador confere os dois vetores.
 
 ## Versões
 

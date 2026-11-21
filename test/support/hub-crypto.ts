@@ -54,13 +54,18 @@ export async function signHubMessage(
 
 export function signEnrollment(
   identity: HubIdentity,
-  fields: { nonce: string; timestamp: string },
+  fields: { nonce: string; timestamp: string; kind?: 'appliance' | 'pc' },
 ): Promise<string> {
-  return signHubMessage(identity, HUB_LABELS.enroll, {
-    signingPublicKey: identity.signingPublicKey,
-    encryptionPublicKey: identity.encryptionPublicKey,
-    ...fields,
-  });
+  // With `kind`: hub-enroll-v2 (the kind is signed). Without: hub-enroll-v1.
+  return signHubMessage(
+    identity,
+    fields.kind === undefined ? HUB_LABELS.enroll : HUB_LABELS.enrollV2,
+    {
+      signingPublicKey: identity.signingPublicKey,
+      encryptionPublicKey: identity.encryptionPublicKey,
+      ...fields,
+    },
+  );
 }
 
 export function signStatus(
