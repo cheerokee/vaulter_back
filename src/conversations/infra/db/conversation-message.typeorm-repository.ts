@@ -1,11 +1,15 @@
 import { Injectable } from '@nestjs/common';
 import { DataSource, IsNull } from 'typeorm';
-import { currentManager } from '../../../shared/infra/db/unit-of-work.js';
+import {
+  currentManager,
+  runWithContext,
+} from '../../../shared/infra/db/unit-of-work.js';
 import type { ConversationScope } from '../../domain/conversation-actor.js';
 import { conversationNotFound } from '../../domain/conversation-errors.js';
 import {
   ConversationMessageRepository,
   type AckedBy,
+  type ExpiredAgentLease,
 } from '../../domain/conversation-message.repository.js';
 import type { ConversationMessage } from '../../domain/conversation-message.js';
 import { ConversationMessageTypeormEntity } from './conversation-message.entity.js';
@@ -62,6 +66,7 @@ export class ConversationMessageTypeormRepository extends ConversationMessageRep
           ackedAt: message.ackedAt,
           ackedByHubId: message.ackedByHubId,
           ackedByCloud: message.ackedByCloud,
+          ackedLeaseUntil: message.ackedLeaseUntil,
           encryptedBody: message.encryptedBody,
           deletedAt: message.deletedAt,
         },
@@ -103,7 +108,7 @@ export class ConversationMessageTypeormRepository extends ConversationMessageRep
       m.query(
         `UPDATE conversation_messages msg
             SET pending = true, acked_at = NULL, acked_by_hub_id = NULL, acked_by_cloud = false,
-                requeued_at = clock_timestamp(), updated_at = now()
+                acked_lease_until = NULL, requeued_at = clock_timestamp(), updated_at = now()
           WHERE msg.organization_id = $1 AND msg.conversation_id = $2 AND ${acked}
             AND msg.deleted_at IS NULL
             AND NOT EXISTS (
@@ -114,7 +119,85 @@ export class ConversationMessageTypeormRepository extends ConversationMessageRep
         params,
       ),
     );
-    return updatedRows<{ id: string }>(raw).map((r) => r.id);
+    const ids = updatedRows<{ id: string }>(raw).map((r) => r.id);
+    // The hub stops being the executor: the agent leases it still holds here (answered messages) go with it, so a
+    // lease always belongs to the current executor (the lease sweep reads the conversation in that hub's context).
+    if (by.kind === 'hub') {
+      await inScope(this.dataSource, scope, (m) =>
+        m.query(
+          `UPDATE conversation_messages SET acked_lease_until = NULL, updated_at = now()
+            WHERE organization_id = $1 AND conversation_id = $2 AND acked_by_hub_id = $3
+              AND acked_lease_until IS NOT NULL`,
+          params,
+        ),
+      );
+    }
+    return ids;
+  }
+
+  // Contexto `app.agent_lease_sweep` (migration ConversationAgentAckLease): só as linhas com prazo, de toda organização.
+  async listExpiredAgentLeases(limit: number): Promise<ExpiredAgentLease[]> {
+    const rows: {
+      organization_id: string;
+      conversation_id: string;
+      acked_by_hub_id: string;
+    }[] = await runWithContext(
+      this.dataSource,
+      {
+        organizationId: '',
+        userId: '',
+        hubId: '',
+        cloudExecutorSpaceId: '',
+        agentLeaseSweep: 'on',
+      },
+      (m) =>
+        m.query(
+          `SELECT organization_id, conversation_id, acked_by_hub_id
+             FROM conversation_messages
+            WHERE acked_lease_until IS NOT NULL AND NOT pending AND acked_lease_until <= clock_timestamp()
+            GROUP BY organization_id, conversation_id, acked_by_hub_id
+            ORDER BY min(acked_lease_until), conversation_id
+            LIMIT $1`,
+          [limit],
+        ),
+    );
+    return rows.map((r) => ({
+      organizationId: r.organization_id,
+      conversationId: r.conversation_id,
+      hubId: r.acked_by_hub_id,
+    }));
+  }
+
+  // "Respondida pelo executor" = mensagem do Hub que confirmou DEPOIS do ack (spec pc-agent §5.3), como o `answeredAfter`
+  // do turno: o agente responde uma por vez, depois do próprio ack.
+  async requeueExpiredAgentLeases(
+    scope: ConversationScope,
+    conversationId: string,
+  ): Promise<string[]> {
+    return inScope(this.dataSource, scope, async (m) => {
+      const raw: unknown = await m.query(
+        `UPDATE conversation_messages msg
+            SET pending = true, acked_at = NULL, acked_by_hub_id = NULL, acked_by_cloud = false,
+                acked_lease_until = NULL, requeued_at = clock_timestamp(), updated_at = now()
+          WHERE msg.organization_id = $1 AND msg.conversation_id = $2
+            AND msg.acked_lease_until IS NOT NULL AND msg.acked_lease_until <= clock_timestamp()
+            AND msg.author_user_id IS NOT NULL AND msg.deleted_at IS NULL
+            AND NOT EXISTS (
+              SELECT 1 FROM conversation_messages reply
+               WHERE reply.organization_id = msg.organization_id AND reply.conversation_id = msg.conversation_id
+                 AND reply.author_hub_id = msg.acked_by_hub_id AND reply.sent_at > msg.acked_at)
+        RETURNING msg.id`,
+        [scope.organizationId, conversationId],
+      );
+      // What is left expired was answered (or tombstoned): only the lease goes, the ack stays.
+      await m.query(
+        `UPDATE conversation_messages SET acked_lease_until = NULL, updated_at = now()
+          WHERE organization_id = $1 AND conversation_id = $2
+            AND acked_lease_until IS NOT NULL AND acked_lease_until <= clock_timestamp()`,
+        [scope.organizationId, conversationId],
+      );
+      return updatedRows<{ id: string }>(raw).map((r) => r.id);
+    });
   }
 
   // Mesma regra do `requeueAckedBy` (mensagem do autor depois da confirmada, com ou sem lápide).

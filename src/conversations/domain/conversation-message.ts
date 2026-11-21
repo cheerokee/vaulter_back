@@ -5,7 +5,10 @@ import {
   messageTooLarge,
   notConversationOwner,
 } from './conversation-errors.js';
-import { MAX_MESSAGE_BYTES } from './conversation-limits.js';
+import {
+  AGENT_ACK_LEASE_MS,
+  MAX_MESSAGE_BYTES,
+} from './conversation-limits.js';
 import { assertDeviceId, assertKeyVersion } from './device-id.js';
 import { assertEncryptedBlob } from './encrypted-blob.js';
 
@@ -35,6 +38,11 @@ export type ConversationMessageProps = {
    * away instead of waiting for the Hub (spec active-cloud §4.3). Set when sent, never changed.
    */
   cloudAnswerRequested: boolean;
+  /**
+   * Until when the ack of a `pc` hub (the agent) holds it (`AGENT_ACK_LEASE_MS`, database clock); null for any other
+   * ack and while pending. Past it, without an answer of that hub, the lease sweep requeues it.
+   */
+  ackedLeaseUntil?: Date | null;
   /** When it last went back to the queue (an executor that acked it stopped being the executor); null if never. */
   requeuedAt?: Date | null;
   sentAt: Date;
@@ -126,21 +134,53 @@ export class ConversationMessage extends Entity<ConversationMessageProps> {
 
   /**
    * The executor took it: the Hub or the cloud (reserve executor). The first ack wins (never both); returns whether this
-   * call changed anything.
+   * call changed anything. `agentLease`: the hub is a `pc` (the agent), whose ack holds the message only for
+   * `AGENT_ACK_LEASE_MS` from `now` (spec pc-agent §5.3).
    */
   ack(
     now: Date,
     by: { kind: 'hub'; hubId: string } | { kind: 'cloud' },
+    options: { agentLease?: boolean } = {},
   ): boolean {
     if (!this.props.pending) return false;
+    const agentLease = by.kind === 'hub' && (options.agentLease ?? false);
     this.props = {
       ...this.props,
       pending: false,
       ackedAt: now,
       ackedByHubId: by.kind === 'hub' ? by.hubId : null,
       ackedByCloud: by.kind === 'cloud',
+      ackedLeaseUntil: agentLease
+        ? new Date(now.getTime() + AGENT_ACK_LEASE_MS)
+        : null,
     };
     return true;
+  }
+
+  /**
+   * The agent's turn on this message at `now`: a live person's message acknowledged by `hubId` with a lease still
+   * running. Whether the hub already answered it is the repository's to tell (`answeredAfter`).
+   */
+  isAgentTurnOf(hubId: string, now: Date): boolean {
+    const until = this.props.ackedLeaseUntil ?? null;
+    return (
+      this.props.authorUserId !== null &&
+      !this.props.deletedAt &&
+      !this.props.pending &&
+      this.props.ackedByHubId === hubId &&
+      until !== null &&
+      now.getTime() < until.getTime()
+    );
+  }
+
+  /** Moves the agent's lease to `now` + `AGENT_ACK_LEASE_MS` (the caller checked `isAgentTurnOf`). */
+  renewAgentLease(now: Date): Date {
+    if (this.props.ackedByHubId === null || !this.props.ackedLeaseUntil) {
+      throw new Error('renewAgentLease: only a message under an agent lease.');
+    }
+    const until = new Date(now.getTime() + AGENT_ACK_LEASE_MS);
+    this.props = { ...this.props, ackedLeaseUntil: until };
+    return until;
   }
 
   /** Each one deletes only their own messages (the executor, its own): 403 otherwise. */
@@ -202,6 +242,9 @@ export class ConversationMessage extends Entity<ConversationMessageProps> {
   }
   get cloudAnswerRequested(): boolean {
     return this.props.cloudAnswerRequested;
+  }
+  get ackedLeaseUntil(): Date | null {
+    return this.props.ackedLeaseUntil ?? null;
   }
   get requeuedAt(): Date | null {
     return this.props.requeuedAt ?? null;

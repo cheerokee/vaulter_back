@@ -1,4 +1,5 @@
 import type { ConversationCloudReserve } from './conversation-cloud-reserve.js';
+import type { HubDirectory } from '../../hubs/application/hub-directory.js';
 import type { SpaceCloud } from '../../spaces/application/space-cloud.js';
 import type { HubAuthContext } from '../../shared/application/hub-auth-context.js';
 import {
@@ -12,6 +13,7 @@ import type { UnitOfWork } from '../../shared/infra/db/unit-of-work.js';
 import type { SpaceStorage } from '../../spaces/application/space-storage.js';
 import { SpaceStorageUsage } from '../../spaces/application/space-storage-usage.js';
 import type { ConversationScope } from '../domain/conversation-actor.js';
+import { AGENT_ACK_LEASE_MS } from '../domain/conversation-limits.js';
 import { ConversationMessage } from '../domain/conversation-message.js';
 import type { ConversationMessageRepository } from '../domain/conversation-message.repository.js';
 import type { ConversationRepository } from '../domain/conversation.repository.js';
@@ -174,9 +176,12 @@ describe('message use cases', () => {
     as<SpaceCloud>({}),
     as<ConversationCloudReserve>({ signal: vi.fn() }),
   );
+  let hubKind: 'appliance' | 'pc' = 'appliance';
+  const hubs = { kindOf: vi.fn(async () => hubKind) };
   const ack = new AckMessageUseCase(
     as<ConversationAccess>(access),
     as<ConversationMessageRepository>(messages),
+    as<HubDirectory>(hubs),
     as<UnitOfWork>(uow),
   );
   const del = new DeleteMessageUseCase(
@@ -200,6 +205,7 @@ describe('message use cases', () => {
     current = conversation();
     quotaBytes = 10 * GiB;
     otherUsage = 0;
+    hubKind = 'appliance';
   });
 
   describe('send', () => {
@@ -403,6 +409,23 @@ describe('message use cases', () => {
       expect(messages.save).toHaveBeenCalledTimes(1);
       await ack.execute(hub, CONV, m.id);
       expect(messages.save).toHaveBeenCalledTimes(1);
+    });
+
+    it('an ack by a pc hub sets acked_lease_until = acked_at + 15 min; an appliance ack leaves it null', async () => {
+      const appliance = stored({ kind: 'user', userId: ANA });
+      found.set(appliance.id, appliance);
+      await ack.execute(hub, CONV, appliance.id);
+      expect(appliance.ackedLeaseUntil).toBeNull();
+
+      hubKind = 'pc';
+      const agent = stored({ kind: 'user', userId: ANA });
+      found.set(agent.id, agent);
+      await ack.execute(hub, CONV, agent.id);
+      expect(hubs.kindOf).toHaveBeenLastCalledWith(HUB);
+      expect(agent.ackedAt).toEqual(DB_NOW);
+      expect(agent.ackedLeaseUntil).toEqual(
+        new Date(DB_NOW.getTime() + AGENT_ACK_LEASE_MS),
+      );
     });
 
     it('a hub that is not the executor: 404 conversation-not-found; unknown, deleted or of another conversation: 404 message-not-found', async () => {

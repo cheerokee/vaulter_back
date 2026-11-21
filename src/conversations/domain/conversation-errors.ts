@@ -156,3 +156,13 @@ export const cloudReserveUnavailable = () =>
     'cloud-reserve-unavailable',
     'The space is not in the active cloud: the conversation cannot have the cloud reserve.',
   );
+
+/**
+ * The agent (a `pc` hub) acts on a message that is not its turn (spec pc-agent §5.3): not a person's, not acked by this
+ * hub, already answered by it, or its ack lease ran out (the message went back to the queue). Discard the work.
+ */
+export const brainStepNotOwned = () =>
+  new ConflictError(
+    'brain-step-not-owned',
+    "This message is not the agent's turn: not acknowledged by this hub, already answered, or its ack lease ran out.",
+  );

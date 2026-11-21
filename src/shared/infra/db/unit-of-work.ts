@@ -66,6 +66,9 @@ export interface UnitOfWorkContext {
   // A nuvem como executor de reserva dos assuntos (módulo `conversations`, migration ConversationCloudReserve): o id de
   // UM espaço; abre só os assuntos vivos desse espaço com `cloud_reserve`. Nunca abre outro espaço nem outro assunto.
   cloudExecutorSpaceId?: string;
+  // Varredura do prazo do ack do agente (`AgentLeaseSweepJob`, só o backend, migration ConversationAgentAckLease): abre
+  // a leitura das mensagens com `acked_lease_until` (só ids), em todas as organizações. Valor: 'on' ('' desliga).
+  agentLeaseSweep?: string;
 }
 
 const SETTINGS = {
@@ -76,6 +79,7 @@ const SETTINGS = {
   hubSigningPublicKey: 'app.hub_signing_public_key',
   storageReconcile: 'app.storage_reconcile',
   cloudExecutorSpaceId: 'app.cloud_executor',
+  agentLeaseSweep: 'app.agent_lease_sweep',
 } as const satisfies Record<keyof UnitOfWorkContext, string>;
 
 // `set_config(..., true)` vale até o fim da transação: não vaza para a próxima da mesma conexão.
@@ -148,7 +152,10 @@ export class UnitOfWork {
   async setContext(
     ctx: Omit<
       UnitOfWorkContext,
-      'invitationTokenHash' | 'hubSigningPublicKey' | 'storageReconcile'
+      | 'invitationTokenHash'
+      | 'hubSigningPublicKey'
+      | 'storageReconcile'
+      | 'agentLeaseSweep'
     >,
   ): Promise<void> {
     const manager = activeManager(this.dataSource);

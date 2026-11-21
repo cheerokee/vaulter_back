@@ -19,9 +19,11 @@ import {
   type HubAuthContext,
 } from '../../../shared/infra/http/hub-auth.decorators.js';
 import { hubIdTracker } from '../../../shared/infra/http/hub-id.tracker.js';
+import { PcHubOnly } from '../../../shared/infra/http/pc-hub-only.guard.js';
 import { RATE_LIMITS } from '../../../shared/infra/http/rate-limits.js';
 import { uuidPipe } from '../../../shared/infra/http/uuid-pipe.js';
 import { AckMessageUseCase } from '../../application/ack-message.use-case.js';
+import { AgentTurn } from '../../application/agent-turn.js';
 import { ConfirmAttachmentUseCase } from '../../application/confirm-attachment.use-case.js';
 import { GetAttachmentDownloadUrlUseCase } from '../../application/get-attachment-download-url.use-case.js';
 import { RequestAttachmentUploadUseCase } from '../../application/request-attachment-upload.use-case.js';
@@ -72,6 +74,7 @@ export class HubConversationsController {
     private readonly rotate: RotateConversationKeyUseCase,
     private readonly sending: SendMessageUseCase,
     private readonly acking: AckMessageUseCase,
+    private readonly agentTurn: AgentTurn,
     private readonly deleting: DeleteMessageUseCase,
     private readonly requestingUpload: RequestAttachmentUploadUseCase,
     private readonly confirming: ConfirmAttachmentUseCase,
@@ -243,6 +246,29 @@ export class HubConversationsController {
     return messageResponse(
       await this.acking.execute({ hubId: hub.hubId }, id, messageId),
     );
+  }
+
+  /**
+   * The agent (`pc` hub only; an appliance gets the not-found of an unknown route) keeps its ack of a person's message
+   * while a confirmation waits in its tray: the lease goes to now + 15 min (database clock). Not acked by this hub,
+   * answered by it, or the lease already over: 409 `brain-step-not-owned` (discard the work).
+   */
+  @perHub(RATE_LIMITS.agentLease)
+  @ApiBearerAuth()
+  @PcHubOnly()
+  @Post(':id/messages/:messageId/lease')
+  @HttpCode(200)
+  async renewLease(
+    @CurrentHub() hub: HubAuthContext,
+    @Param('id', uuidPipe('id')) id: string,
+    @Param('messageId', uuidPipe('messageId')) messageId: string,
+  ) {
+    const { leaseUntil } = await this.agentTurn.renewLease(
+      hub.hubId,
+      id,
+      messageId,
+    );
+    return { leaseUntil: leaseUntil.toISOString() };
   }
 
   /** Only the hub's own messages (403 `not-conversation-owner`); idempotent. */

@@ -558,6 +558,12 @@ organização está aprovado). Rotas com o token de Hub:
 - `POST /hub/conversations/:id/messages/:messageId/ack`: caixa de entrada; o Hub confirma que **pegou** a mensagem de
   uma pessoa (que nasce `pending`). Só o executor; confirmar de novo devolve a mesma resposta (a primeira hora vale).
   Mensagem inexistente, de outro assunto ou apagada: 404 `message-not-found`.
+- `POST /hub/conversations/:id/messages/:messageId/lease` (**só Hub `pc`**, o agente; um `appliance` recebe o 404 do
+  Nest para rota inexistente, `Cannot POST /hub/conversations/<id>/messages/<messageId>/lease`; **600/h por Hub**):
+  renova o prazo do ack do agente para agora + 15 min enquanto uma confirmação espera na bandeja do PC. 200
+  `{ "leaseUntil": "<ISO 8601>" }`. Outro Hub que não o executor: 404 `conversation-not-found`; mensagem que não é de
+  pessoa, não confirmada por este Hub, já respondida por ele ou com o prazo já vencido: 409 `brain-step-not-owned`
+  (descarte o trabalho). Ver "A nuvem como executor de reserva", item 9. O ack repetido não renova o prazo.
 - `DELETE /hub/conversations/:id/messages/:messageId`: apaga (lápide) só as mensagens do próprio Hub (as de pessoas:
   403 `not-conversation-owner`); 204, idempotente.
 
@@ -625,6 +631,15 @@ active-cloud §4.3). O Hub continua sendo o executor principal; a nuvem só cobr
    **incorpora** ao próprio manifesto (mesmo `fileId` e mesmos `objectId`s, sem reenviar bytes) e o servidor tira a
    entrada do manifesto da nuvem na gravação seguinte: `docs/hubs/space-manifest.md`, "Manifesto da nuvem e incorporação
    pelo Hub".
+9. **Prazo do ack do agente (Hub `kind: "pc"`)** (spec pc-agent §5.3): o ack de um agente vale por **15 min**
+   (`AGENT_ACK_LEASE_MS`, relógio do servidor), contados do ack e renovados a cada passo do cérebro e por
+   `POST /hub/conversations/:id/messages/:messageId/lease` (abaixo). Vencido o prazo **sem resposta do agente** (uma
+   mensagem dele no assunto depois do ack), uma varredura do servidor (a cada minuto) devolve a mensagem a `pending`
+   (`requeuedAt` novo) e a nuvem de reserva a pega **na hora** (sem os 30 s: o agente já teve os 15 min) e responde só
+   com conhecimento. Dali em diante o agente perdeu a vez, como um Hub que perdeu a mensagem: o passo do cérebro e a
+   renovação dão **409 `brain-step-not-owned`** e, pega pela nuvem, o ack dá **404 `message-not-found`**: **descarte**
+   o trabalho (as ações já executadas no PC ficam, registradas na auditoria). Um prazo vencido já vale antes da
+   varredura (passo e renovação 409 desde o fim do prazo). O ack de um aparelho (`appliance`) não tem prazo.
 
 **Assunto movido de espaço** (pelo dono, no app): o assunto antigo ganha lápide (chega no feed como `conversation` com
 `deleted: true`: apague-o localmente) e o novo, criado no destino com `movedFromConversationId`, só chega a este Hub se

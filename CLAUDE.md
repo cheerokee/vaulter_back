@@ -937,7 +937,8 @@ registra a fonte `conversations`), `hubs` (`HubDirectory`: `ownerOf`,
 `installedSpaceOrganization`, `lockExecutorCandidate`; `HubAccess`), `organizations` (`AuditLog`) e `storage` (a porta
 `ObjectStore` e a peça compartilhada `application/object-uploads.ts`, o diário `journal.ts` e os erros
 `storage-errors.ts`) e `identity` (`CurrentAuthProofVerifier`, para esvaziar a lixeira do assunto); só o `agents` (a porta `HubConversationScope`,
-`organizationOf(hubId, conversationId)`: organização e espaço de um assunto que o Hub executa) e o `cloud` o importam.
+`organizationOf(hubId, conversationId)`: organização e espaço de um assunto que o Hub executa) e o `cloud` o importam
+(o `CloudConversationExecutor` e o `AgentTurn`, turno do agente do PC e prazo do ack).
 - **RLS (modelo):** `org_isolation` mais policies **restritivas** por comando: participante vivo (`app.user_id` em
   `participant_user_ids`) ou executor (`executor_hub_id = app.hub_id`); as filhas consultam a conversa e nada consulta as
   filhas de volta (sem recursão, sem `SECURITY DEFINER`). `participant_user_ids` é cópia **derivada** das participações
@@ -1051,6 +1052,22 @@ registra a fonte `conversations`), `hubs` (`HubDirectory`: `ownerOf`,
   o Hub antigo confirmou sem mandar mensagem dele depois no assunto (contexto de participante, com o assunto travado).
   Contrato do Hub (hub-lifecycle.md): executar só depois do 200 do ack; ack 404 = descartar; executor novo trata
   `pending` como trabalho.
+- **Prazo do ack do agente** (spec pc-agent §5.3; migration `ConversationAgentAckLease`): o ack de um Hub `pc` grava
+  `conversation_messages.acked_lease_until` = `acked_at` + `AGENT_ACK_LEASE_MS` (15 min, domínio, relógio do banco; CHECK
+  só com `acked_by_hub_id`; nulo para aparelho). `AgentTurn` (exportado para o `cloud`): `requireTurn(hubId,
+  conversationId, messageId)` -> `AgentTurnView` (executor com vínculo aprovado, pela regra do `HubConversationScope`,
+  senão 404 `conversation-not-found`; mensagem de pessoa, confirmada por ESTE Hub, prazo correndo e sem resposta dele
+  depois do `acked_at`, senão 409 `brain-step-not-owned`) e `renewLease` (assunto `FOR NO KEY UPDATE`, as mesmas
+  checagens, prazo = agora + 15 min; rota `POST /hub/conversations/:id/messages/:messageId/lease`, `@PcHubOnly()`,
+  `agentLease` 600/h). Prazo vencido = 409 já antes da varredura. **Varredura** `AgentLeaseSweepJob` (fila
+  `conversations.agent-lease-sweep`, cron `* * * * *`): candidatos pelo contexto de confiança `app.agent_lease_sweep`
+  (`UnitOfWorkContext.agentLeaseSweep`; SELECT só das linhas de mensagem com prazo, de toda organização: policy
+  `conversation_message_agent_lease_read` e OR na restritiva `conversation_child_read`, com o escape do commit), assunto
+  lido no contexto do Hub que confirmou, volta à fila no contexto do DONO, lotes de 100 assuntos por unit of work em
+  ordem (espaço, assunto), `requeueExpiredAgentLeases` (sem resposta = `pending`, `requeued_at` novo; respondida ou
+  apagada = só o prazo sai) e `CloudReservePendingHooks` com `immediate` dentro do unit of work. Invariante: um prazo é
+  sempre do executor atual (`requeueAckedBy` de um Hub limpa os prazos dele no assunto, respondidas inclusive).
+  Renovar grava a linha (sai de novo nos feeds e entra no lock de versões do COMMIT, como um ack).
 - **Cabeçalho** (`ReplaceConversationHeaderUseCase`, `PUT .../:id/header` `{ keyVersion, encryptedHeader }` nas duas
   formas): o dono (pessoa; outro participante 403 `not-conversation-owner`) ou o executor (Hub; outro Hub 404); versão
   atual (409 `conversation-key-version-stale`), sem troca pendente (409 `conversation-key-rotation-required`). Os bytes

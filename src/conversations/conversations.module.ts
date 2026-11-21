@@ -11,6 +11,8 @@ import { GetAttachmentDownloadUrlUseCase } from './application/get-attachment-do
 import { ReconcileConversationAttachments } from './application/reconcile-conversation-attachments.js';
 import { RequestAttachmentUploadUseCase } from './application/request-attachment-upload.use-case.js';
 import { AckMessageUseCase } from './application/ack-message.use-case.js';
+import { AgentLeaseSweepJob } from './application/agent-lease-sweep.job.js';
+import { AgentTurn } from './application/agent-turn.js';
 import { ChangeConversationStateUseCase } from './application/change-conversation-state.use-case.js';
 import { ChangeExecutorUseCase } from './application/change-executor.use-case.js';
 import { ConversationAccess } from './application/conversation-access.js';
@@ -75,8 +77,10 @@ import { SetCloudReserveUseCase } from './application/set-cloud-reserve.use-case
  * (AuditLog) and `storage` (the ObjectStore port and the shared upload/repair pieces of `application/object-uploads`)
  * through what they export; reacts to `SpaceMemberLeftHooks`, `HubExecutorLostHooks` and `SpaceCloudDeactivatedHooks`,
  * joins the `storage:reconcile` sweep through `StorageReconcileHooks`, and emits `CloudReservePendingHooks`.
- * Exports `HubConversationScope` (the (organization, space) of a conversation a Hub executes) for the `agents` module and
- * `CloudConversationExecutor` (the cloud as reserve executor, spec active-cloud §4.3) for the `cloud` module;
+ * Exports `HubConversationScope` (the (organization, space) of a conversation a Hub executes) for the `agents` module,
+ * `CloudConversationExecutor` (the cloud as reserve executor, spec active-cloud §4.3) and `AgentTurn` (the pc agent's
+ * turn on a message and its ack lease, spec pc-agent §5.3) for the `cloud` module; runs the lease sweep
+ * (`AgentLeaseSweepJob`, pg-boss cron);
  * `conversations` never imports `cloud` (the server copies are checked through `ServerKeyCopyCheck`).
  */
 @Module({
@@ -170,7 +174,9 @@ import { SetCloudReserveUseCase } from './application/set-cloud-reserve.use-case
     SetCloudAnswerUseCase,
     CloudConversationExecutor,
     HubConversationScope,
+    AgentTurn,
+    AgentLeaseSweepJob,
   ],
-  exports: [CloudConversationExecutor, HubConversationScope],
+  exports: [CloudConversationExecutor, HubConversationScope, AgentTurn],
 })
 export class ConversationsModule {}

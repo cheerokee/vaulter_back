@@ -60,6 +60,11 @@ import type { ConversationTypeormEntity } from './conversation.entity.js';
   'ck_conversation_messages_cloud_answer',
   `(NOT "cloud_answer_requested") OR ("author_user_id" IS NOT NULL)`,
 )
+// The agent's ack lease belongs to the hub that acked (cleared with the ack).
+@Check(
+  'ck_conversation_messages_acked_lease',
+  `("acked_lease_until" IS NULL) OR ("acked_by_hub_id" IS NOT NULL)`,
+)
 @Index('ix_conversation_messages_sync_version', ['syncVersion'])
 @Index('fk_conversation_messages_organizations_idx', ['organizationId'])
 @Index('fk_conversation_messages_conversations_idx', ['conversationId'])
@@ -70,6 +75,10 @@ import type { ConversationTypeormEntity } from './conversation.entity.js';
 // Retention: tombstoned messages whose body is still kept.
 @Index('ix_conversation_messages_retention', ['deletedAt'], {
   where: `"deleted_at" IS NOT NULL AND "encrypted_body" IS NOT NULL`,
+})
+// The lease sweep's candidates.
+@Index('ix_conversation_messages_agent_lease', ['ackedLeaseUntil'], {
+  where: `"acked_lease_until" IS NOT NULL AND NOT "pending"`,
 })
 @Index('ix_conversation_messages_pending', ['conversationId'], {
   where: `"pending" AND "deleted_at" IS NULL`,
@@ -179,6 +188,13 @@ export class ConversationMessageTypeormEntity extends DeviceIdSyncableTypeormEnt
   /** The cloud (reserve executor) acknowledged it. */
   @Column({ type: 'boolean', default: false })
   ackedByCloud!: boolean;
+
+  /**
+   * Until when the ack of a `pc` hub (the agent) holds it, database clock (migration ConversationAgentAckLease); only
+   * with `acked_by_hub_id`.
+   */
+  @Column({ type: 'timestamptz', nullable: true })
+  ackedLeaseUntil!: Date | null;
 
   /** When it went back to the queue (`requeueAckedBy`), database clock (migration ConversationMessageRequeuedAt). */
   @Column({ type: 'timestamptz', nullable: true })

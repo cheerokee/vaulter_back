@@ -1,7 +1,10 @@
 import { Injectable } from '@nestjs/common';
 import { validate } from 'uuid';
 import { conversationNotFound } from '../domain/conversation-errors.js';
-import { ConversationAccess } from './conversation-access.js';
+import {
+  ConversationAccess,
+  type ScopedConversation,
+} from './conversation-access.js';
 
 export type HubConversationOrigin = {
   organizationId: string;
@@ -23,17 +26,26 @@ export class HubConversationScope {
     hubId: string,
     conversationId: string,
   ): Promise<HubConversationOrigin> {
-    if (!validate(hubId) || !validate(conversationId)) {
-      throw conversationNotFound();
-    }
-    const { conversation } = await this.access.findForHub(
-      hubId,
-      conversationId,
-    );
-    if (!conversation.isExecutor(hubId)) throw conversationNotFound();
+    const { conversation } = await this.executedBy(hubId, conversationId);
     return {
       organizationId: conversation.organizationId,
       spaceId: conversation.spaceId,
     };
+  }
+
+  /**
+   * The conversation and the Hub's RLS scope in its organization, under the same rule (executor + approved link, else
+   * 404 `conversation-not-found`). Inside the module only (the agent's turn, `AgentTurn`); not exported data.
+   */
+  async executedBy(
+    hubId: string,
+    conversationId: string,
+  ): Promise<ScopedConversation> {
+    if (!validate(hubId) || !validate(conversationId)) {
+      throw conversationNotFound();
+    }
+    const found = await this.access.findForHub(hubId, conversationId);
+    if (!found.conversation.isExecutor(hubId)) throw conversationNotFound();
+    return found;
   }
 }

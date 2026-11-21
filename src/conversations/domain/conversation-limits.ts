@@ -38,3 +38,9 @@ export const MAX_CONVERSATION_PURGE_ATTACHMENTS = 1_000;
  * renumbered at COMMIT under the conversations' advisory lock, so one request never holds it for an unbounded set.
  */
 export const MAX_CONVERSATION_PURGE_MESSAGES = 5_000;
+/**
+ * How long the ack of a `pc` hub (the agent) holds a person's message (spec pc-agent §5.3, "Prazo do ack do agente"):
+ * renewed by each brain step and by `POST /hub/conversations/:id/messages/:messageId/lease`. Past it, without an answer
+ * of the executor, the sweep puts the message back to `pending` and the cloud reserve answers it.
+ */
+export const AGENT_ACK_LEASE_MS = 15 * 60_000;
