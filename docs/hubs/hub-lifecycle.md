@@ -644,8 +644,8 @@ active-cloud §4.3). O Hub continua sendo o executor principal; a nuvem só cobr
    mensagem dele com `answeringMessageId` = ela), uma varredura do servidor (a cada minuto) devolve a mensagem a
    `pending` (`requeuedAt` novo) e a nuvem de reserva responde só com conhecimento. Hoje a tarefa da nuvem começa na
    hora, mas a janela de 30 s do Hub recomeça no `requeuedAt` (a mesma regra de uma volta à fila): a resposta chega uns
-   30 s depois da varredura (pendência no CLAUDE.md). Dali em diante o agente perdeu a vez, como um Hub que perdeu a mensagem: o passo do cérebro e a
-   renovação dão **409 `brain-step-not-owned`**, a resposta atrasada (`POST .../messages` com `answeringMessageId`)
+   30 s depois da varredura (pendência no CLAUDE.md). Dali em diante o agente perdeu a vez, como um Hub que perdeu a
+   mensagem: o passo do cérebro e a renovação dão **409 `brain-step-not-owned`**, a resposta atrasada (`POST .../messages` com `answeringMessageId`)
    também dá **409 `brain-step-not-owned`** (nunca uma segunda resposta) e, pega pela nuvem, o ack dá **404
    `message-not-found`**: **descarte** o trabalho (as ações já executadas no PC ficam, registradas na auditoria).
    "Respondida pelo agente" = uma mensagem dele com `answeringMessageId` = ela (nunca qualquer mensagem dele depois:

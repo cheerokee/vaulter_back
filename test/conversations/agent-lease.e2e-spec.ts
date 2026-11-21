@@ -280,7 +280,8 @@ describe('conversations: the pc agent ack lease (e2e)', () => {
       pending: false,
       acked_by_hub_id: pc.hubId,
     });
-    // The cloud reserve answers it at once (the pc already had its 15 min). (Other tests left expired leases too.)
+    // The cloud reserve is signalled with `immediate` (the pc already had its 15 min); the responder still waits 30 s
+    // from requeued_at before answering (CLAUDE.md Pendências, "Agente do PC"). (Other tests left expired leases too.)
     expect(signals.filter((x) => x.conversationId === conv.id)).toEqual([
       {
         organizationId: orgId,

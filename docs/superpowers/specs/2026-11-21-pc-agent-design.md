@@ -321,6 +321,8 @@ Decisões tomadas durante a implementação (21/11/2026) que mudam ou completam 
 - A mensagem de um `pc` leva `answeringMessageId` (obrigatório), reconferido sob a trava do assunto (409
   `brain-step-not-owned`); "respondida pelo agente" = mensagem dele com esse id. Por isso o agente não manda edições
   nem mensagens que não respondam a uma confirmada.
+- Varredura do prazo: um instante só do banco para as duas gravações do lote, e o laço para quando um lote não tira
+  nenhum prazo (nunca gira em falso).
 - Prazo vencido: a nuvem de reserva responde ~30 s depois da varredura, não na hora (a janela do Hub recomeça no
   `requeued_at`); pendência registrada.
 - Checagem de tamanho dos resultados (32 KiB) roda antes de contar a chamada: pedido malformado não gasta vaga. A rota
