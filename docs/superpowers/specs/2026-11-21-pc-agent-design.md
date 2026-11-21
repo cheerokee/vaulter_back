@@ -310,6 +310,9 @@ Decisões tomadas durante a implementação (21/11/2026) que mudam ou completam 
 - Assinatura `hub-enroll-v2` sem `kind` no corpo é o mesmo 401 `hub-signature-invalid` de uma assinatura inválida.
 - `GET /hub/sync` de um `pc` leva só o dono como pessoa (sem membros, papéis nem cópias de chave dos outros), e o `pc`
   fica fora do `GET /hubs` de quem não é dono.
+- "Só o dono tem acesso" tem uma exceção, só da chave pública: `GET /hubs/:id` de um `pc` devolve `{ id, name, kind,
+  encryptionPublicKey }` a quem não é dono mas é membro de um espaço em que o `pc` está na Sala (troca de chave com
+  `hubGrants`) ou participante de um assunto que ele executa. Toda outra rota segue 404.
 - Limite do corpo JSON por rota: `PUT /hub/agent/tools` e `PUT /organizations/:orgId/agent-policy` 2 MiB, passo do
   cérebro 256 KiB; o resto segue em 100 kB.
 - ACL: casamento de `deny`/`confirm` com normalização NFC e dobra de caixa Unicode (nomes de ferramenta e pastas);

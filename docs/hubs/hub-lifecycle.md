@@ -405,7 +405,11 @@ nuvem é reservado ao servidor (enviar ou apagar com ele: 422 `object-id-reserve
   Membros das organizações vinculadas já são `hub_user` implicitamente.
   **Hub `pc` (agente) nunca é compartilhável:** só o dono o vê. `PUT /hubs/:id/roles/:userId` num `pc` é 422
   `agent-not-shareable` (antes de gravar); não há `hub_user` implícito, então um membro de organização vinculada recebe 404
-  `hub-not-found` em `GET /hubs/:id` e 401 `invalid-credentials` em `POST /hub/user-sessions`.
+  `hub-not-found` em `GET /hubs/:id` e 401 `invalid-credentials` em `POST /hub/user-sessions`. **Exceção só da chave
+  pública:** quem precisa selar cópias para o `pc` (membro de um espaço em que o `pc` está na Sala, para a troca de chave
+  do §11; participante de um assunto que o `pc` executa) recebe em `GET /hubs/:id` a **visão de chave**
+  `{ id, name, kind, encryptionPublicKey }` (sem `role`, `ownerUserId`, `storage` nem datas). Toda outra rota e ação
+  sobre o `pc` continua 404 para essa pessoa.
   O `pc` também não aparece no `GET /hubs` de quem não é dono, e o `GET /hub/sync` dele traz só o dono como pessoa
   (itens `member` e papéis de outras pessoas, e o material de chave delas, nunca chegam a um `pc`).
 
@@ -416,7 +420,8 @@ troca (`POST /spaces/:id/keys`), o app precisa mandar uma cópia da versão nova
 Sala**:
 
 1. `GET /spaces/:id` traz `roomHubs: [{ hubId, roleKey }]`;
-2. `GET /hubs/:hubId` traz a `encryptionPublicKey` de cada um;
+2. `GET /hubs/:hubId` traz a `encryptionPublicKey` de cada um (todo membro do espaço a lê: de um `appliance`, pelo
+   vínculo aprovado da organização; de um `pc` na Sala, pela visão de chave do §10);
 3. a troca leva `hubGrants: [{ hubId, wrappedKey }]` com **exatamente** esses Hubs. Conjunto errado: 409
    `key-rotation-mismatch`, com `expectedHubIds`, `missingHubIds` e `unexpectedHubIds` no corpo;
 4. num espaço em **nuvem ativa** (`cloudMode = "active_cloud"`), a troca leva também `serverWrappedKey` (a versão nova
@@ -695,7 +700,8 @@ sequência. O fluxo inteiro, pelas rotas reais, está fixado em `test/agents/pc-
 
 1. **Apresentação v2** com `kind: "pc"` (§2; assinatura `hub-enroll-v2`), reivindicação pelo dono (§3) e autenticação
    (§5). Um `pc` **nunca é compartilhável**: só o dono o vê e o usa (nenhum papel de Hub para outra pessoa, 422
-   `agent-not-shareable`), e o `GET /hub/sync` só traz o dono como pessoa.
+   `agent-not-shareable`), e o `GET /hub/sync` só traz o dono como pessoa. Exceção: a visão só de chave em
+   `GET /hubs/:id` para quem sela cópias para ele (§10).
 2. **Vínculo e espaços** como qualquer Hub (§6, §7). O passo do cérebro só funciona num espaço em **nuvem ativa** cuja
    organização aceitou um termo que **cobre o agente** (`agentCovered` em `GET /organizations/:orgId/cloud/terms`; a v2
    cobre).
@@ -706,7 +712,12 @@ sequência. O fluxo inteiro, pelas rotas reais, está fixado em `test/agents/pc-
    tem a última palavra.
 5. **Ack com prazo:** o agente confirma a mensagem (`POST .../messages/:messageId/ack`), que fica dele por 15 min,
    renovados a cada passo e por `POST .../messages/:messageId/lease` enquanto uma confirmação espera na bandeja (item 9
-   de "A nuvem como executor de reserva").
+   de "A nuvem como executor de reserva"). **Não dar ack quando o passo não vai funcionar:** espaço fora da nuvem ativa
+   (`cloudMode` do item `space` do `GET /hub/sync` diferente de `active_cloud`) ou organização sem termo que cobre o
+   agente (o primeiro passo devolve 422 `cloud-terms-agent-not-accepted`). Nesses casos o agente não confirma a
+   mensagem de pessoa, ou confirma e responde na hora com um **texto fixo** (mensagem do executor com
+   `answeringMessageId`, sem passo do cérebro). Confirmar e só tentar o passo gera um laço: 422 `cloud-not-active` →
+   prazo de 15 min vence → a varredura devolve à fila → o agente confirma de novo, e a pessoa nunca recebe resposta.
 6. **Passos do cérebro:** `POST /hub/conversations/:id/brain/step` com o histórico decifrado no PC; `tools` = executar
    (ou pedir confirmação) e chamar de novo com os resultados; `final` = cifrar e mandar a resposta com
    `answeringMessageId` ("Agente do PC: passo do cérebro"; envio em "Assuntos", mensagens do executor). Só a pergunta do
@@ -817,7 +828,10 @@ passo, pede ao back o que fazer: o back monta o prompt, busca os trechos do espa
   (sem mudar nenhum campo), no texto em claro da mensagem que manda (`docs/crypto/conversations.md`, convenção v1): sem
   a proposta na mensagem dele, ou com ela alterada, a confirmação da pessoa na mensagem seguinte não grava nada. Um
   `refused` (orçamento) no meio de um passo não traz o resultado das ferramentas de documento daquele passo, mas o que
-  já rodou valeu: um documento gravado continua gravado (a resposta só não diz isso). Um passo que responde **renova o prazo do ack** (agora + 15 min); um passo recusado não
+  já rodou valeu: um documento gravado continua gravado (a resposta só não diz isso). O mesmo vale para **qualquer**
+  chamada seguinte do mesmo passo que é recusada ou falha depois da gravação (422 `brain-step-limit`/`cloud-not-active`/
+  `server-copy-invalid`, 409, 500): o documento já está gravado e a resposta de erro não o informa. Repetir o passo é
+  seguro: a gravação usa `fileId = proposalId`, então a mesma proposta nunca vira um segundo documento. Um passo que responde **renova o prazo do ack** (agora + 15 min); um passo recusado não
   renova, e o prazo segue correndo: vencido, a mensagem volta à fila (veja o item 9 de "A nuvem como executor de
   reserva").
 - **O que o back oferece ao modelo:** as ferramentas do catálogo do agente (`PUT /hub/agent/tools`) que a política

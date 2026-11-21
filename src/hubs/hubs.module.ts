@@ -33,6 +33,7 @@ import { SyncHubUseCase } from './application/sync-hub.use-case.js';
 import { ReportHubStorageUseCase } from './application/report-hub-storage.use-case.js';
 import { HubsSpaceQuotaHook } from './application/space-quota.hook.js';
 import { HubSyncReader } from './application/ports/hub-sync-reader.js';
+import { PcKeyAudience } from './application/ports/pc-key-audience.js';
 import { AuthenticateHubTokenUseCase } from './application/authenticate-hub-token.use-case.js';
 import { ClaimHubUseCase } from './application/claim-hub.use-case.js';
 import { EnrollHubUseCase } from './application/enroll-hub.use-case.js';
@@ -63,6 +64,7 @@ import { HubSpaceTypeormRepository } from './infra/db/hub-space.typeorm-reposito
 import { HubTypeormEntity } from './infra/db/hub.entity.js';
 import { HubTypeormRepository } from './infra/db/hub.typeorm-repository.js';
 import { HubSyncSqlReader } from './infra/db/hub-sync.sql-reader.js';
+import { PcKeyAudienceSqlReader } from './infra/db/pc-key-audience.sql-reader.js';
 import { HubAuthController } from './infra/http/hub-auth.controller.js';
 import { HubEnrollmentsController } from './infra/http/hub-enrollments.controller.js';
 import {
@@ -129,6 +131,8 @@ import { LoginPersonOnHubUseCase } from './application/login-person-on-hub.use-c
     { provide: HubCodeHasher, useClass: SodiumHubCodeHasher },
     // Leitura da sincronização: projeção só de leitura sobre tabelas de outros módulos (veja o cabeçalho do arquivo).
     { provide: HubSyncReader, useClass: HubSyncSqlReader },
+    // Chave pública de um `pc` para quem não é dono (Sala, assunto executado): mesma exceção (veja o cabeçalho).
+    { provide: PcKeyAudience, useClass: PcKeyAudienceSqlReader },
     EnrollHubUseCase,
     EnrollmentStatusUseCase,
     ClaimHubUseCase,

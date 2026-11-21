@@ -34,6 +34,7 @@ import { AssignHubRoleDto, ClaimHubDto, RenameHubDto } from './dto/hub.dto.js';
 import {
   hubResponse,
   hubRoleResponse,
+  hubKeyResponse,
   hubWithRoleResponse,
 } from './dto/responses.js';
 
@@ -88,7 +89,8 @@ export class HubsController {
     @CurrentAuth() auth: AuthContext,
     @Param('id', uuidPipe('id')) id: string,
   ) {
-    return hubWithRoleResponse(await this.get.execute(auth, id));
+    const view = await this.get.execute(auth, id);
+    return 'role' in view ? hubWithRoleResponse(view) : hubKeyResponse(view);
   }
 
   @ApiBearerAuth()

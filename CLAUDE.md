@@ -545,7 +545,15 @@ consulta só de leitura (veja Sincronização).
   `role` = `hub_owner` | `hub_operator` | `hub_user` (explícito ou implícito para membro de organização com vínculo
   aprovado). **Hub `pc` (agente) nunca é compartilhável:** `find` devolve só o dono (sem `hub_user` implícito, 404
   `hub-not-found` para o resto) e atribuir papel é 422 `agent-not-shareable`. Também fora do `GET /hubs` de não donos, e o
-  `GET /hub/sync` de um `pc` só leva o dono como pessoa (membros, papéis e chaves dos outros não). **Autorização é sempre do caso de uso**: `HubOrganizationRepository.upsert` troca para o contexto do Hub
+  `GET /hub/sync` de um `pc` só leva o dono como pessoa (membros, papéis e cópias de chave dos outros não: o filtro
+  `ph.kind = 'pc' AND ph.owner_user_id <> …` vale para `member`, `role_assignment` e `space_key_grant`, mantendo a cópia
+  do próprio Hub). **Única exceção, só a chave pública:** `GET /hubs/:id` de um `pc` para quem não é dono mas é membro de
+  um espaço em que o `pc` está na Sala ou participante de um assunto que o `pc` executa devolve a visão de chave
+  `{ id, name, kind, encryptionPublicKey }` (sem `role` nem campos de dono), para selar `hubGrants` e cópias para o
+  executor. Porta `PcKeyAudience` (`application/ports/pc-key-audience.ts`; `PcKeyAudienceSqlReader`, leitura confiável no
+  contexto do Hub e, por organização aprovada, `{ organizationId, hubId }`, mesma exceção de SQL cru do
+  `HubSyncSqlReader`), consultada só pelo `GetHubUseCase` quando `HubAccess.find` dá nulo; `HubAccess` continua só do
+  dono para `pc`, então toda outra rota/ação segue 404. **Autorização é sempre do caso de uso**: `HubOrganizationRepository.upsert` troca para o contexto do Hub
   por dentro, então todo caso de uso confere dono / membro (`OrganizationAccess.requireMember`) / admin
   (`org.hubs.approve`) antes de escrever.
 - **Ordem de locks dos Hubs:** linha do Hub (`HubRepository.lockForShare`; `lockForUpdate` no desregistro;
@@ -602,7 +610,8 @@ consulta só de leitura (veja Sincronização).
   `GET /spaces/:id` traz `roomHubs: [{ hubId, roleKey }]` para todo membro do espaço (lido pelo `spaces` em
   `role_assignments`, sem importar `hubs`), e a chave de cifra de cada Hub vem de `GET /hubs/:id`: todo membro do
   espaço é membro ativo da organização, e a Sala só existe com vínculo **aprovado** dela (desvincular e desregistrar
-  derrubam a Sala), então `HubAccess` sempre deixa ele ver o Hub. Escolhido em vez de copiar a chave para o `spaces`
+  derrubam a Sala), então `HubAccess` sempre deixa ele ver um `appliance`; um `pc` na Sala (que `HubAccess` só mostra ao
+  dono) responde a esse membro com a visão só de chave (`PcKeyAudience`, veja `HubAccess` acima). Escolhido em vez de copiar a chave para o `spaces`
   (nenhuma porta nova, nenhum dado duplicado). O helper de e2e `c.spaces.rotate` descobre os Hubs assim
   (`roomHubRecipients`); `hubs` explícito só para mandar um conjunto errado de propósito.
 - **Ganchos:** `SpaceMemberLeftHooks` (o `hubs` tira da Sala o que o dono, ao sair do espaço, havia liberado);
@@ -1476,8 +1485,8 @@ registra a fonte `conversations`), `hubs` (`HubDirectory`: `ownerOf`,
   `documentProposal`/`documentRecorded` para o agente pôr no texto em claro da mensagem dele. **Proposta do agente só
   vale se o back a emitiu:** `propose_document` grava em `agent_issued_proposals` (migration
   `CreateAgentIssuedProposals`: `(conversation_id, proposal_id)` único, `content_sha256` = `proposalContentSha256`
-  (título, conteúdo, `confidential`), só ids e hash, RLS por organização, runtime sem UPDATE (a migration só revoga o
-  UPDATE: o DELETE do GRANT padrão continua, então não é só de acréscimo; veja Pendências, "Agente do PC"); porta
+  (título, conteúdo, `confidential`), só ids e hash, RLS por organização, só de acréscimo: o runtime fica com SELECT e
+  INSERT (o GRANT padrão do `AppRuntimeRole` é SELECT/INSERT/UPDATE, sem DELETE, e a migration revoga o UPDATE)); porta
   `AgentIssuedProposals`), e uma proposta numa mensagem `hub` do histórico do servidor sem linha com o mesmo hash é
   tirada antes do modelo e da trava (`verifiedHubProposals`); o responder continua aceitando só as da nuvem. **Contador** `agent_brain_steps` (uma linha por (assunto,
   mensagem): `calls`, `cost_micro_usd`, `chunk_ids uuid[]`; só ids e números; RLS por organização; sem FK para assunto e
@@ -1743,9 +1752,11 @@ Os valores do `.env.example` para os segredos são **só de desenvolvimento**; p
   `MaintenanceIndexes`).
 - **Agente do PC** (spec pc-agent): (a) **prazo vencido responde ~30 s depois:** a varredura sinaliza `immediate`, mas
   `nextResponderStep` conta a janela do Hub de novo a partir do `requeued_at` (não sabe que a volta à fila foi um prazo
-  vencido); decidir se a nuvem responde na hora (precisa marcar o motivo na mensagem) ou se os 30 s ficam; (b)
-  `agent_issued_proposals` mantém o DELETE do GRANT padrão (só o UPDATE foi revogado): revogar numa migration nova e
-  definir a retenção (hoje nada sai); (c) a varredura pode morrer de fome se ≥100 prazos mais antigos forem pulados para
+  vencido); decidir se a nuvem responde na hora (precisa marcar o motivo na mensagem) ou se os 30 s ficam. Os 30 s
+  também deixam um agente instável (cai e volta) dar ack de novo dentro da janela e pegar mais 15 min, e assim
+  repetidamente, sem a nuvem nunca responder: esse é o argumento real para responder na hora mais adiante; (b)
+  `agent_issued_proposals` é só de acréscimo (runtime com SELECT/INSERT: o GRANT padrão não tem DELETE e o UPDATE foi
+  revogado), então nada sai: definir a retenção (um papel de manutenção, como a dos assuntos); (c) a varredura pode morrer de fome se ≥100 prazos mais antigos forem pulados para
   sempre; `answers_message_id` não é imutável no banco (só pelo código); (d) lotes concorrentes de
   `POST /hub/agent/actions` e de `PUT /hub/agent/tools` gravam linha a linha sem ordenar (deadlock possível, o cliente
   repete); (e) o app precisa mostrar o cartão da proposta de documento numa mensagem do agente (repo do app); (f)

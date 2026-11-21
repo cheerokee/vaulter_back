@@ -9,6 +9,7 @@ import type {
   HubView,
   HubWithRoleView,
 } from '../../../application/dto/hub-view.js';
+import type { HubKeyView } from '../../../application/ports/pc-key-audience.js';
 
 const iso = (d: Date | null | undefined) => (d ? d.toISOString() : null);
 
@@ -38,6 +39,16 @@ export function hubWithRoleResponse(v: HubWithRoleView) {
           },
         }
       : {}),
+  };
+}
+
+/** A `pc` hub as a non-owner who must wrap copies to it sees it: identity and public key only. */
+export function hubKeyResponse(v: HubKeyView) {
+  return {
+    id: v.id,
+    name: v.name,
+    kind: v.kind,
+    encryptionPublicKey: v.encryptionPublicKey,
   };
 }
 

@@ -354,7 +354,8 @@ async function readOrganization(
         ),
     ),
   );
-  // Copies for people, and for THIS hub only (another hub's copy, or an app installation's, never leaves).
+  // Copies for people, and for THIS hub only (another hub's copy, or an app installation's, never leaves). A `pc` hub
+  // gets only its owner's copies among the people's (like members and roles): never another member's user id.
   out.push(
     await batch(
       m,
@@ -365,6 +366,7 @@ async function readOrganization(
            ${ON_HUB_SPACE('k')}
           WHERE g.organization_id = $4 AND g.sync_version > $2::bigint AND NOT g.sync_pending
             AND (g.user_id IS NOT NULL OR g.hub_id = $1)
+            AND NOT EXISTS (SELECT 1 FROM hubs ph WHERE ph.id = $1 AND ph.kind = 'pc' AND ph.owner_user_id <> g.user_id)
           ORDER BY g.sync_version LIMIT $3`,
       (r) =>
         item(
