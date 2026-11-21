@@ -1458,8 +1458,17 @@ registra a fonte `conversations`), `hubs` (`HubDirectory`: `ownerOf`,
   achatado em texto (sem ferramentas oferecidas) vai como `<resultado_de_ferramenta>` escapado; dois nomes do catálogo
   com o mesmo `llmToolName` = nenhum dos dois oferecido (log só da contagem); modelo que recusa sem
   retentativa = texto fixo como `final`, falha retentável = 500. Peças comuns com o responder em
-  `responder/responder-shared.ts` (`retrieve`, `embedQuestion`, `toLlmMessages`, `Spend`, `cutUtf8`). As ferramentas
-  de documento no passo são da Task 12. **Contador** `agent_brain_steps` (uma linha por (assunto,
+  `responder/responder-shared.ts` (`retrieve`, `embedQuestion`, `toLlmMessages`, `Spend`, `cutUtf8`, `decryptHistory`,
+  `runDocumentTool`, `recordFailureMessage`); (f) **ferramentas de documento** (`propose_document`/`record_document`,
+  `RESPONDER_TOOLS`): só com `view.cloudReserve` e o assunto ao alcance da nuvem; então o histórico é lido e decifrado
+  **pelo servidor** (`CloudConversationExecutor.read` + `ServerKeyring.openSealed`, fora de transação, chaves zeradas
+  logo depois) e é ele que vai ao modelo (propostas e botões por extenso) e à trava `confirmedProposal` (proposta da
+  nuvem **ou do executor** logo antes da mensagem; botão `decline` vence), nunca o `history` do agente (Review Focus 1);
+  rodam no back dentro do passo com o código do responder, gravam em nome do autor gravado da mensagem (`memory.write`;
+  sem ela, `tool_result` de erro com `recordFailureMessage`), nunca saem em `toolCalls`; nomes reservados (nenhuma
+  ferramenta do catálogo com o mesmo `llmToolName` é oferecida); chamada do PC na mesma rodada volta como não executada;
+  cada chamada extra ao modelo passa por `consume` e pelo orçamento. A resposta (`final`/`tools`) leva
+  `documentProposal`/`documentRecorded` para o agente pôr no texto em claro da mensagem dele. **Contador** `agent_brain_steps` (uma linha por (assunto,
   mensagem): `calls`, `cost_micro_usd`, `chunk_ids uuid[]`; só ids e números; RLS por organização; sem FK para assunto e
   mensagem): `consume` = UM comando `INSERT ... ON CONFLICT DO UPDATE SET calls = calls + 1 WHERE calls < BRAIN_MAX_CALLS
   RETURNING` numa transação curta própria (lança dentro de um unit of work), nenhuma linha = `'limit'`; conta chamadas,

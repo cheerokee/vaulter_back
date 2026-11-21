@@ -3,15 +3,20 @@ import type { AgentPolicyReader } from '../../../agents/application/agent-policy
 import type { AgentToolCatalog } from '../../../agents/application/agent-tool-catalog.js';
 import type { AgentToolDef } from '../../../agents/domain/agent-tool.js';
 import type { AgentTurnView } from '../../../conversations/application/agent-turn.js';
+import type { CloudConversationExecutor } from '../../../conversations/application/cloud-conversation-executor.js';
 import { newId } from '../../../shared/domain/id.js';
 import type { UnitOfWork } from '../../../shared/infra/db/unit-of-work.js';
 import type { SpaceCloud } from '../../../spaces/application/space-cloud.js';
 import { AiPricing } from '../../domain/ai-pricing.js';
 import type { BrainStepRequest } from '../../domain/brain-step.js';
 import type { ChunkHit } from '../../domain/indexing.repositories.js';
+import { encodeMessage } from '../../domain/message-plaintext.js';
 import { FakeEmbedder } from '../../testing/fake-embedder.js';
 import { FakeLanguageModel } from '../../testing/fake-language-model.js';
 import type { AiBudget } from '../ai-budget.js';
+import type { CloudCipher } from '../ports/cloud-cipher.js';
+import type { ServerKeyring } from '../ports/server-keyring.js';
+import type { CloudDocumentWriter } from '../responder/cloud-document-writer.js';
 import type { ResponderClock } from '../responder/responder-clock.js';
 import { llmToolName } from './agent-tool-offer.js';
 import {
@@ -19,6 +24,7 @@ import {
   BrainComposerImpl,
   NOT_OFFERED_RESULT,
   NOT_RUN_RESULT,
+  NOT_RUN_WITH_DOCUMENT_RESULT,
 } from './brain-composer.js';
 import type { LlmMessage } from '../ports/language-model.js';
 import { LanguageModelError } from '../ports/language-model.js';
@@ -58,7 +64,12 @@ const firstUserText = (messages: LlmMessage[]): string => {
 };
 
 function setup(
-  opts: { author?: string; storedChunkIds?: string[] | null } = {},
+  opts: {
+    author?: string;
+    storedChunkIds?: string[] | null;
+    /** The conversation is in the cloud's reach (its server-decrypted history: the question only). */
+    serverHistory?: boolean;
+  } = {},
 ) {
   const view: AgentTurnView = {
     organizationId: ORG,
@@ -100,8 +111,37 @@ function setup(
     search: vi.fn().mockResolvedValue(found),
     findByIds: vi.fn().mockResolvedValue(found),
   };
-  const spaceCloud = { lockActiveForWrite: vi.fn().mockResolvedValue(true) };
+  const spaceCloud = {
+    lockActiveForWrite: vi.fn().mockResolvedValue(true),
+    audience: vi.fn().mockResolvedValue({ people: 3, roles: [], roomHubs: 0 }),
+  };
   const uow = { run: vi.fn((work: () => Promise<unknown>) => work()) };
+  const executor = {
+    read: vi.fn().mockResolvedValue(
+      opts.serverHistory
+        ? {
+            conversation: { id: view.conversationId, spaceId: view.spaceId },
+            serverKeyCopies: [{ keyVersion: 1, wrappedKey: 'copy' }],
+            messages: [
+              {
+                id: view.messageId,
+                authorUserId: view.authorUserId,
+                authorHubId: null,
+                authorCloud: false,
+                keyVersion: 1,
+                encryptedBody: 'AA',
+              },
+            ],
+          }
+        : null,
+    ),
+  };
+  const key = new Uint8Array(32).fill(9);
+  const keyring = { openSealed: vi.fn().mockResolvedValue(key) };
+  const cipher = {
+    openMessage: vi.fn().mockResolvedValue(encodeMessage({ text: QUESTION })),
+  };
+  const documents = { record: vi.fn() };
   const llm = new FakeLanguageModel();
   const embedder = new FakeEmbedder();
   const composer = new BrainComposerImpl(
@@ -116,6 +156,10 @@ function setup(
     new AiPricing(),
     { now: vi.fn().mockResolvedValue(NOW) } as unknown as ResponderClock,
     uow as unknown as UnitOfWork,
+    executor as unknown as CloudConversationExecutor,
+    keyring as unknown as ServerKeyring,
+    cipher as unknown as CloudCipher,
+    documents as unknown as CloudDocumentWriter,
   );
   const request: BrainStepRequest = {
     messageId: view.messageId,
@@ -143,6 +187,9 @@ function setup(
     embedder,
     found,
     reservation,
+    executor,
+    key,
+    documents,
   };
 }
 
@@ -464,5 +511,102 @@ describe('BrainComposerImpl', () => {
     expect(t.counter.consume).toHaveBeenCalledTimes(1);
     expect(t.llm.calls).toHaveLength(1);
     expect(t.budget.settle).toHaveBeenCalledTimes(1);
+  });
+
+  it('without the server-decrypted history no document tool is offered', async () => {
+    const t = setup();
+    t.llm.enqueue({ text: 'Ok.' });
+    await t.composer.compose(t.view, t.request);
+    expect(t.executor.read).toHaveBeenCalledTimes(1);
+    expect(t.llm.calls[0]!.tools!.map((x) => x.name)).toEqual([
+      llmToolName(erp.name),
+    ]);
+    expect(t.llm.calls[0]!.system).not.toContain('DOCUMENTAR');
+  });
+
+  it('with the reserve off the history is never read', async () => {
+    const t = setup({ serverHistory: true });
+    t.view.cloudReserve = false;
+    t.llm.enqueue({ text: 'Ok.' });
+    await t.composer.compose(t.view, t.request);
+    expect(t.executor.read).not.toHaveBeenCalled();
+    expect(t.llm.calls[0]!.tools!.map((x) => x.name)).toEqual([
+      llmToolName(erp.name),
+    ]);
+  });
+
+  it('a document call with a pc call in the same round: the document tool runs on the back, the pc call is not run', async () => {
+    const t = setup({ serverHistory: true });
+    t.llm.enqueue(
+      {
+        toolCalls: [
+          {
+            id: 'd1',
+            name: 'propose_document',
+            input: { title: 'Ata', content: '# Ata', confidential: false },
+          },
+          { id: 'ok1', name: llmToolName(erp.name), input: { pedido: 1 } },
+        ],
+      },
+      { text: '' },
+    );
+    const res = await t.composer.compose(t.view, t.request);
+    // The keys opened from the server copies are zeroed once the history is decrypted.
+    expect(t.key.every((b) => b === 0)).toBe(true);
+    expect(t.llm.calls[0]!.system).toContain('DOCUMENTAR');
+    expect(t.llm.calls[0]!.tools!.map((x) => x.name)).toEqual([
+      llmToolName(erp.name),
+      'propose_document',
+      'record_document',
+    ]);
+    const [proposed, notRun] = t.llm.calls[1]!.messages.at(-1)!
+      .content as Extract<LlmMessage['content'], unknown[]>;
+    expect(proposed).toMatchObject({
+      type: 'tool_result',
+      toolUseId: 'd1',
+      isError: false,
+    });
+    expect(notRun).toEqual({
+      type: 'tool_result',
+      toolUseId: 'ok1',
+      content: NOT_RUN_WITH_DOCUMENT_RESULT,
+      isError: true,
+    });
+    // No text from the model: the answer says what the tool did, and carries the proposal for the agent.
+    expect(res).toEqual({
+      kind: 'final',
+      text: 'Posso gravar o documento "Ata" no espaço?',
+      documentProposal: {
+        proposalId: expect.any(String),
+        title: 'Ata',
+        content: '# Ata',
+        confidential: false,
+      },
+      policyVersion: 7,
+    });
+    expect(t.counter.consume).toHaveBeenCalledTimes(1);
+    expect(t.documents.record).not.toHaveBeenCalled();
+  });
+
+  it('record_document without a confirmed proposal in the server history writes nothing', async () => {
+    const t = setup({ serverHistory: true });
+    t.llm.enqueue(
+      {
+        toolCalls: [
+          { id: 'r1', name: 'record_document', input: { proposalId: newId() } },
+        ],
+      },
+      { text: 'Não gravei.' },
+    );
+    const res = await t.composer.compose(t.view, t.request);
+    expect(res).toEqual({
+      kind: 'final',
+      text: 'Não gravei.',
+      policyVersion: 7,
+    });
+    expect(t.documents.record).not.toHaveBeenCalled();
+    expect(JSON.stringify(t.llm.calls[1]!.messages.at(-1))).toContain(
+      'no-proposal',
+    );
   });
 });

@@ -157,4 +157,21 @@ describe('agent tool offer (spec pc-agent §5.3, §5.5)', () => {
       offerTools([a, b], everything, OWNER, true).map((t) => t.name),
     ).toEqual([]);
   });
+
+  it("a catalog tool whose model-safe name is one of the back's own tools is not offered", () => {
+    // `browser` is safe as it is (no `_`): its model name is `browser` itself.
+    const own = tool('browser', 'browser');
+    const everything = [rule({ kind: 'tool', pattern: '*' }, 'allow')];
+    const { offered, collisions } = offeredDefs(
+      [catalog[0]!, own],
+      everything,
+      OWNER,
+      true,
+      new Set(['browser']),
+    );
+    expect([...offered.values()].map((d) => d.name)).toEqual([
+      'mcp:erp/consultar',
+    ]);
+    expect(collisions).toBe(1);
+  });
 });

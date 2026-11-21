@@ -7,17 +7,12 @@ import {
 } from '../../../conversations/application/cloud-conversation-executor.js';
 import { CloudAnswerNotOwnedError } from '../../../conversations/application/send-message.use-case.js';
 import { DomainError } from '../../../shared/domain/errors.js';
-import { newId } from '../../../shared/domain/id.js';
 import { SpaceCloud } from '../../../spaces/application/space-cloud.js';
 import { AiPricing } from '../../domain/ai-pricing.js';
 import type { AiReservation } from '../../domain/ai-usage.js';
-import {
-  confirmedProposal,
-  type HistoryMessage,
-} from '../../domain/document-gate.js';
+import type { HistoryMessage } from '../../domain/document-gate.js';
 import { CloudChunkRepository } from '../../domain/indexing.repositories.js';
 import {
-  decodeMessage,
   encodeMessage,
   type DocumentProposal,
   type MessageContent,
@@ -28,7 +23,6 @@ import {
   CLOUD_GIVE_UP_RETRY_AFTER_MS,
   budgetNoticeIdFor,
   DOCUMENT_MAX_BYTES,
-  DOCUMENT_TITLE_MAX_CHARS,
   nextResponderStep,
   RESPONDER_CONTEXT_CHUNKS,
   RESPONDER_HISTORY_MESSAGES,
@@ -36,19 +30,14 @@ import {
   RESPONDER_MAX_OUTPUT_TOKENS,
   RESPONDER_MAX_TURNS,
   RESPONDER_MESSAGE_MAX_CHARS,
-  utf8Bytes,
 } from '../../domain/responder.js';
 import { AiBudget } from '../ai-budget.js';
-import {
-  CloudCipher,
-  ConversationBlobOpenError,
-} from '../ports/cloud-cipher.js';
+import { CloudCipher } from '../ports/cloud-cipher.js';
 import { Embedder } from '../ports/embedder.js';
 import {
   LanguageModel,
   LanguageModelError,
   type LlmContentBlock,
-  type LlmToolCall,
 } from '../ports/language-model.js';
 import { ServerKeyring } from '../ports/server-keyring.js';
 import type { JobContext } from '../../../shared/application/job-queue.js';
@@ -63,7 +52,15 @@ import {
   type AnswerConversationPayload,
 } from './cloud-responder-queue.js';
 import { ResponderClock } from './responder-clock.js';
-import { cutUtf8, retrieve, Spend, toLlmMessages } from './responder-shared.js';
+import {
+  cutUtf8,
+  decryptHistory,
+  retrieve,
+  runDocumentTool,
+  Spend,
+  toLlmMessages,
+  type ServerKeys,
+} from './responder-shared.js';
 
 /** Fixed, non-sensitive texts of the cloud (no model involved). pt-BR, like the app. */
 export const BUDGET_NOTICE_TEXT =
@@ -78,7 +75,7 @@ const CHARS_PER_TOKEN = 2;
 
 type StepOutcome = 'continue' | 'stop';
 
-type Keys = Map<number, Uint8Array>;
+type Keys = ServerKeys;
 
 // A nuvem como executor de reserva respondendo um assunto (spec active-cloud §4.3; Task 7 do plano). UMA tarefa por
 // assunto (`CloudResponderQueue`), mensagens EM ORDEM: a nuvem nunca pega a segunda antes de responder a primeira, e uma
@@ -255,7 +252,12 @@ export class AnswerConversationJob {
           await this.keyring.openSealed(copy.wrappedKey),
         );
       }
-      const history = await this.decryptHistory(read, target, keys);
+      const history = await decryptHistory(
+        { cipher: this.cipher, logger: this.logger },
+        read,
+        target.id,
+        keys,
+      );
       let content: MessageContent;
       try {
         content = await this.compose(p, read, target, history, spend);
@@ -284,69 +286,6 @@ export class AnswerConversationJob {
       for (const k of keys.values()) k.fill(0);
       await this.close(reservation, spend);
     }
-  }
-
-  /** The conversation's own history up to the message being answered (the most recent ones), decrypted. */
-  private async decryptHistory(
-    read: CloudConversationRead,
-    target: CloudMessageView,
-    keys: Keys,
-  ): Promise<HistoryMessage[]> {
-    const upTo = read.messages.findIndex((m) => m.id === target.id);
-    const slice = read.messages.slice(
-      Math.max(0, upTo + 1 - RESPONDER_HISTORY_MESSAGES),
-      upTo + 1,
-    );
-    const out: HistoryMessage[] = [];
-    let unreadable = 0;
-    for (const m of slice) {
-      const author = m.authorCloud ? 'cloud' : m.authorHubId ? 'hub' : 'person';
-      // An unreadable message keeps its place (the confirmation gate's "immediately before" never skips over it).
-      const unreadableEntry = (): HistoryMessage => ({
-        id: m.id,
-        author,
-        authorUserId: m.authorUserId,
-        content: { text: '[mensagem ilegível]' },
-      });
-      const key = keys.get(m.keyVersion);
-      if (!key) {
-        unreadable += 1;
-        out.push(unreadableEntry());
-        continue;
-      }
-      let plaintext: Uint8Array | undefined;
-      try {
-        plaintext = await this.cipher.openMessage(
-          key,
-          {
-            spaceId: read.conversation.spaceId,
-            conversationId: read.conversation.id,
-            messageId: m.id,
-            keyVersion: m.keyVersion,
-          },
-          Buffer.from(m.encryptedBody, 'base64url'),
-        );
-        out.push({
-          id: m.id,
-          author,
-          authorUserId: m.authorUserId,
-          content: decodeMessage(plaintext),
-        });
-      } catch (error) {
-        if (!(error instanceof ConversationBlobOpenError)) throw error;
-        unreadable += 1;
-        out.push(unreadableEntry());
-      } finally {
-        plaintext?.fill(0);
-      }
-    }
-    if (unreadable > 0) {
-      this.logger.warn(
-        { conversationId: read.conversation.id, unreadable },
-        'cloud answer: history messages skipped',
-      );
-    }
-    return out;
   }
 
   /** Steps 5: retrieval, prompt and the tool loop. Returns the answer's content. */
@@ -403,7 +342,13 @@ export class AnswerConversationJob {
       });
       const results: LlmContentBlock[] = [];
       for (const call of result.toolCalls) {
-        const out = await this.runTool(p, target, history, call);
+        const out = await runDocumentTool(
+          { documents: this.documents, clock: this.clock },
+          p,
+          target,
+          history,
+          call,
+        );
         if (out.proposal) proposal = out.proposal;
         if (out.recorded) recorded = out.recorded;
         results.push({
@@ -427,97 +372,6 @@ export class AnswerConversationJob {
     if (recorded) content.documentRecorded = recorded;
     else if (proposal) content.documentProposal = proposal;
     return content;
-  }
-
-  private async runTool(
-    p: AnswerConversationPayload,
-    target: CloudMessageView,
-    history: HistoryMessage[],
-    call: LlmToolCall,
-  ): Promise<{
-    result: Record<string, unknown>;
-    isError: boolean;
-    proposal?: DocumentProposal;
-    recorded?: { fileId: string; title: string };
-  }> {
-    const fail = (reason: string, message: string) => ({
-      result: { status: 'refused', reason, message },
-      isError: true,
-    });
-    if (call.name === 'propose_document') {
-      const { title, content, confidential } = call.input;
-      if (
-        typeof title !== 'string' ||
-        !title.trim() ||
-        title.length > DOCUMENT_TITLE_MAX_CHARS ||
-        typeof content !== 'string' ||
-        !content.trim() ||
-        utf8Bytes(content) > DOCUMENT_MAX_BYTES
-      ) {
-        return fail(
-          'invalid-document',
-          `Título de 1 a ${DOCUMENT_TITLE_MAX_CHARS} caracteres e conteúdo de até ${DOCUMENT_MAX_BYTES} bytes.`,
-        );
-      }
-      const proposal: DocumentProposal = {
-        proposalId: newId(),
-        title: title.trim(),
-        content,
-        confidential: confidential === true,
-      };
-      return {
-        result: {
-          status: 'proposed',
-          proposalId: proposal.proposalId,
-          message:
-            'Nada foi gravado. Mostre o documento e pergunte se pode gravar (com o alerta de confidencialidade, se for o caso).',
-        },
-        isError: false,
-        proposal,
-      };
-    }
-    if (call.name === 'record_document') {
-      const proposalId = call.input.proposalId;
-      if (typeof proposalId !== 'string') {
-        return fail('no-proposal', 'Informe o proposalId.');
-      }
-      const gate = confirmedProposal(history, target.id, proposalId);
-      if ('refused' in gate) {
-        return fail(
-          gate.refused,
-          gate.refused === 'declined'
-            ? 'A pessoa recusou a gravação. Não grave.'
-            : 'Não há proposta confirmada com esse id logo antes da mensagem da pessoa. Proponha com propose_document e pergunte antes de gravar.',
-        );
-      }
-      try {
-        await this.documents.record({
-          organizationId: p.organizationId,
-          spaceId: p.spaceId,
-          onBehalfOfUserId: target.authorUserId!,
-          document: {
-            fileId: gate.proposal.proposalId,
-            title: gate.proposal.title,
-            content: gate.proposal.content,
-          },
-          now: await this.clock.now(),
-        });
-      } catch (error) {
-        if (error instanceof DomainError) {
-          return fail(error.code, recordFailureMessage(error.code));
-        }
-        throw error;
-      }
-      return {
-        result: { status: 'recorded', fileId: gate.proposal.proposalId },
-        isError: false,
-        recorded: {
-          fileId: gate.proposal.proposalId,
-          title: gate.proposal.title,
-        },
-      };
-    }
-    return fail('unknown-tool', 'Ferramenta desconhecida.');
   }
 
   /** Step 6: the answer, sealed with the current conversation key, as the cloud. */
@@ -677,20 +531,5 @@ export class AnswerConversationJob {
         'cloud answer: budget not settled (the reservation expires on its own)',
       );
     }
-  }
-}
-
-function recordFailureMessage(code: string): string {
-  switch (code) {
-    case 'space-storage-full':
-      return 'O espaço está cheio: não deu para gravar. Avise a pessoa.';
-    case 'space-key-rotation-required':
-      return 'O espaço precisa trocar a chave antes de receber conteúdo novo: não deu para gravar agora.';
-    case 'space-not-found':
-    case 'permission-denied':
-    case 'forbidden':
-      return 'A pessoa não pode gravar neste espaço (só Editores e Gestores). Não foi gravado.';
-    default:
-      return 'Não deu para gravar agora. Avise a pessoa.';
   }
 }

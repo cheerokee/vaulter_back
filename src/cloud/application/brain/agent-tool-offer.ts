@@ -29,14 +29,16 @@ export function llmToolName(name: string): string {
 
 /**
  * The catalog tools the model may call: by name, not `deny` for `userId`; none when PC tools are not allowed. Two
- * catalog tools that map to the same model-safe name (`llmToolName`) are BOTH left out (a call could not be told apart);
- * `collisions` = how many tools were left out for that (the caller logs only the count).
+ * catalog tools that map to the same model-safe name (`llmToolName`) are BOTH left out (a call could not be told apart),
+ * and so is a catalog tool whose model-safe name is `reserved` (the back's own tools of the step, e.g. the document
+ * tools); `collisions` = how many tools were left out for that (the caller logs only the count).
  */
 export function offeredDefs(
   catalog: readonly AgentToolDef[],
   rules: AgentRule[],
   userId: string,
   pcToolsAllowed: boolean,
+  reserved: ReadonlySet<string> = new Set(),
 ): { offered: Map<string, AgentToolDef>; collisions: number } {
   const offered = new Map<string, AgentToolDef>();
   if (!pcToolsAllowed) return { offered, collisions: 0 };
@@ -47,7 +49,7 @@ export function offeredDefs(
   }
   let collisions = 0;
   for (const [key, defs] of byKey) {
-    if (defs.length > 1) {
+    if (defs.length > 1 || reserved.has(key)) {
       collisions += defs.length;
       continue;
     }

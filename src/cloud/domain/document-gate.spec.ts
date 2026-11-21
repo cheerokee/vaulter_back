@@ -65,4 +65,23 @@ describe('confirmedProposal (record only after the person confirmed)', () => {
       refused: 'declined',
     });
   });
+
+  it("an executor hub's proposal counts only when the caller allows it (the pc agent's step); a person's never", () => {
+    const hub: HistoryMessage = { ...cloud(), author: 'hub' };
+    const yes = person('sim');
+    expect(confirmedProposal([hub, yes], yes.id, proposalId)).toEqual({
+      refused: 'no-proposal',
+    });
+    expect(
+      confirmedProposal([hub, yes], yes.id, proposalId, ['cloud', 'hub']),
+    ).toEqual({ proposal });
+    const fromPerson: HistoryMessage = { ...cloud(), author: 'person' };
+    expect(
+      confirmedProposal([fromPerson, yes], yes.id, proposalId, [
+        'cloud',
+        'hub',
+        'person',
+      ]),
+    ).toEqual({ refused: 'no-proposal' });
+  });
 });

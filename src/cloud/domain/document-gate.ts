@@ -21,12 +21,16 @@ export type GateRefusal =
  *    content were shown to the person, and the confidentiality alert with the space audience when it applied), and
  * 2. the person's message is the answer to it: a structured decision (`documentDecision`, the app's buttons) must say
  *    `record` for that proposal; free text is judged by the model (it calls `record_document` only for a "yes").
- * What is recorded is the proposal's content from the history, never what the model sends again.
+ * What is recorded is the proposal's content from the history, never what the model sends again. `proposers` = whose
+ * messages may carry the proposal: the cloud responder only trusts its own (`cloud`, the default); the PC agent's brain
+ * step also the executor hub's (`hub`: the agent's answer carries the proposal the back returned to it). Either way the
+ * history must be the one the SERVER decrypted, never text an agent sent.
  */
 export function confirmedProposal(
   history: readonly HistoryMessage[],
   answeringId: string,
   proposalId: string,
+  proposers: readonly HistoryMessage['author'][] = ['cloud'],
 ): { proposal: DocumentProposal } | { refused: GateRefusal } {
   const i = history.findIndex((m) => m.id === answeringId);
   const question = history[i];
@@ -35,7 +39,8 @@ export function confirmedProposal(
     !question ||
     question.author !== 'person' ||
     !previous ||
-    previous.author !== 'cloud' ||
+    previous.author === 'person' ||
+    !proposers.includes(previous.author) ||
     previous.content.documentProposal?.proposalId !== proposalId
   ) {
     return { refused: 'no-proposal' };

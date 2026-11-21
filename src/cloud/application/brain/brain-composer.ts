@@ -2,6 +2,10 @@ import { Injectable, Logger } from '@nestjs/common';
 import { AgentPolicyReader } from '../../../agents/application/agent-policy-reader.js';
 import { AgentToolCatalog } from '../../../agents/application/agent-tool-catalog.js';
 import type { AgentTurnView } from '../../../conversations/application/agent-turn.js';
+import {
+  CloudConversationExecutor,
+  MAX_CLOUD_HISTORY_MESSAGES,
+} from '../../../conversations/application/cloud-conversation-executor.js';
 import { UnitOfWork } from '../../../shared/infra/db/unit-of-work.js';
 import { SpaceCloud } from '../../../spaces/application/space-cloud.js';
 import { AiPricing } from '../../domain/ai-pricing.js';
@@ -9,6 +13,7 @@ import type { AiReservation } from '../../domain/ai-usage.js';
 import {
   cloudNotActive,
   type BrainContentBlock,
+  type BrainDocumentOutcome,
   type BrainStepRequest,
   type BrainStepResponse,
 } from '../../domain/brain-step.js';
@@ -23,6 +28,7 @@ import {
   RESPONDER_MESSAGE_MAX_CHARS,
 } from '../../domain/responder.js';
 import { AiBudget } from '../ai-budget.js';
+import { CloudCipher } from '../ports/cloud-cipher.js';
 import { Embedder } from '../ports/embedder.js';
 import {
   LanguageModel,
@@ -33,12 +39,18 @@ import {
   type LlmTool,
   type LlmToolCall,
 } from '../ports/language-model.js';
+import { ServerKeyring } from '../ports/server-keyring.js';
+import { RESPONDER_TOOLS } from '../responder/antares-prompt.js';
+import { CloudDocumentWriter } from '../responder/cloud-document-writer.js';
 import { ResponderClock } from '../responder/responder-clock.js';
 import {
   cutUtf8,
+  decryptHistory,
   embedQuestion,
+  runDocumentTool,
   Spend,
   toLlmMessages,
+  type ServerKeys,
 } from '../responder/responder-shared.js';
 import {
   llmToolName,
@@ -63,6 +75,12 @@ export const NOT_OFFERED_RESULT =
   'Recusada: esta ferramenta não foi oferecida neste passo (ou a política da organização nega estes argumentos). Nada foi executado. Use só as ferramentas oferecidas.';
 export const NOT_RUN_RESULT =
   'Não executada: esta rodada tinha uma chamada recusada. Chame de novo só as ferramentas oferecidas.';
+export const NOT_RUN_WITH_DOCUMENT_RESULT =
+  'Não executada: ferramentas do PC não rodam na mesma rodada de uma ferramenta de documento. Chame de novo, se ainda precisar.';
+/** The document tools: run on the back inside the step, never sent to the agent. */
+const DOCUMENT_TOOL_NAMES: ReadonlySet<string> = new Set(
+  RESPONDER_TOOLS.map((t) => t.name),
+);
 const NO_TOOLS_RESULT =
   'Nenhuma ferramenta do PC está disponível nesta pergunta: nada foi executado. Responda só com texto.';
 
@@ -92,7 +110,17 @@ type Paid<T> = { value: T } | { refusal: { resetsAt: Date } };
 // 4. o modelo: prompt versionado (`antares-agent-prompt.ts`), histórico até `messageId` e os `turns` do agente. Uma
 //    chamada a ferramenta não oferecida (ou negada pelos argumentos) é DESCARTADA (`markCalls`): nunca sai em
 //    `toolCalls`; vira um `tool_result` de erro e o modelo é chamado de novo DENTRO do passo (Review Focus 2). Sai com
-//    texto final ou com chamadas do PC (cada uma com o `effect` da ACL).
+//    texto final ou com chamadas do PC (cada uma com o `effect` da ACL);
+// 5. documentos (Task 12): com a nuvem de reserva ligada no assunto (`view.cloudReserve`) e o assunto ao alcance da
+//    nuvem, o histórico é lido e decifrado PELO SERVIDOR (`CloudConversationExecutor.read` + cópias da chave do assunto
+//    para o servidor, fora de qualquer transação; chaves apagadas logo depois) e é ELE que vai ao modelo (com as
+//    propostas e os botões por extenso, como no responder), nunca o `history` do agente. `propose_document` /
+//    `record_document` (`RESPONDER_TOOLS`, nomes reservados: nenhuma ferramenta do catálogo os toma) rodam aqui, com o
+//    código do responder (`runDocumentTool`): a trava `confirmedProposal` confere a proposta (da nuvem ou do executor)
+//    logo antes da mensagem e a recusa por botão contra esse histórico; grava em nome do autor GRAVADO da mensagem
+//    (`memory.write`). Recusa ou falha = `tool_result` de erro e o modelo de novo (cada chamada extra passa por `consume`
+//    e pelo orçamento); nunca saem em `toolCalls`. A proposta ou o documento gravado voltam na resposta
+//    (`documentProposal` / `documentRecorded`) para o agente pôr na mensagem dele.
 // Nada legível em log: só ids, contagens, versões e o tipo da saída.
 @Injectable()
 export class BrainComposerImpl extends BrainComposer {
@@ -110,6 +138,10 @@ export class BrainComposerImpl extends BrainComposer {
     private readonly pricing: AiPricing,
     private readonly clock: ResponderClock,
     private readonly uow: UnitOfWork,
+    private readonly executor: CloudConversationExecutor,
+    private readonly keyring: ServerKeyring,
+    private readonly cipher: CloudCipher,
+    private readonly documents: CloudDocumentWriter,
   ) {
     super();
   }
@@ -124,11 +156,17 @@ export class BrainComposerImpl extends BrainComposer {
     const catalog = pcToolsAllowed
       ? await this.catalog.toolsOf(view.hubId)
       : [];
+    // The document tools need the history decrypted by the server (never the agent's): reserve on and readable.
+    const serverHistory = view.cloudReserve
+      ? await this.serverHistory(view)
+      : null;
+    const docsOffered = serverHistory !== null;
     const { offered, collisions } = offeredDefs(
       catalog,
       policy.rules,
       view.hubOwnerUserId,
       pcToolsAllowed,
+      DOCUMENT_TOOL_NAMES,
     );
     if (collisions > 0) {
       // Two catalog tools with the same model-safe name: neither is offered (only the count is logged).
@@ -141,10 +179,15 @@ export class BrainComposerImpl extends BrainComposer {
         'brain step: colliding tool names not offered',
       );
     }
-    const tools = toLlmTools(offered);
+    const pcTools = toLlmTools(offered);
+    const tools = docsOffered ? [...pcTools, ...RESPONDER_TOOLS] : pcTools;
+    const question = serverHistory
+      ? (serverHistory.find((m) => m.id === view.messageId)?.content.text ?? '')
+      : questionOf(request);
     const storedChunkIds = await this.counter.chunkIdsOf(view);
-    const messages = messagesOf(request, tools.length > 0);
-    const stats = { calls: 0, dropped: 0 };
+    const messages = messagesOf(request, tools.length > 0, serverHistory);
+    const stats = { calls: 0, dropped: 0, documentCalls: 0 };
+    const docs: BrainDocumentOutcome = {};
     const done = (response: BrainStepResponse): BrainStepResponse => {
       this.logger.log(
         {
@@ -156,8 +199,10 @@ export class BrainComposerImpl extends BrainComposer {
           promptVersion: ANTARES_AGENT_PROMPT_VERSION,
           policyVersion: policy.version,
           offered: tools.length,
+          documentTools: docsOffered,
           calls: stats.calls,
           dropped: stats.dropped,
+          documentCalls: stats.documentCalls,
           outcome: response.kind,
         },
         'brain step',
@@ -167,11 +212,9 @@ export class BrainComposerImpl extends BrainComposer {
     const final = (text: string): BrainStepResponse =>
       done({
         kind: 'final',
-        text: cutUtf8(
-          text.trim() || AGENT_STEP_FAILED_TEXT,
-          ANSWER_TEXT_MAX_BYTES,
-        ),
+        text: cutUtf8(text.trim() || fallbackText(docs), ANSWER_TEXT_MAX_BYTES),
         policyVersion: policy.version,
+        ...docs,
       });
 
     let system: string | undefined;
@@ -186,18 +229,28 @@ export class BrainComposerImpl extends BrainComposer {
       try {
         paid = await this.paid(
           view,
-          this.estimate(system, messages, tools, firstRetrieval, request),
+          this.estimate(system, messages, tools, firstRetrieval, question),
           async (spend) => {
             if (system === undefined) {
               const chunks = await this.context(
                 view,
-                questionOf(request),
+                question,
                 storedChunkIds,
                 spend,
               );
               system = antaresAgentSystemPrompt({
-                tools,
+                tools: pcTools,
                 pcToolsAllowed,
+                ...(docsOffered
+                  ? {
+                      documents: {
+                        audience: await this.spaceCloud.audience(
+                          view.organizationId,
+                          view.spaceId,
+                        ),
+                      },
+                    }
+                  : {}),
                 now: await this.clock.now(),
               });
               // The chunks are data: a delimited block in the first user turn, never the system prompt.
@@ -219,6 +272,8 @@ export class BrainComposerImpl extends BrainComposer {
       } catch (error) {
         // A model that cannot answer this (not worth retrying): a fixed text; anything else fails the step.
         if (error instanceof LanguageModelError && !error.retryable) {
+          // Like the responder: the fixed text alone (a recorded document still says so).
+          delete docs.documentProposal;
           return final(AGENT_STEP_FAILED_TEXT);
         }
         throw error;
@@ -235,24 +290,97 @@ export class BrainComposerImpl extends BrainComposer {
       lastText = result.text;
       if (result.toolCalls.length === 0) return final(result.text);
 
+      const docCalls = docsOffered
+        ? result.toolCalls.filter((c) => DOCUMENT_TOOL_NAMES.has(c.name))
+        : [];
       const { out, dropped } = markCalls(
-        result.toolCalls,
+        result.toolCalls.filter((c) => !docCalls.includes(c)),
         offered,
         policy.rules,
         view.hubOwnerUserId,
       );
-      if (dropped.length === 0) {
+      if (dropped.length === 0 && docCalls.length === 0) {
         const text = result.text.trim();
         return done({
           kind: 'tools',
           ...(text ? { text: cutUtf8(text, ANSWER_TEXT_MAX_BYTES) } : {}),
           toolCalls: out,
           policyVersion: policy.version,
+          ...docs,
         });
       }
-      // Review Focus 2: a dropped call never reaches the agent; the model hears it was refused, in this same step.
+      // Review Focus 2: a dropped call never reaches the agent; the model hears it was refused, in this same step. The
+      // document tools run here (outside any transaction and any reservation) and their results go back the same way.
       stats.dropped += dropped.length;
-      feedBack(messages, result, dropped, tools.length > 0);
+      stats.documentCalls += docCalls.length;
+      const results = new Map<LlmToolCall, ToolResult>();
+      for (const call of docCalls) {
+        const outcome = await runDocumentTool(
+          { documents: this.documents, clock: this.clock },
+          view,
+          { id: view.messageId, authorUserId: view.authorUserId },
+          serverHistory ?? [],
+          call,
+          ['cloud', 'hub'],
+        );
+        if (outcome.recorded) {
+          docs.documentRecorded = outcome.recorded;
+          delete docs.documentProposal;
+        } else if (outcome.proposal && !docs.documentRecorded) {
+          docs.documentProposal = outcome.proposal;
+        }
+        results.set(call, {
+          content: JSON.stringify(outcome.result),
+          isError: outcome.isError,
+        });
+      }
+      const notRun =
+        dropped.length > 0 ? NOT_RUN_RESULT : NOT_RUN_WITH_DOCUMENT_RESULT;
+      for (const call of result.toolCalls) {
+        if (results.has(call)) continue;
+        results.set(call, {
+          content: dropped.includes(call) ? NOT_OFFERED_RESULT : notRun,
+          isError: true,
+        });
+      }
+      feedBack(messages, result, results, tools.length > 0);
+    }
+  }
+
+  /**
+   * The conversation's history decrypted by the SERVER (the cloud reserve's copies of its key), up to `messageId`, or
+   * null when out of the cloud's reach (reserve or space switched off) or the message is not in the read window: then
+   * no document tool is offered. The read is a short transaction of its own; the keys are opened (KMS-backed keyring)
+   * and the messages decrypted outside it, and the keys are zeroed right after.
+   */
+  private async serverHistory(
+    view: AgentTurnView,
+  ): Promise<HistoryMessage[] | null> {
+    const read = await this.executor.read(
+      view.organizationId,
+      view.spaceId,
+      view.conversationId,
+      MAX_CLOUD_HISTORY_MESSAGES,
+    );
+    if (!read || !read.messages.some((m) => m.id === view.messageId)) {
+      return null;
+    }
+    const keys: ServerKeys = new Map();
+    try {
+      for (const copy of read.serverKeyCopies) {
+        keys.set(
+          copy.keyVersion,
+          await this.keyring.openSealed(copy.wrappedKey),
+        );
+      }
+      return await decryptHistory(
+        { cipher: this.cipher, logger: this.logger },
+        read,
+        view.messageId,
+        keys,
+      );
+    } finally {
+      for (const k of keys.values()) k.fill(0);
     }
   }
 
@@ -335,7 +463,7 @@ export class BrainComposerImpl extends BrainComposer {
     messages: LlmMessage[],
     tools: LlmTool[],
     withEmbedding: boolean,
-    request: BrainStepRequest,
+    question: string,
   ): bigint {
     const toolsChars = JSON.stringify(tools).length;
     const systemChars =
@@ -353,7 +481,7 @@ export class BrainComposerImpl extends BrainComposer {
       cost += this.pricing.costMicroUsd(
         {
           inputTokens: Math.ceil(
-            Math.min(questionOf(request).length, RESPONDER_MESSAGE_MAX_CHARS) /
+            Math.min(question.length, RESPONDER_MESSAGE_MAX_CHARS) /
               CHARS_PER_TOKEN,
           ),
           outputTokens: 0,
@@ -398,29 +526,50 @@ export class BrainComposerImpl extends BrainComposer {
   }
 }
 
-/** The question: the text of `messageId` in the history the agent sent ('' when it is missing: no retrieval). */
+type ToolResult = { content: string; isError: boolean };
+
+/** What the answer says when the model ended with no text (like the responder: what the document tools did). */
+function fallbackText(docs: BrainDocumentOutcome): string {
+  if (docs.documentRecorded) {
+    return `Gravei o documento "${docs.documentRecorded.title}" no espaço.`;
+  }
+  if (docs.documentProposal) {
+    return `Posso gravar o documento "${docs.documentProposal.title}" no espaço?`;
+  }
+  return AGENT_STEP_FAILED_TEXT;
+}
+
+/**
+ * The question without the server's history (no cloud reserve): the text of `messageId` in the history the agent sent
+ * ('' when it is missing: no retrieval).
+ */
 function questionOf(request: BrainStepRequest): string {
   return request.history.find((m) => m.id === request.messageId)?.text ?? '';
 }
 
 /**
  * The model's messages: the history up to `messageId` (as the responder turns it into turns), then the agent's
- * previous turns of this answer. Tool names in the turns become the model-safe names; with no tool offered, tool
- * blocks become text (the model APIs refuse tool blocks without tools).
+ * previous turns of this answer. The history is the server-decrypted one when there is one (`serverHistory`, already
+ * cut at `messageId`, with proposals and button decisions spelled out), else the one the agent sent. Tool names in the
+ * turns become the model-safe names; with no tool offered, tool blocks become text (the model APIs refuse tool blocks
+ * without tools).
  */
 function messagesOf(
   request: BrainStepRequest,
   toolsOffered: boolean,
+  serverHistory: readonly HistoryMessage[] | null,
 ): LlmMessage[] {
   const upTo = request.history.findIndex((m) => m.id === request.messageId);
   const slice =
     upTo >= 0 ? request.history.slice(0, upTo + 1) : request.history;
-  const history: HistoryMessage[] = slice.map((m) => ({
-    id: m.id,
-    author: m.author,
-    authorUserId: m.authorUserId ?? null,
-    content: { text: m.text },
-  }));
+  const history: readonly HistoryMessage[] =
+    serverHistory ??
+    slice.map((m) => ({
+      id: m.id,
+      author: m.author,
+      authorUserId: m.authorUserId ?? null,
+      content: { text: m.text },
+    }));
   const messages = toLlmMessages(history);
   for (const turn of request.turns) {
     push(messages, {
@@ -478,11 +627,14 @@ function push(messages: LlmMessage[], message: LlmMessage): void {
   last.content = [...blocks(last.content), ...blocks(message.content)];
 }
 
-/** The model's turn with a dropped call, and the refusal it hears back (every call of the turn answered). */
+/**
+ * The model's turn with calls resolved inside the step (a dropped call, a document tool), and the results it hears back
+ * (`results`: every call of the turn answered).
+ */
 function feedBack(
   messages: LlmMessage[],
   result: LlmResult,
-  dropped: readonly LlmToolCall[],
+  results: ReadonlyMap<LlmToolCall, ToolResult>,
   toolsOffered: boolean,
 ): void {
   if (!toolsOffered) {
@@ -508,8 +660,7 @@ function feedBack(
     content: result.toolCalls.map((c): LlmContentBlock => ({
       type: 'tool_result',
       toolUseId: c.id,
-      content: dropped.includes(c) ? NOT_OFFERED_RESULT : NOT_RUN_RESULT,
-      isError: true,
+      ...results.get(c)!,
     })),
   });
 }

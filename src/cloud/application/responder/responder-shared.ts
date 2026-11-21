@@ -1,20 +1,45 @@
+import type { Logger } from '@nestjs/common';
+import type { CloudConversationRead } from '../../../conversations/application/cloud-conversation-executor.js';
+import { DomainError } from '../../../shared/domain/errors.js';
+import { newId } from '../../../shared/domain/id.js';
 import type { AiPricing } from '../../domain/ai-pricing.js';
-import type { HistoryMessage } from '../../domain/document-gate.js';
+import {
+  confirmedProposal,
+  type HistoryMessage,
+} from '../../domain/document-gate.js';
 import type {
   ChunkHit,
   CloudChunkRepository,
 } from '../../domain/indexing.repositories.js';
 import {
+  decodeMessage,
+  type DocumentProposal,
+} from '../../domain/message-plaintext.js';
+import {
+  DOCUMENT_MAX_BYTES,
+  DOCUMENT_TITLE_MAX_CHARS,
   RESPONDER_CONTEXT_CHUNKS,
+  RESPONDER_HISTORY_MESSAGES,
   RESPONDER_MESSAGE_MAX_CHARS,
   utf8Bytes,
 } from '../../domain/responder.js';
+import {
+  type CloudCipher,
+  ConversationBlobOpenError,
+} from '../ports/cloud-cipher.js';
 import type { Embedder } from '../ports/embedder.js';
-import type { LlmMessage } from '../ports/language-model.js';
+import type { LlmMessage, LlmToolCall } from '../ports/language-model.js';
+import type { CloudDocumentWriter } from './cloud-document-writer.js';
+import type { ResponderClock } from './responder-clock.js';
 
 // Peças comuns ao responder da nuvem (`AnswerConversationJob`) e ao passo do cérebro do agente do PC
-// (`BrainComposerImpl`): o gasto de uma resposta, a busca nos trechos do espaço e o histórico como turnos do modelo.
-// Texto em claro só em memória: nada daqui vai a log.
+// (`BrainComposerImpl`): o gasto de uma resposta, a busca nos trechos do espaço, o histórico decifrado pelo servidor
+// (das cópias da chave do assunto para o servidor), o histórico como turnos do modelo e as ferramentas de documento
+// (`propose_document` / `record_document`, com a trava de confirmação `confirmedProposal`). Texto em claro só em memória:
+// nada daqui vai a log.
+
+/** The conversation keys opened from the server's copies, by version (the caller zeroes them). */
+export type ServerKeys = Map<number, Uint8Array>;
 
 /** Accumulates what the calls of one answer cost (the reservation is settled with the sum). */
 export class Spend {
@@ -121,4 +146,193 @@ export function toLlmMessages(
   }
   while (turns.length > 0 && turns[0]!.role !== 'user') turns.shift();
   return turns.map((t) => ({ role: t.role, content: t.text }));
+}
+
+/**
+ * The conversation's own history up to the message `targetId` (the most recent `RESPONDER_HISTORY_MESSAGES`), decrypted
+ * by the server with `keys`. A message that does not open keeps its place as "[mensagem ilegível]" (the confirmation
+ * gate's "immediately before" never skips over it); only the count is logged. A network-free call, but run it outside a
+ * unit of work anyway (the keys were opened from the KMS-backed keyring).
+ */
+export async function decryptHistory(
+  deps: { cipher: CloudCipher; logger: Logger },
+  read: CloudConversationRead,
+  targetId: string,
+  keys: ServerKeys,
+): Promise<HistoryMessage[]> {
+  const upTo = read.messages.findIndex((m) => m.id === targetId);
+  const slice = read.messages.slice(
+    Math.max(0, upTo + 1 - RESPONDER_HISTORY_MESSAGES),
+    upTo + 1,
+  );
+  const out: HistoryMessage[] = [];
+  let unreadable = 0;
+  for (const m of slice) {
+    const author = m.authorCloud ? 'cloud' : m.authorHubId ? 'hub' : 'person';
+    // An unreadable message keeps its place (the confirmation gate's "immediately before" never skips over it).
+    const unreadableEntry = (): HistoryMessage => ({
+      id: m.id,
+      author,
+      authorUserId: m.authorUserId,
+      content: { text: '[mensagem ilegível]' },
+    });
+    const key = keys.get(m.keyVersion);
+    if (!key) {
+      unreadable += 1;
+      out.push(unreadableEntry());
+      continue;
+    }
+    let plaintext: Uint8Array | undefined;
+    try {
+      plaintext = await deps.cipher.openMessage(
+        key,
+        {
+          spaceId: read.conversation.spaceId,
+          conversationId: read.conversation.id,
+          messageId: m.id,
+          keyVersion: m.keyVersion,
+        },
+        Buffer.from(m.encryptedBody, 'base64url'),
+      );
+      out.push({
+        id: m.id,
+        author,
+        authorUserId: m.authorUserId,
+        content: decodeMessage(plaintext),
+      });
+    } catch (error) {
+      if (!(error instanceof ConversationBlobOpenError)) throw error;
+      unreadable += 1;
+      out.push(unreadableEntry());
+    } finally {
+      plaintext?.fill(0);
+    }
+  }
+  if (unreadable > 0) {
+    deps.logger.warn(
+      { conversationId: read.conversation.id, unreadable },
+      'cloud answer: history messages skipped',
+    );
+  }
+  return out;
+}
+
+/** What a document tool call gave: the tool result for the model, and the proposal or the recorded document. */
+export type DocumentToolOutcome = {
+  result: Record<string, unknown>;
+  isError: boolean;
+  proposal?: DocumentProposal;
+  recorded?: { fileId: string; title: string };
+};
+
+/**
+ * Runs one call to `propose_document` / `record_document` (`RESPONDER_TOOLS`). `propose_document` only validates and
+ * returns a proposal (nothing written). `record_document` records ONLY a proposal the gate confirms against `history`
+ * (which MUST be the server-decrypted history, never text an agent sent): the proposal's content from that history, on
+ * behalf of `target.authorUserId` (the recorded author of the message being answered: the person who confirmed; needs
+ * `memory.write`). Refused, unconfirmed or failed = an error result for the model (`status: 'refused'`), nothing
+ * written. `proposers` = which authors' proposals count (the cloud responder: only its own).
+ */
+export async function runDocumentTool(
+  deps: { documents: CloudDocumentWriter; clock: ResponderClock },
+  p: { organizationId: string; spaceId: string },
+  target: { id: string; authorUserId: string | null },
+  history: readonly HistoryMessage[],
+  call: LlmToolCall,
+  proposers?: readonly HistoryMessage['author'][],
+): Promise<DocumentToolOutcome> {
+  const fail = (reason: string, message: string) => ({
+    result: { status: 'refused', reason, message },
+    isError: true,
+  });
+  if (call.name === 'propose_document') {
+    const { title, content, confidential } = call.input;
+    if (
+      typeof title !== 'string' ||
+      !title.trim() ||
+      title.length > DOCUMENT_TITLE_MAX_CHARS ||
+      typeof content !== 'string' ||
+      !content.trim() ||
+      utf8Bytes(content) > DOCUMENT_MAX_BYTES
+    ) {
+      return fail(
+        'invalid-document',
+        `Título de 1 a ${DOCUMENT_TITLE_MAX_CHARS} caracteres e conteúdo de até ${DOCUMENT_MAX_BYTES} bytes.`,
+      );
+    }
+    const proposal: DocumentProposal = {
+      proposalId: newId(),
+      title: title.trim(),
+      content,
+      confidential: confidential === true,
+    };
+    return {
+      result: {
+        status: 'proposed',
+        proposalId: proposal.proposalId,
+        message:
+          'Nada foi gravado. Mostre o documento e pergunte se pode gravar (com o alerta de confidencialidade, se for o caso).',
+      },
+      isError: false,
+      proposal,
+    };
+  }
+  if (call.name === 'record_document') {
+    const proposalId = call.input.proposalId;
+    if (typeof proposalId !== 'string') {
+      return fail('no-proposal', 'Informe o proposalId.');
+    }
+    const gate = confirmedProposal(history, target.id, proposalId, proposers);
+    if ('refused' in gate) {
+      return fail(
+        gate.refused,
+        gate.refused === 'declined'
+          ? 'A pessoa recusou a gravação. Não grave.'
+          : 'Não há proposta confirmada com esse id logo antes da mensagem da pessoa. Proponha com propose_document e pergunte antes de gravar.',
+      );
+    }
+    try {
+      await deps.documents.record({
+        organizationId: p.organizationId,
+        spaceId: p.spaceId,
+        onBehalfOfUserId: target.authorUserId!,
+        document: {
+          fileId: gate.proposal.proposalId,
+          title: gate.proposal.title,
+          content: gate.proposal.content,
+        },
+        now: await deps.clock.now(),
+      });
+    } catch (error) {
+      if (error instanceof DomainError) {
+        return fail(error.code, recordFailureMessage(error.code));
+      }
+      throw error;
+    }
+    return {
+      result: { status: 'recorded', fileId: gate.proposal.proposalId },
+      isError: false,
+      recorded: {
+        fileId: gate.proposal.proposalId,
+        title: gate.proposal.title,
+      },
+    };
+  }
+  return fail('unknown-tool', 'Ferramenta desconhecida.');
+}
+
+/** The model-facing text of a failed recording (by the error's code only). */
+export function recordFailureMessage(code: string): string {
+  switch (code) {
+    case 'space-storage-full':
+      return 'O espaço está cheio: não deu para gravar. Avise a pessoa.';
+    case 'space-key-rotation-required':
+      return 'O espaço precisa trocar a chave antes de receber conteúdo novo: não deu para gravar agora.';
+    case 'space-not-found':
+    case 'permission-denied':
+    case 'forbidden':
+      return 'A pessoa não pode gravar neste espaço (só Editores e Gestores). Não foi gravado.';
+    default:
+      return 'Não deu para gravar agora. Avise a pessoa.';
+  }
 }

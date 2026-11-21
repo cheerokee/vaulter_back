@@ -779,7 +779,11 @@ passo, pede ao back o que fazer: o back monta o prompt, busca os trechos do espa
   `answeringMessageId`), `{ kind: "tools", text?, toolCalls: [ { id, name, input, effect: "allow"|"confirm" } ],
   policyVersion }` (executa `allow`, pede confirmação na bandeja para `confirm`, registra em `POST /hub/agent/actions` e
   chama o próximo passo com os resultados) ou `{ kind: "refused", reason: "ai-budget-exceeded", resetsAt }` (manda a
-  mensagem fixa do orçamento). Um passo que responde **renova o prazo do ack** (agora + 15 min); um passo recusado não
+  mensagem fixa do orçamento). `final` e `tools` podem trazer também `documentProposal: { proposalId, title, content,
+  confidential }` ou `documentRecorded: { fileId, title }` (no máximo um): o resultado das ferramentas de documento, que
+  rodam **no back** (abaixo). O agente guarda o último que recebeu nesta resposta e o põe, igual, no texto em claro da
+  mensagem que manda (`docs/crypto/conversations.md`, convenção v1): sem a proposta na mensagem dele, a confirmação da
+  pessoa na mensagem seguinte não grava nada. Um passo que responde **renova o prazo do ack** (agora + 15 min); um passo recusado não
   renova, e o prazo segue correndo: vencido, a mensagem volta à fila (veja o item 9 de "A nuvem como executor de
   reserva").
 - **O que o back oferece ao modelo:** as ferramentas do catálogo do agente (`PUT /hub/agent/tools`) que a política
@@ -794,6 +798,14 @@ passo, pede ao back o que fazer: o back monta o prompt, busca os trechos do espa
   ativa durante o passo): a chamada já foi contada e nada foi cobrado do modelo. Cada chamada ao modelo reserva o
   orçamento antes, então `refused` também pode chegar **no meio de um passo**, depois de chamadas anteriores ao modelo no
   mesmo passo (já cobradas e contadas): o agente trata como qualquer `refused`.
+- **Ferramentas de documento** (`propose_document` / `record_document`, as mesmas da nuvem de reserva): oferecidas ao
+  modelo só quando o assunto tem a **nuvem de reserva** ligada (as cópias da chave do assunto para o servidor). Aí o back
+  lê e decifra o histórico do assunto **ele mesmo** e é esse histórico (não o `history` do pedido) que vai ao modelo e à
+  trava de confirmação: grava só a proposta que estava na mensagem do executor (ou da nuvem) **logo antes** da mensagem
+  sendo respondida, confirmada nela (texto que o modelo julga, ou o botão `documentDecision`; `decline` vence), em nome
+  de quem a escreveu (precisa ser Editor ou Gestor do espaço). Recusa ou falha volta ao modelo como erro, no mesmo
+  passo; essas chamadas nunca aparecem em `toolCalls`. Uma chamada do PC na mesma rodada de uma ferramenta de documento
+  volta ao modelo como não executada. Cada chamada extra ao modelo conta nas 16 e no orçamento.
 
 ## 13. Reset de fábrica
 

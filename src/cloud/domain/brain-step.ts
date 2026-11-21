@@ -1,4 +1,5 @@
 import { DomainValidationError } from '../../shared/domain/errors.js';
+import type { DocumentProposal } from './message-plaintext.js';
 import { RESPONDER_HISTORY_MESSAGES } from './responder.js';
 
 // Passo do cérebro do agente do PC (spec pc-agent §5.3): o agente no PC conduz o laço e chama o back a cada passo; o
@@ -62,14 +63,28 @@ export type BrainToolCall = {
   effect: 'allow' | 'confirm';
 };
 
+/**
+ * What the document tools did in a step (they run on the back, never in `toolCalls`): the agent puts it in its answer's
+ * plaintext (`docs/crypto/conversations.md`), so the next message's confirmation is checked against it. At most one of
+ * the two (a recorded document wins over a proposal).
+ */
+export type BrainDocumentOutcome = {
+  documentProposal?: DocumentProposal;
+  documentRecorded?: { fileId: string; title: string };
+};
+
 export type BrainStepResponse =
-  | { kind: 'final'; text: string; policyVersion: number }
-  | {
+  | ({
+      kind: 'final';
+      text: string;
+      policyVersion: number;
+    } & BrainDocumentOutcome)
+  | ({
       kind: 'tools';
       text?: string;
       toolCalls: BrainToolCall[];
       policyVersion: number;
-    }
+    } & BrainDocumentOutcome)
   | { kind: 'refused'; reason: 'ai-budget-exceeded'; resetsAt: string };
 
 const isPlainObject = (v: unknown): v is Record<string, unknown> =>
