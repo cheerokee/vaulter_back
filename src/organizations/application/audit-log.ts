@@ -10,6 +10,7 @@ export type AuditAction =
   | 'organization.storage_quota_changed'
   | 'organization.ai_budget_changed'
   | 'organization.cloud_terms.accepted'
+  | 'organization.agent_policy.changed'
   | 'member.joined'
   | 'member.left'
   | 'member.removed'

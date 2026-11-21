@@ -247,7 +247,8 @@ Hub, como faria para uma pessoa.
 ```
 
 - **Tipos de item:** `hub`, `hub_organization`, `organization`, `member`, `role_assignment`, `space`, `space_key`,
-  `space_key_grant`, `hub_space`. O formato de `data` de cada tipo está no comentário de
+  `space_key_grant`, `hub_space` e, **só para um Hub `pc`**, `agent_policy` (`data` = `{ organizationId, version }`, nunca
+  as regras; ver "Agente do PC: política da organização"). O formato de `data` de cada tipo está no comentário de
   `src/hubs/application/sync-hub.use-case.ts`. O item `space` traz `cloudMode` (`encrypted_backup` | `active_cloud`) e
   `allowOnlineLlm`: é por ele que o Hub sabe se o espaço está em **nuvem ativa** (espelhos de conector no backup,
   manifesto da nuvem, cópia do servidor nos assuntos; veja "Nuvem ativa: o que muda para o Hub").
@@ -679,6 +680,28 @@ corpo de qualquer rota que não existe), nunca um 403: o aparelho não descobre 
   das ferramentas dos agentes com vínculo aprovado, sem repetir nome e **sem dizer de quem** (nenhum id de Hub ou de
   dono). Publicar não é auditado e o conteúdo nunca vai a log.
 
+## Agente do PC: política da organização
+
+Spec `docs/superpowers/specs/2026-11-21-pc-agent-design.md` §5.5. A política de IA da organização (quem pode o quê no PC:
+regras `allow`/`confirm`/`deny` sobre ferramentas, pastas e domínios) é gravada pelo admin e **baixada** pelo agente.
+
+- `GET /hub/agent/policy` (token de Hub, só `pc`, **120/h por Hub**; um `appliance` recebe o 404 do Nest para rota
+  inexistente, `Cannot GET /hub/agent/policy`) -> `{ "items": [ { "organizationId", "version", "rules": [...] } ] }`,
+  um item por organização com vínculo **aprovado**. `rules` traz só as regras do sujeito `all` e as do **dono** do
+  agente (`user:<dono>`); regra sobre outra pessoa nunca sai. Organização sem política: `version: 0` e `rules: []`
+  (sem regra é `deny`). O agente aplica a política da organização do espaço do assunto e confere de novo localmente
+  (a política local tem a última palavra).
+- **Quando recarregar:** o `GET /hub/sync` traz o item `agent_policy` `{ organizationId, version }` (só a versão mais
+  recente de cada organização, sem regras, nunca lápide) sempre que uma versão nova é gravada; ao ver a versão maior
+  que a que tem, o agente chama `GET /hub/agent/policy`. Entrar no escopo (vínculo aprovado de novo) segue a regra
+  geral: sincronização completa.
+- Quem grava e lê (token de usuário): `PUT /organizations/:orgId/agent-policy` `{ baseVersion, rules }`
+  (`org.agents.manage`; 60/h por usuário; corpo de até **2 MiB**, `AGENT_POLICY_BODY_MAX_BYTES`, 500 regras no máximo)
+  substitui a política inteira por `baseVersion + 1`: 409 `agent-policy-version-stale` se `baseVersion` não é a versão
+  atual (`0` quando ainda não há política), 422 `agent-policy-invalid` com `invalidRules` (índices; `[]` quando o erro é a
+  lista). `GET .../agent-policy` (todo membro; 600/h) -> `{ organizationId, version, rules }` com a política inteira.
+  Cada troca é auditada (`organization.agent_policy.changed`, só `{ version, ruleCount }`).
+
 ## 13. Reset de fábrica
 
 Um aparelho desregistrado **não pode ser reivindicado de novo com as mesmas chaves**: a apresentação dá 409
@@ -702,6 +725,9 @@ Assim nada do dono anterior chega a um dono novo.
 | `POST /hub/user-sessions` | 10/min e 5/min | Hub e e-mail |
 | `GET /hub/sync` | 120/h | Hub |
 | `PUT /hub/agent/tools` (só `pc`) | 60/h | Hub |
+| `GET /hub/agent/policy` (só `pc`) | 120/h | Hub |
+| `PUT /organizations/:orgId/agent-policy` | 60/h | usuário |
+| `GET /organizations/:orgId/agent-policy` | 600/h | usuário |
 | `POST /hub/spaces/:spaceId/uploads` | 600/h | Hub |
 | `POST /hub/spaces/:spaceId/uploads/confirm` | 600/h | Hub |
 | `POST /hub/spaces/:spaceId/objects/delete` | 120/h | Hub |

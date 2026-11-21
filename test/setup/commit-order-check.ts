@@ -27,6 +27,7 @@ export const HUB_SYNC_TABLES = {
   hub_organization: ['organization_id', 'hub_id'],
   hub_space: ['space_id', 'hub_id'],
   user_organization: ['organization_id', 'user_id'],
+  agent_policies: ['id'],
 } as const satisfies Record<string, readonly string[]>;
 
 export const COMMIT_ORDERED_TABLES = [

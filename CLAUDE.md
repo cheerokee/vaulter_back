@@ -668,11 +668,11 @@ consulta só de leitura (veja Sincronização).
   localmente o que dependia dele; **sincronização completa** (`since=0`) **substitui** o estado local; **entrada no
   escopo** numa passada incremental (vínculo aprovado ou `hub_space` vivo que o Hub não tinha) = o Hub faz uma
   sincronização completa (as linhas mantêm o `sync_version` antigo). Tipos de item: `hub`, `hub_organization`,
-  `organization`, `member`, `role_assignment`, `space`, `space_key`, `space_key_grant`, `hub_space`; nunca `authHash`,
+  `organization`, `member`, `role_assignment`, `space`, `space_key`, `space_key_grant`, `hub_space` e, só para Hub `pc`, `agent_policy` (`{ organizationId, version }`, sem regras); nunca `authHash`,
   cópia do kit nem cópia de outro Hub. Empate de `sync_version`: ver comentário de `mergeSyncPage` (a página só passa
   de `limit` quando um único grupo é maior que ele). **Versões no COMMIT, na ordem dos commits** (migration
-  `HubSyncCommitOrder`): as dez tabelas lidas (`hubs`, `organizations`, `users`, `role_assignments`, `spaces`,
-  `space_keys`, `space_key_grants`, `hub_organization`, `hub_space`, `user_organization`) usam o mesmo feed dos assuntos
+  `HubSyncCommitOrder`): as onze tabelas lidas (`hubs`, `organizations`, `users`, `role_assignments`, `spaces`,
+  `space_keys`, `space_key_grants`, `hub_organization`, `hub_space`, `user_organization`, `agent_policies`) usam o mesmo feed dos assuntos
   (`COMMIT_ORDERED_SYNC_FEED`: mesma sequência, mesmo advisory lock; veja "Feeds de sincronização" em `conversations`),
   então o `nextSince` nunca pula um commit atrasado e não há sincronização completa periódica (fixado por
   `test/hubs/sync-commit-order.e2e-spec.ts`). Lock único de propósito: com dois, uma transação que grava nos dois grupos
@@ -1401,7 +1401,7 @@ registra a fonte `conversations`), `hubs` (`HubDirectory`: `ownerOf`,
 
 ## Módulo `agents`
 `src/agents/` (o agente do PC, que age como um Hub `pc`). Spec: `docs/superpowers/specs/2026-11-21-pc-agent-design.md`
-(§5.4 = catálogo). Só o catálogo existe até agora; ACL, política, auditoria e passo do cérebro entram nas próximas tarefas.
+(§5.4 = catálogo). Catálogo e política da organização existem; auditoria e passo do cérebro entram nas próximas tarefas.
 - **Fronteiras:** `agents` depende de `hubs` (`HubAccess`, `HubDirectory`), `organizations` (`OrganizationAccess`) e,
   nas próximas tarefas, `conversations` (só as portas exportadas); **nunca importa `cloud`**; o `cloud` importa `agents`
   só pela `application/` exportada (`AgentToolCatalog`); `hubs`, `organizations` e `conversations` nunca importam
@@ -1425,6 +1425,19 @@ registra a fonte `conversations`), `hubs` (`HubDirectory`: `ownerOf`,
   `GET /organizations/:orgId/agent/tools` (`org.agents.manage`: 404 não membro, 403 sem a permissão) devolve nomes e títulos
   das ferramentas dos agentes com vínculo aprovado, **sem hubId nem dono** (`HubDirectory.approvedHubIdsOf`, que o `hubs`
   exporta para isso). `HubDirectory.kindOf(hubId)` devolve o tipo (`null` se desconhecido).
+- **Política da organização** (spec §5.5; migration `CreateAgentPolicies`): tabela `agent_policies`, uma linha por versão
+  (`UNIQUE (organization_id, version)`, `rules` jsonb já validado por `parseAgentRules`, `changed_by_user_id`), **só de
+  acréscimo** (runtime: SELECT/INSERT e UPDATE só de `sync_version`/`sync_pending`, o do COMMIT; sem DELETE), RLS por
+  organização, versão no COMMIT no feed único (`addCommitOrderedSyncVersion`; entrou em `HUB_SYNC_TABLES`).
+  `PUT /organizations/:orgId/agent-policy` `{ baseVersion, rules }` (`org.agents.manage`, 404 não membro/403; corpo até
+  2 MiB, `AGENT_POLICY_BODY_MAX_BYTES`): formato -> permissão -> `parseAgentRules` (422 `agent-policy-invalid` com
+  `invalidRules`) -> `uow.run`: `OrganizationDirectory.lockForAgentPolicy(orgId)` (linha da organização `FOR NO KEY
+  UPDATE`, **folha** como `lockAiBudget`) -> `nextPolicyVersion` (409 `agent-policy-version-stale`) -> INSERT -> auditoria
+  `organization.agent_policy.changed` (metadata só `{ version, ruleCount }`). `GET` do mesmo caminho: todo membro.
+  `AgentPolicyReader.current(orgId)` (exportado, sem autorização, sem trava) -> `{ version, rules }`, sem linha =
+  `{ version: 0, rules: [] }`. `GET /hub/agent/policy` (`@PcHubOnly()`): por organização com vínculo aprovado, a versão e só as regras
+  `all` + as do dono (`rulesFor`). O item `agent_policy` da sincronização (`{ organizationId, version }`, só a versão mais
+  recente por organização, **só Hub `pc`**, nunca lápide nem regras) avisa que a versão mudou.
 - **ACL (`agent-policy.ts`):** apertar `parseAgentRules`/`normalizeAgentPath` depois pode invalidar políticas já gravadas
   (os avaliadores negam tudo para quem tem regra inválida, na organização inteira); mudança no validador exige um passo
   de revalidação das políticas armazenadas.

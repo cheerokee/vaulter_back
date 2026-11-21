@@ -121,6 +121,17 @@ export class OrganizationDirectory {
   }
 
   /**
+   * Locks the organization row (`FOR NO KEY UPDATE`) until the end of the unit of work, so replacing the agent policy
+   * (the `agents` module) serializes per organization: the version check and the insert of the next version happen
+   * under it. Returns false for an unknown organization or a malformed id. MUST run inside `UnitOfWork.run`. The
+   * organization row is a LEAF lock, like `lockAiBudget`: take it after hubs and spaces.
+   */
+  async lockForAgentPolicy(orgId: string): Promise<boolean> {
+    if (!validate(orgId)) return false;
+    return (await this.orgs.lockForUpdate(orgId)) !== null;
+  }
+
+  /**
    * Same, with the organization row locked (`FOR NO KEY UPDATE`) until the end of the unit of work: creating or
    * growing a space (and changing the quota) serialize on it, so two reservations never both fit in the same room.
    * MUST run inside `UnitOfWork.run`. The organization row is a LEAF lock: take it after hubs and spaces.

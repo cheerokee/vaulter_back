@@ -5,6 +5,13 @@ import { json } from 'express';
 /** `PUT /hub/agent/tools`: up to 200 tools in ONE replacing request (spec pc-agent §5.4), so the body cannot be split. */
 export const AGENT_TOOLS_BODY_MAX_BYTES = 2 * 1024 * 1024;
 
+/**
+ * `PUT /organizations/:orgId/agent-policy`: up to 500 rules in ONE replacing request (spec pc-agent §5.5). A rule is
+ * small (~150 bytes), but a path is up to 1024 characters (3 bytes each in UTF-8) and a user id 128, so the worst case
+ * is ~1.7 MB: the same 2 MiB as the catalog.
+ */
+export const AGENT_POLICY_BODY_MAX_BYTES = 2 * 1024 * 1024;
+
 export type JsonBodyLimit = {
   method: string;
   /** Exact path (no query string, no trailing slash) or a RegExp tested against the path. */
@@ -21,6 +28,11 @@ export const JSON_BODY_LIMITS: readonly JsonBodyLimit[] = [
     method: 'PUT',
     path: '/hub/agent/tools',
     limitBytes: AGENT_TOOLS_BODY_MAX_BYTES,
+  },
+  {
+    method: 'PUT',
+    path: /^\/organizations\/[^/]+\/agent-policy$/,
+    limitBytes: AGENT_POLICY_BODY_MAX_BYTES,
   },
 ];
 

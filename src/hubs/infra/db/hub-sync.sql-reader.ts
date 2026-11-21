@@ -383,5 +383,29 @@ async function readOrganization(
         ),
     ),
   );
+  // Agent policy (spec pc-agent §5.5): a `pc` hub only, and only the version of the LATEST row of the organization
+  // (append-only: one item per organization, whatever the number of versions it missed). NEVER the rules: the agent
+  // downloads them from `GET /hub/agent/policy`; this item only tells it that the version moved. Never a tombstone.
+  out.push(
+    await batch(
+      m,
+      `SELECT p.organization_id, p.version, false AS deleted, p.sync_version::text AS sv
+           FROM agent_policies p
+          WHERE p.organization_id = $4 AND p.sync_version > $2::bigint AND NOT p.sync_pending
+            AND p.version = (SELECT max(l.version) FROM agent_policies l WHERE l.organization_id = p.organization_id)
+            AND EXISTS (SELECT 1 FROM hubs ph WHERE ph.id = $1 AND ph.kind = 'pc')
+            AND EXISTS (SELECT 1 FROM hub_organization ho
+                         WHERE ho.hub_id = $1 AND ho.organization_id = p.organization_id
+                           AND ho.status = 'approved' AND ho.deleted_at IS NULL)
+          ORDER BY p.sync_version LIMIT $3`,
+      (r) =>
+        item(
+          'agent_policy',
+          r,
+          { organizationId: r.organization_id },
+          { version: r.version },
+        ),
+    ),
+  );
   return out;
 }

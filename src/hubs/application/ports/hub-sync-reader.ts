@@ -9,6 +9,7 @@ export const SYNC_ITEM_TYPES = [
   'space_key',
   'space_key_grant',
   'hub_space',
+  'agent_policy',
 ] as const;
 
 export type SyncItemType = (typeof SYNC_ITEM_TYPES)[number];

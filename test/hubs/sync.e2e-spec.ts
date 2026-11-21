@@ -8,6 +8,7 @@ import {
   resetDatabase,
 } from '../setup/test-app.js';
 import { openPrivateKey } from '../support/client-crypto.js';
+import { hubClient } from '../support/hub-client.js';
 import { type ClaimedHub, hubsKit } from '../support/hubs-kit.js';
 import {
   expectStatus,
@@ -643,5 +644,71 @@ describe('hub sync (e2e)', () => {
     expect(JSON.stringify(full)).not.toContain(s1.spaceId);
     // the personal organization is still served
     expect(ids(full, 'organization')).toEqual([personalOrgId]);
+  });
+
+  it('the hub sync carries agent_policy { organizationId, version } to a pc only, and a new version moves it', async () => {
+    const hc = hubClient(() => app);
+    const org = await s.orgWithKit(olivia, 'Org Agent');
+    const pc = await hc.onboard(olivia.token, 'PC', { kind: 'pc' });
+    await expectStatus(
+      c
+        .http()
+        .post(`/hubs/${pc.hubId}/organizations`)
+        .set(c.bearer(olivia.token))
+        .send({ organizationId: org.orgId }),
+      201,
+    );
+    const box = await k.claim(olivia, 'Caixa da policy');
+    await k.link(olivia, box.hubId, org.orgId);
+    const policyItems = async (h: ClaimedHub, since = 0) =>
+      ofType((await syncAll(h, 500, since)).items, 'agent_policy');
+    const put = (baseVersion: number, rules: unknown[]) =>
+      expectStatus(
+        c
+          .http()
+          .put(`/organizations/${org.orgId}/agent-policy`)
+          .set(c.bearer(olivia.token))
+          .send({ baseVersion, rules }),
+        200,
+      );
+
+    // no policy yet: nothing to carry
+    expect(await policyItems(pc)).toEqual([]);
+
+    const since0 = await checkpoint(pc);
+    await put(0, [
+      {
+        subject: { kind: 'all' },
+        resource: { kind: 'tool', pattern: 'mcp:erp/*' },
+        effect: 'allow',
+      },
+    ]);
+    const v1 = await policyItems(pc, since0);
+    expect(v1).toEqual([
+      {
+        type: 'agent_policy',
+        syncVersion: expect.any(Number),
+        deleted: false,
+        data: { organizationId: org.orgId, version: 1 },
+      },
+    ]);
+    expect(JSON.stringify(v1)).not.toContain('mcp:erp');
+
+    const since1 = await checkpoint(pc);
+    await put(1, []);
+    await put(2, []);
+    const moved = await policyItems(pc, since1);
+    // only the latest version of the organization
+    expect(moved.map((i) => i.data)).toEqual([
+      { organizationId: org.orgId, version: 3 },
+    ]);
+    expect(moved[0]!.syncVersion).toBeGreaterThan(v1[0]!.syncVersion);
+    // a full sync brings it too, once
+    expect((await policyItems(pc)).map((i) => i.data)).toEqual([
+      { organizationId: org.orgId, version: 3 },
+    ]);
+
+    // an appliance never receives it
+    expect(await policyItems(box)).toEqual([]);
   });
 });

@@ -126,6 +126,15 @@ export const RATE_LIMITS = {
    * publica ao conectar e quando os servidores MCP mudam; cada pedido substitui a lista inteira.
    */
   agentTools: { limit: 60, ttl: HOUR },
+  /**
+   * Política de IA da organização (spec pc-agent §5.5), contador próprio por rota: ler (`GET .../agent-policy`) 600/h por
+   * usuário (a tela do admin e a do membro); trocar (`PUT`) 60/h por usuário (cada troca é uma versão nova, de até
+   * 500 regras); o agente baixa (`GET /hub/agent/policy`) 120/h por Hub (ao conectar e quando o item `agent_policy` da
+   * sincronização muda).
+   */
+  agentPolicyRead: { limit: 600, ttl: HOUR },
+  agentPolicyChange: { limit: 60, ttl: HOUR },
+  agentPolicyHub: { limit: 120, ttl: HOUR },
 } as const;
 
 /** Nome do throttler extra, cobrado só nas rotas marcadas com @ThrottleByEmail(). */
