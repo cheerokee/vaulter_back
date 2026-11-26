@@ -138,7 +138,10 @@ export class ConversationMessageTypeormRepository extends ConversationMessageRep
   }
 
   // Contexto `app.agent_lease_sweep` (migration ConversationAgentAckLease): só as linhas com prazo, de toda organização.
-  async listExpiredAgentLeases(limit: number): Promise<ExpiredAgentLease[]> {
+  async listExpiredAgentLeases(
+    limit: number,
+    after: ExpiredAgentLease | null = null,
+  ): Promise<ExpiredAgentLease[]> {
     const rows: {
       organization_id: string;
       conversation_id: string;
@@ -157,10 +160,11 @@ export class ConversationMessageTypeormRepository extends ConversationMessageRep
           `SELECT organization_id, conversation_id, acked_by_hub_id
              FROM conversation_messages
             WHERE acked_lease_until IS NOT NULL AND NOT pending AND acked_lease_until <= clock_timestamp()
+              AND ($2::uuid IS NULL OR (conversation_id, acked_by_hub_id) > ($2::uuid, $3::uuid))
             GROUP BY organization_id, conversation_id, acked_by_hub_id
-            ORDER BY min(acked_lease_until), conversation_id
+            ORDER BY conversation_id, acked_by_hub_id
             LIMIT $1`,
-          [limit],
+          [limit, after?.conversationId ?? null, after?.hubId ?? null],
         ),
     );
     return rows.map((r) => ({

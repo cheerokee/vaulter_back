@@ -50,10 +50,14 @@ export abstract class ConversationMessageRepository {
   ): Promise<string[]>;
   /**
    * The lease sweep's candidates, across organizations (RLS context `app.agent_lease_sweep`, which reads only the rows
-   * under a lease): up to `limit` conversations with a message whose agent ack lease ran out (database clock), the
-   * oldest lease first. Outside or inside a unit of work; no lock.
+   * under a lease): up to `limit` conversations with a message whose agent ack lease ran out (database clock), in
+   * (conversation, hub) order, strictly after `after` (keyset: a pass walks every candidate once, so candidates it
+   * skips never hide the ones behind them). Outside or inside a unit of work; no lock.
    */
-  abstract listExpiredAgentLeases(limit: number): Promise<ExpiredAgentLease[]>;
+  abstract listExpiredAgentLeases(
+    limit: number,
+    after?: ExpiredAgentLease | null,
+  ): Promise<ExpiredAgentLease[]>;
   /**
    * The agent's ack ran out (spec pc-agent §5.3): every live person's message of the conversation whose lease ended
    * (database clock, read ONCE for the whole call) and that has no answer of the agent (`answeredBy`) goes back to

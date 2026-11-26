@@ -445,6 +445,57 @@ describe('conversations: the pc agent ack lease (e2e)', () => {
     expect(await asSweep(`SELECT id FROM conversation_key_grants`)).toEqual([]);
   });
 
+  it('answers_message_id is immutable in the database (even for the owner login)', async () => {
+    const conv = await create(pc);
+    const m = await ask(conv.id, conv.keys);
+    await expectStatus(k.hubAck(pcToken, conv.id, m), 200);
+    const answer = await k.hubSend(pcToken, spaceId, conv.id, conv.keys, {
+      answeringMessageId: m,
+    });
+    await expectStatus(Promise.resolve(answer.res), 201);
+    await expect(
+      (await adminDataSource()).query(
+        `UPDATE conversation_messages SET answers_message_id = NULL WHERE id = $1`,
+        [answer.id],
+      ),
+    ).rejects.toMatchObject({ code: '23514' });
+  });
+
+  it('a skipped candidate never starves the ones behind it: the sweep walks every expired lease by cursor', async () => {
+    const stuck = await create(pc);
+    const behind = await create(pc);
+    const a = await ask(stuck.id, stuck.keys);
+    const b = await ask(behind.id, behind.keys);
+    await expectStatus(k.hubAck(pcToken, stuck.id, a), 200);
+    await expectStatus(k.hubAck(pcToken, behind.id, b), 200);
+    await expire(a);
+    await expire(b);
+    const admin = await adminDataSource();
+    // Breaks the "a lease is always the current executor's" invariant on purpose: the sweep skips `stuck` forever.
+    await admin.query(
+      `UPDATE conversations SET executor_hub_id = $2 WHERE id = $1`,
+      [stuck.id, casa.hubId],
+    );
+    try {
+      // One candidate per batch: the first batch is only the skipped one.
+      expect(await app.get(AgentLeaseSweepJob).run(1)).toMatchObject({
+        requeued: 1,
+        skipped: 1,
+      });
+      expect((await row(b)).pending).toBe(true);
+      expect((await row(a)).acked_lease_until).not.toBeNull();
+    } finally {
+      await admin.query(
+        `UPDATE conversations SET executor_hub_id = $2 WHERE id = $1`,
+        [stuck.id, pc.hubId],
+      );
+      await admin.query(
+        `UPDATE conversation_messages SET acked_lease_until = NULL WHERE id = $1`,
+        [a],
+      );
+    }
+  });
+
   it('the executor change clears the leases of the hub that leaves (answered messages included)', async () => {
     const conv = await create(pc);
     const m = await ask(conv.id, conv.keys);
