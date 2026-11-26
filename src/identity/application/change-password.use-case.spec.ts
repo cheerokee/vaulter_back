@@ -2,6 +2,7 @@ import {
   DomainValidationError,
   UnauthenticatedError,
 } from '../../shared/domain/errors.js';
+import type { UnitOfWork } from '../../shared/infra/db/unit-of-work.js';
 import type { SessionRepository } from '../domain/session.repository.js';
 import type { UserRepository } from '../domain/user.repository.js';
 import { User } from '../domain/user.js';
@@ -21,7 +22,12 @@ const params = {
 };
 const NOW = new Date('2026-10-24T12:00:00Z');
 
-const users = { findById: vi.fn(), updatePasswordMaterial: vi.fn() };
+const users = {
+  findById: vi.fn(),
+  findByIdForUpdate: vi.fn(),
+  updatePasswordMaterial: vi.fn(),
+};
+const uow = { run: vi.fn() };
 const sessions = { revokeAllForUser: vi.fn() };
 const hasher = {
   hash: vi.fn(),
@@ -36,6 +42,7 @@ const useCase = new ChangePasswordUseCase(
     users as unknown as UserRepository,
     hasher as unknown as AuthProofHasher,
   ),
+  uow as unknown as UnitOfWork,
 );
 const auth = { userId: 'u1', sessionId: 's1' };
 
@@ -68,6 +75,10 @@ describe('ChangePasswordUseCase', () => {
     vi.useFakeTimers();
     vi.setSystemTime(NOW);
     users.findById.mockImplementation(() => Promise.resolve(makeUser()));
+    users.findByIdForUpdate.mockImplementation(() =>
+      Promise.resolve(makeUser()),
+    );
+    uow.run.mockImplementation((work: () => Promise<unknown>) => work());
     users.updatePasswordMaterial.mockResolvedValue(undefined);
     sessions.revokeAllForUser.mockResolvedValue(undefined);
     hasher.verify.mockResolvedValue(true);
@@ -127,6 +138,25 @@ describe('ChangePasswordUseCase', () => {
       useCase.execute(auth, { ...input(), newAuthProof: 'bad' }),
     ).rejects.toMatchObject({ code: 'auth-proof-invalid' });
     expect(hasher.hash).not.toHaveBeenCalled();
+    expect(users.updatePasswordMaterial).not.toHaveBeenCalled();
+    expect(sessions.revokeAllForUser).not.toHaveBeenCalled();
+  });
+
+  it('a password changed since the proof was checked (a recovery) wins: 401, nothing written', async () => {
+    users.findByIdForUpdate.mockImplementation(() => {
+      const recovered = makeUser();
+      recovered.changePassword({
+        authHash: 'recovered-hash',
+        kdfSalt: b64(16, 7),
+        kdfParams: params,
+        encryptedPrivateKey: b64(73, 0x01),
+      });
+      return Promise.resolve(recovered);
+    });
+    await expect(useCase.execute(auth, input())).rejects.toMatchObject({
+      constructor: UnauthenticatedError,
+      code: 'invalid-access-token',
+    });
     expect(users.updatePasswordMaterial).not.toHaveBeenCalled();
     expect(sessions.revokeAllForUser).not.toHaveBeenCalled();
   });
