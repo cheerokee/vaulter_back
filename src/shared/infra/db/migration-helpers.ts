@@ -250,7 +250,7 @@ export async function createCommitOrderedSyncFeed(
 /**
  * Commit-ordered versions on a table that already has `sync_version` (`addSyncVersionTrigger`), keyed by `keyColumns`
  * (its primary key; `id` by default); `createCommitOrderedSyncFunctions` and `createCommitOrderedSyncFeed` first. Replaces the "version at write time"
- * of the global sequence (commit order × sync_version, Pendências do CLAUDE.md), with no dependency on other
+ * of the global sequence (a late commit with a lower version than one already read), with no dependency on other
  * transactions, xids or the cluster:
  * - column `sync_pending` (NOT NULL DEFAULT true; existing rows false) and the BEFORE trigger
  *   `trg_<t>_zz_sync_version` (`commitOrderedSyncTrigger`) on `mark_sync_pending()` (provisional on every write). It

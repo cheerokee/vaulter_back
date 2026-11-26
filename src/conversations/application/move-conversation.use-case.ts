@@ -8,6 +8,7 @@ import {
 } from '../domain/conversation-errors.js';
 import { ConversationMessageRepository } from '../domain/conversation-message.repository.js';
 import { ConversationRepository } from '../domain/conversation.repository.js';
+import type { Conversation } from '../domain/conversation.js';
 import { ConversationAccess, reachable } from './conversation-access.js';
 import { ConversationCloudReserve } from './conversation-cloud-reserve.js';
 
@@ -23,7 +24,8 @@ export type MoveConversationInput = {
 // este (422 `conversation-move-invalid`). O antigo ganha lápide (relógio do banco): as participações, as cópias e o
 // executor ficam como estão, e a sincronização entrega a lápide do assunto (o cliente apaga o local, contrato da Task
 // 6); mensagens e anexos dele entram na janela de 30 dias da retenção a partir da lápide. Auditoria
-// `conversation.moved` na organização do antigo, só ids. Repetir depois da lápide: 204, nada muda.
+// `conversation.moved` na organização do antigo, só ids. Repetir depois da lápide: 204, nada muda; uma SEGUNDA cópia
+// criada com `movedFrom` = o antigo também conclui (204) e é auditada uma vez (a repetição não audita de novo).
 // Locks: só o assunto antigo (FOR UPDATE); o novo é só lido.
 @Injectable()
 export class MoveConversationUseCase {
@@ -65,6 +67,14 @@ export class MoveConversationUseCase {
         });
         if (gone?.deletedAt && reachable(scope, gone, spaceId)) {
           gone.assertOwner(userId);
+          // A second copy created with `movedFrom` = this one also completes (the old one is already gone): audited
+          // once per copy, never again on a plain repeat.
+          const recorded = await this.audit.has(
+            gone.organizationId,
+            'conversation.moved',
+            { conversationId: gone.id, toConversationId: target.id },
+          );
+          if (!recorded) await this.recordMove(userId, gone, target);
           return;
         }
         throw conversationNotFound();
@@ -76,18 +86,26 @@ export class MoveConversationUseCase {
       await this.conversations.save(scope, source);
       // The tombstone takes the cloud reserve with it: the server copies of the old conversation go away.
       if (hadCloudReserve) await this.reserve.dropServerSide(scope, source);
-      await this.audit.record({
-        organizationId: source.organizationId,
-        userId,
-        action: 'conversation.moved',
-        metadata: {
-          conversationId: source.id,
-          spaceId: source.spaceId,
-          toConversationId: target.id,
-          toSpaceId: target.spaceId,
-          toOrganizationId: target.organizationId,
-        },
-      });
+      await this.recordMove(userId, source, target);
+    });
+  }
+
+  private recordMove(
+    userId: string,
+    source: Conversation,
+    target: Conversation,
+  ): Promise<void> {
+    return this.audit.record({
+      organizationId: source.organizationId,
+      userId,
+      action: 'conversation.moved',
+      metadata: {
+        conversationId: source.id,
+        spaceId: source.spaceId,
+        toConversationId: target.id,
+        toSpaceId: target.spaceId,
+        toOrganizationId: target.organizationId,
+      },
     });
   }
 }

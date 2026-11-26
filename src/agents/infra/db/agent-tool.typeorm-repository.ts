@@ -23,6 +23,13 @@ export class AgentToolTypeormRepository extends AgentToolRepository {
     tools: readonly AgentToolDef[],
   ): Promise<void> {
     const names = tools.map((t) => t.name);
+    // Dois PUT concorrentes do mesmo Hub se serializam aqui, antes de tocar qualquer linha: sem isso a lápide (ordem da
+    // varredura) e o upsert (ordem de nome) de um e do outro travariam linhas em ordens diferentes (deadlock). Advisory
+    // de transação (some no COMMIT), chave (namespace, Hub); uma colisão de `hashtext` só serializa dois Hubs à toa.
+    await this.manager.query(
+      `SELECT pg_advisory_xact_lock(hashtext('agent-tools'), hashtext($1))`,
+      [hubId],
+    );
     // Lápide no que saiu (e que ainda estava vivo).
     await this.manager.query(
       `UPDATE agent_tools SET deleted_at = now(), updated_at = now()

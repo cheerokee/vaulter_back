@@ -45,8 +45,9 @@ type Resolved = {
 // Como o executor perdido (`ConversationsExecutorLostHook`): os candidatos vêm do contexto `app.agent_lease_sweep` (só
 // ids das linhas com prazo), o assunto é lido no contexto do Hub que confirmou (um prazo sempre é do executor atual: a
 // troca de executor limpa os prazos dele em `requeueAckedBy`) e a escrita roda no contexto do DONO do assunto. Lotes de
-// até 100 assuntos por unit of work, travados `FOR NO KEY UPDATE` (como o ack) em ordem (espaço, assunto); o dono
-// que mudou entre a leitura e a trava fica para a próxima passada. Idempotente (tudo reconferido sob a trava, pelo
+// até 100 assuntos por unit of work, travados `FOR NO KEY UPDATE` (como o ack) em ordem (espaço, assunto); os
+// candidatos vêm por cursor (assunto, Hub), então uma passada vê cada um uma vez e os pulados (o dono que mudou entre a
+// leitura e a trava) ficam para a próxima passada sem esconder os de trás. Idempotente (tudo reconferido sob a trava, pelo
 // relógio do banco); o registro leva só contagens.
 @Injectable()
 export class AgentLeaseSweepJob implements OnModuleInit {
@@ -70,37 +71,37 @@ export class AgentLeaseSweepJob implements OnModuleInit {
     await this.jobs.schedule(AGENT_LEASE_SWEEP_QUEUE, AGENT_LEASE_SWEEP_CRON);
   }
 
-  async run(): Promise<AgentLeaseSweepResult> {
+  async run(
+    batchSize: number = AGENT_LEASE_SWEEP_BATCH,
+  ): Promise<AgentLeaseSweepResult> {
     const total: AgentLeaseSweepResult = {
       conversations: 0,
       requeued: 0,
       cleared: 0,
       skipped: 0,
     };
+    // Keyset over (conversation, hub): one pass walks every candidate once and always ends (the cursor only moves
+    // forward), and skipped conversations never starve the ones behind them; they come back on the next run.
+    let after: ExpiredAgentLease | null = null;
     for (;;) {
-      const { candidates, ...batch } = await this.uow.run(() => this.batch());
+      const { leases, ...batch } = await this.uow.run(() =>
+        this.batch(batchSize, after),
+      );
       total.conversations += batch.conversations;
       total.requeued += batch.requeued;
       total.cleared += batch.cleared;
       total.skipped += batch.skipped;
-      // Progress = leases actually gone (requeued or cleared): a batch that removed none would come back the same
-      // forever (skipped conversations come first): stop, the next run retries.
-      if (
-        candidates < AGENT_LEASE_SWEEP_BATCH ||
-        batch.requeued + batch.cleared === 0
-      ) {
-        return total;
-      }
+      if (leases.length < batchSize) return total;
+      after = leases[leases.length - 1];
     }
   }
 
-  private async batch(): Promise<
-    AgentLeaseSweepResult & { candidates: number }
-  > {
+  private async batch(
+    batchSize: number,
+    after: ExpiredAgentLease | null,
+  ): Promise<AgentLeaseSweepResult & { leases: ExpiredAgentLease[] }> {
     const result = { conversations: 0, requeued: 0, cleared: 0, skipped: 0 };
-    const leases = await this.messages.listExpiredAgentLeases(
-      AGENT_LEASE_SWEEP_BATCH,
-    );
+    const leases = await this.messages.listExpiredAgentLeases(batchSize, after);
     const resolved: Resolved[] = [];
     for (const lease of leases) {
       const hubScope: ConversationScope = {
@@ -164,6 +165,6 @@ export class AgentLeaseSweepJob implements OnModuleInit {
       result.requeued += requeued.length;
       result.cleared += cleared;
     }
-    return { ...result, candidates: leases.length };
+    return { ...result, leases };
   }
 }

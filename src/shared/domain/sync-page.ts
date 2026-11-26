@@ -1,7 +1,7 @@
 /**
- * One item of a `sync_version` feed (the hub sync, the conversation feeds). `syncVersion` comes from the global
- * `sync_version_seq` (hub sync) or from `conversation_sync_version_seq`, assigned at commit (conversation feeds);
- * `deleted` is a tombstone (then `data` carries only the item's key fields).
+ * One item of a `sync_version` feed (the hub sync, the conversation feeds). `syncVersion` comes from ONE sequence,
+ * `conversation_sync_version_seq`, assigned at commit in commit order for every table both feeds read (one feed,
+ * `COMMIT_ORDERED_SYNC_FEED`); `deleted` is a tombstone (then `data` carries only the item's key fields).
  */
 export type SyncItemOf<T extends string> = {
   type: T;

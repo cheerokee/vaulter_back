@@ -15,7 +15,8 @@ export const SYNC_ITEM_TYPES = [
 export type SyncItemType = (typeof SYNC_ITEM_TYPES)[number];
 
 /**
- * One row of the hub's local model. `syncVersion` comes from the global `sync_version_seq`; `deleted` is a tombstone
+ * One row of the hub's local model. `syncVersion` is assigned at commit, in commit order (`COMMIT_ORDERED_SYNC_FEED`,
+ * the conversation feeds' sequence); `deleted` is a tombstone
  * (then `data` carries only the item's key fields). `data` is camelCase and never carries `authHash`, a kit copy or
  * another hub's copy.
  */

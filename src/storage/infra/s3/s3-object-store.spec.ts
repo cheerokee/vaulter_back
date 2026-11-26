@@ -66,3 +66,42 @@ describe('S3ObjectStore.deleteVersions', () => {
     ]);
   });
 });
+
+describe('S3ObjectStore presigned URLs', () => {
+  const withEnv = (env: Record<string, string>) =>
+    new S3ObjectStore({
+      getOrThrow: (k: string) =>
+        ({ S3_BUCKET_HUB_BRAIN: 'bucket', AWS_REGION: 'us-east-1' })[k],
+      get: (k: string) =>
+        ({
+          AWS_ACCESS_KEY_ID: 'test',
+          AWS_SECRET_ACCESS_KEY: 'test',
+          S3_FORCE_PATH_STYLE: true,
+          ...env,
+        })[k],
+    } as unknown as ConfigService);
+  const sha = 'a'.repeat(64);
+
+  it('carry AWS_ENDPOINT_URL by default', async () => {
+    const store = withEnv({ AWS_ENDPOINT_URL: 'http://aws:4566' });
+    const get = new URL(await store.presignGet('k/1', 'v1', 60));
+    expect(get.host).toBe('aws:4566');
+    expect(get.pathname).toBe('/bucket/k/1');
+  });
+
+  it('are signed for S3_PUBLIC_ENDPOINT_URL when set (PUT and GET)', async () => {
+    const store = withEnv({
+      AWS_ENDPOINT_URL: 'http://aws:4566',
+      S3_PUBLIC_ENDPOINT_URL: 'http://192.168.0.10:4567',
+    });
+    const put = await store.presignPut('k/1', {
+      sizeBytes: 10,
+      sha256Hex: sha,
+      expiresInSeconds: 60,
+    });
+    expect(new URL(put.url).host).toBe('192.168.0.10:4567');
+    const get = new URL(await store.presignGet('k/1', 'v1', 60));
+    expect(get.host).toBe('192.168.0.10:4567');
+    expect(get.searchParams.get('X-Amz-SignedHeaders')).toBe('host');
+  });
+});
