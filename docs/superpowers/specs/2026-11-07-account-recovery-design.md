@@ -136,6 +136,7 @@ O código antigo deixa de valer na hora. Não revoga sessões. *(decisão do Cla
   admins das organizações da pessoa (gancho do `identity` + ações novas em `audit_logs`).
 - Quem perdeu senha **e** código: na organização pessoal, perde tudo; nas empresas, os outros membros e o kit da
   organização salvam os espaços. O `user-keys.md` já fala de uma "recuperação de senha por e-mail" que devolveria
-  só o login; ela deixa de ser necessária com esta recuperação e o trecho deve ser reescrito.
+  só o login; ela deixa de ser necessária com esta recuperação e o trecho deve ser reescrito. *(Feito: o
+  `user-keys.md` agora descreve só a recuperação pelo código.)*
 - **Papéis da plataforma**, logo em seguida: o suporte faria desregistro forçado de Hub (aparelho preso numa
   conta perdida) e nomearia admin em organização que ficou sem nenhum, sem ganhar acesso a conteúdo.

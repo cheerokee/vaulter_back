@@ -19,9 +19,14 @@
 --
 -- Offline-first: tabelas que o hub/app sincronizam NUNCA têm DELETE físico; excluir = preencher deleted_at
 -- (lápide). Tabela de ligação com PK composta que volta a existir = limpar deleted_at, não inserir de novo.
--- sync_version: no Postgres, uma sequência global única (sync_version_seq) atribuída por trigger em todo
--- insert/update (inclusive ao gravar a lápide). O cliente guarda o maior valor visto e pede "tudo com
--- sync_version maior", lápides incluídas. Não usar updated_at para isso (relógio diverge).
+-- sync_version: nas tabelas que um feed lê (GET /hub/sync: users, organizations, user_organization, hubs, spaces,
+-- space_keys, space_key_grants, hub_organization, hub_space, role_assignments, agent_policies; e as cinco dos
+-- assuntos) a versão é dada NO COMMIT, na ordem dos commits, de UMA sequência (conversation_sync_version_seq) sob UM
+-- advisory lock (feed único COMMIT_ORDERED_SYNC_FEED, migrations ConversationFeedCommitOrder e HubSyncCommitOrder):
+-- a gravação marca a linha sync_pending e o trigger adiado do commit dá a versão. Quem viu a versão V viu toda linha
+-- confirmada com versão <= V, então o nextSince nunca pula um commit atrasado. Nas outras (catálogo RBAC) segue a
+-- sequência global (sync_version_seq) por trigger em todo insert/update. O cliente guarda o maior valor visto e pede
+-- "tudo com sync_version maior", lápides incluídas. Não usar updated_at para isso (relógio diverge).
 -- Limpeza: lápides com mais de 90 dias são apagadas de vez por rotina; cliente parado há mais de 30 dias
 -- (limite do login offline) faz sincronização completa. LGPD: pedido de esquecimento apaga/anonimiza os
 -- campos pessoais e deixa só id + deleted_at.
@@ -62,7 +67,7 @@ CREATE TABLE users (
   -- código, cópia feita no aparelho (por isso não há preenchimento retroativo).
   recovery_hash VARCHAR(64) NOT NULL,
   recovery_encrypted_private_key TEXT NOT NULL,
-  sync_version BIGINT NOT NULL COMMENT 'versão de sincronização: sequência global do servidor, muda a cada insert/update/exclusão',
+  sync_version BIGINT NOT NULL COMMENT 'versão de sincronização: dada no COMMIT, na ordem dos commits (feed único, conversation_sync_version_seq)',
   PRIMARY KEY (id),
   UNIQUE INDEX uq_users_email (email),
   INDEX ix_users_sync_version (sync_version)
@@ -169,7 +174,7 @@ CREATE TABLE organizations (
   personal_owner_user_id CHAR(36) NULL COMMENT 'dono da organização pessoal; nulo nas demais; garante uma pessoal por conta',
   storage_quota_bytes BIGINT NOT NULL DEFAULT 53687091200 COMMENT 'franquia de nuvem (50 GiB): a soma dos storage_quota_bytes dos espaços vivos não passa dela; CHECK > 0',
   ai_budget_micro_usd BIGINT NOT NULL DEFAULT 0 COMMENT 'orçamento mensal de IA da nuvem ativa em micro-dólares (US$ 1 = 1.000.000); 0 = não contratado; só o financeiro da plataforma ajusta; CHECK >= 0',
-  sync_version BIGINT NOT NULL COMMENT 'versão de sincronização: sequência global do servidor, muda a cada insert/update/exclusão',
+  sync_version BIGINT NOT NULL COMMENT 'versão de sincronização: dada no COMMIT, na ordem dos commits (feed único, conversation_sync_version_seq)',
   PRIMARY KEY (id),
   UNIQUE INDEX uq_organizations_personal_owner (personal_owner_user_id),
   INDEX ix_organizations_sync_version (sync_version),
@@ -185,7 +190,7 @@ CREATE TABLE user_organization (
   created_at DATETIME NOT NULL,
   updated_at DATETIME NULL,
   deleted_at DATETIME NULL COMMENT 'saiu da organização; os dados ficam nos espaços',
-  sync_version BIGINT NOT NULL COMMENT 'versão de sincronização: sequência global do servidor, muda a cada insert/update/exclusão',
+  sync_version BIGINT NOT NULL COMMENT 'versão de sincronização: dada no COMMIT, na ordem dos commits (feed único, conversation_sync_version_seq)',
   PRIMARY KEY (organization_id, user_id),
   INDEX fk_user_organization_users_idx (user_id),
   CONSTRAINT fk_user_organization_organizations FOREIGN KEY (organization_id) REFERENCES organizations (id),
@@ -244,7 +249,7 @@ CREATE TABLE hubs (
   signing_public_key VARCHAR(64) NOT NULL COMMENT 'Ed25519 (base64url): única para sempre, inclusive de Hubs desregistrados (sem WHERE deleted_at no Postgres)',
   last_seen_at DATETIME NULL,
   storage_capacity_bytes BIGINT NULL COMMENT 'capacidade utilizável do SSD informada pelo Hub (PUT /hub/storage); nula = sem conferência ao instalar; CHECK > 0',
-  sync_version BIGINT NOT NULL COMMENT 'versão de sincronização: sequência global do servidor, muda a cada insert/update/exclusão',
+  sync_version BIGINT NOT NULL COMMENT 'versão de sincronização: dada no COMMIT, na ordem dos commits (feed único, conversation_sync_version_seq)',
   PRIMARY KEY (id),
   UNIQUE INDEX uq_hubs_signing_public_key (signing_public_key),
   UNIQUE INDEX uq_hubs_id_owner (id, owner_user_id) COMMENT 'alvo da FK composta de hub_organization (hub_id, hub_owner_user_id)',
@@ -382,7 +387,7 @@ CREATE TABLE spaces (
   current_key_version INT NOT NULL DEFAULT 1,
   key_rotation_required TINYINT NOT NULL DEFAULT 0 COMMENT 'flag de coordenação do backend: troca de chave pendente após a saída de um membro',
   storage_quota_bytes BIGINT NOT NULL DEFAULT 10737418240 COMMENT 'tamanho reservado (10 GiB; 1 GiB..5 TiB): soma na franquia da organização e na capacidade de cada Hub onde está; CHECK > 0',
-  sync_version BIGINT NOT NULL COMMENT 'versão de sincronização: sequência global do servidor, muda a cada insert/update/exclusão',
+  sync_version BIGINT NOT NULL COMMENT 'versão de sincronização: dada no COMMIT, na ordem dos commits (feed único, conversation_sync_version_seq)',
   PRIMARY KEY (id),
   UNIQUE INDEX uq_spaces_id_organization (id, organization_id) COMMENT 'alvo das FKs compostas (filho_id, organization_id)',
   INDEX fk_spaces_organizations_idx (organization_id),
@@ -401,7 +406,7 @@ CREATE TABLE space_keys (
   version INT NOT NULL,
   recovery_wrapped_key TEXT NOT NULL COMMENT 'trancada com organizations.recovery_public_key (kit)',
   recovery_key_fingerprint VARCHAR(64) NOT NULL COMMENT 'hash do kit usado',
-  sync_version BIGINT NOT NULL COMMENT 'versão de sincronização: sequência global do servidor, muda a cada insert/update/exclusão',
+  sync_version BIGINT NOT NULL COMMENT 'versão de sincronização: dada no COMMIT, na ordem dos commits (feed único, conversation_sync_version_seq)',
   PRIMARY KEY (id),
   UNIQUE INDEX uq_space_keys_space_version (space_id, version),
   UNIQUE INDEX uq_space_keys_id_organization (id, organization_id) COMMENT 'alvo das FKs compostas (filho_id, organization_id)',
@@ -424,7 +429,7 @@ CREATE TABLE space_key_grants (
   hub_id CHAR(36) NULL,
   app_installation_id CHAR(36) NULL,
   wrapped_key TEXT NOT NULL COMMENT 'trancada com a public_key do usuário, do hub ou da instalação (exatamente um dos três)',
-  sync_version BIGINT NOT NULL COMMENT 'versão de sincronização: sequência global do servidor, muda a cada insert/update/exclusão',
+  sync_version BIGINT NOT NULL COMMENT 'versão de sincronização: dada no COMMIT, na ordem dos commits (feed único, conversation_sync_version_seq)',
   PRIMARY KEY (id),
   UNIQUE INDEX uq_space_key_grants_user (space_key_id, user_id),
   UNIQUE INDEX uq_space_key_grants_hub (space_key_id, hub_id),
@@ -464,7 +469,7 @@ CREATE TABLE hub_organization (
   created_at DATETIME NOT NULL,
   updated_at DATETIME NULL,
   deleted_at DATETIME NULL,
-  sync_version BIGINT NOT NULL COMMENT 'versão de sincronização: sequência global do servidor, muda a cada insert/update/exclusão',
+  sync_version BIGINT NOT NULL COMMENT 'versão de sincronização: dada no COMMIT, na ordem dos commits (feed único, conversation_sync_version_seq)',
   PRIMARY KEY (hub_id, organization_id),
   INDEX fk_hub_organization_organizations_idx (organization_id),
   INDEX fk_hub_organization_hubs_idx (hub_id, hub_owner_user_id),
@@ -493,7 +498,7 @@ CREATE TABLE hub_space (
   created_at DATETIME NOT NULL,
   deleted_at DATETIME NULL,
   updated_at DATETIME NULL,
-  sync_version BIGINT NOT NULL COMMENT 'versão de sincronização: sequência global do servidor, muda a cada insert/update/exclusão',
+  sync_version BIGINT NOT NULL COMMENT 'versão de sincronização: dada no COMMIT, na ordem dos commits (feed único, conversation_sync_version_seq)',
   PRIMARY KEY (hub_id, space_id),
   INDEX fk_hub_space_spaces_idx (space_id, organization_id),
   INDEX fk_hub_space_organizations_idx (organization_id),
@@ -622,7 +627,7 @@ CREATE TABLE role_assignments (
   approval_status ENUM('not_required', 'pending', 'approved', 'rejected') NOT NULL DEFAULT 'not_required' COMMENT 'papel de instalação num hub: o dono do hub aprova; só vale quando approved',
   approved_by_user_id CHAR(36) NULL,
   approved_at DATETIME NULL,
-  sync_version BIGINT NOT NULL COMMENT 'versão de sincronização: sequência global do servidor, muda a cada insert/update/exclusão',
+  sync_version BIGINT NOT NULL COMMENT 'versão de sincronização: dada no COMMIT, na ordem dos commits (feed único, conversation_sync_version_seq)',
   PRIMARY KEY (id),
   INDEX fk_role_assignments_roles_idx (role_id),
   INDEX ix_role_assignments_user_scope (user_id, scope_type),

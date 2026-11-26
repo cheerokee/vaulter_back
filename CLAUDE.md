@@ -931,13 +931,15 @@ mesmo commit).
   (2) o papel IAM da API com `s3:ListBucket`, `s3:GetObject`, `s3:GetObjectVersion`, `s3:PutObject`,
   `s3:PutObjectTagging`, `s3:DeleteObject`, `s3:DeleteObjectVersion` e `s3:ListBucketVersions` no bucket; (3) uma
   configuração de **endpoint S3 público** para dispositivos reais em dev: as URLs assinadas saem com o host de
-  `AWS_ENDPOINT_URL` (`aws:4566`), que só resolve dentro do Docker; ainda **não existe** (veja Pendências).
+  `AWS_ENDPOINT_URL` (`aws:4566`), que só resolve dentro do Docker; com `S3_PUBLIC_ENDPOINT_URL` (ex.: o IP do host na
+  rede + `AWS_EXTERNAL_PORT`) elas são assinadas para esse host (um segundo cliente S3 só para assinar: o host entra na
+  assinatura).
 - **Testes:** e2e em `test/storage/` (`object-store`, `quotas`, `uploads`, `downloads`, `trash`) com o S3 do LocalStack;
   unitários ao lado do código com `ObjectStore` simulado. Helpers de Hub em `test/support/hub-client.ts` e
   `hubs-kit.ts`. Pendências do módulo: veja "Pendências antes de produção" (snapshot pago, contratação de franquia,
   classes de armazenamento mais baratas, troca de chave pelo Hub editor da Sala, visitante em Hub alheio, configuração
   inicial por Bluetooth/idioma do Hub, rota de download em lote, limpeza física do
-  índice, aviso de franquia perto do fim, endpoint S3 público).
+  índice, aviso de franquia perto do fim).
 
 ## Módulo `conversations`
 `src/conversations/` (assuntos: participantes, executor, chave própria por versão, mensagens, caixa de entrada, anexos e
@@ -1077,7 +1079,8 @@ registra a fonte `conversations`), `hubs` (`HubDirectory`: `ownerOf`,
   `conversation_message_agent_lease_read` e OR na restritiva `conversation_child_read`, com o escape do commit), assunto
   lido no contexto do Hub que confirmou, volta à fila no contexto do DONO, lotes de 100 assuntos por unit of work em
   ordem (espaço, assunto), `requeueExpiredAgentLeases` (um instante só do banco; sem resposta = `pending`,
-  `requeued_at` novo; respondida ou apagada = só o prazo sai; o laço para quando um lote não tira nenhum prazo) e
+  `requeued_at` novo; respondida ou apagada = só o prazo sai; candidatos por cursor (assunto, Hub): uma passada vê cada
+  um uma vez, e os pulados ficam para a próxima sem esconder os de trás) e
   `CloudReservePendingHooks` com `immediate` dentro do unit of work (a tarefa da nuvem começa na hora, mas
   `nextResponderStep` conta os 30 s do Hub de novo a partir do `requeued_at`: a nuvem responde ~30 s depois da
   varredura; veja Pendências, "Agente do PC"). Invariante: um prazo é sempre do executor atual
@@ -1085,7 +1088,8 @@ registra a fonte `conversations`), `hubs` (`HubDirectory`: `ownerOf`,
   mensagem de um Hub `pc` leva `answeringMessageId` (obrigatório; aparelho: recusado, 422 `validation-failed`),
   reconferido sob a trava do assunto pela mesma regra do turno (409 `brain-step-not-owned`, nada gravado: a resposta
   atrasada nunca vira uma segunda resposta) e gravado em `conversation_messages.answers_message_id` (só o id; CHECK só
-  em mensagem de Hub, FK composta no mesmo assunto). Para o agente, "respondida" = existe mensagem com
+  em mensagem de Hub, FK composta no mesmo assunto; imutável por `trg_conversation_messages_immutable`, migration
+  `ConversationAnswersImmutable`). Para o agente, "respondida" = existe mensagem com
   `answers_message_id` = ela (`answeredBy`: turno, renovação, varredura e `requeueAckedBy` dos acks com prazo); o
   aparelho segue a regra antiga (mensagem dele depois).
   Renovar grava a linha (sai de novo nos feeds e entra no lock de versões do COMMIT, como um ack).
@@ -1200,7 +1204,8 @@ registra a fonte `conversations`), `hubs` (`HubDirectory`: `ownerOf`,
     `participant-not-space-member`) e depois `POST /spaces/:spaceId/conversations/:id/move` `{ toSpaceId,
     toConversationId }` (`MoveConversationUseCase`, 204, idempotente): o novo precisa ter `movedFromConversationId` = o
     antigo (422 `conversation-move-invalid`); o antigo ganha lápide (participações, cópias e executor ficam; a sincronização
-    entrega a lápide) e auditoria `conversation.moved` (só ids). Trava só o antigo.
+    entrega a lápide) e auditoria `conversation.moved` (só ids). Trava só o antigo. Uma segunda cópia criada do mesmo
+    antigo também conclui depois da lápide (204) e é auditada uma vez por cópia (`AuditLog.has`; repetir não audita).
   - **Apagar anexo** (`DeleteAttachmentUseCase`, `DELETE .../:id/attachments/:attachmentId` nas duas formas): só quem
     enviou (403), 204 idempotente, 404 `attachment-not-found`; lápide: confirmado vira lixeira, pendente solta a
     reserva. `messageId` continua nulo: o app apaga a mensagem e os anexos dela (a referência está no corpo cifrado).
@@ -1516,7 +1521,8 @@ sequência inteira para quem implementa o agente: `docs/hubs/hub-lifecycle.md`, 
 - **Catálogo** (`PUT /hub/agent/tools`, `PublishAgentToolsUseCase`; `assertAgentTools` no domínio, 422 `validation-failed`
   com o `index`): até 200 ferramentas, nome com o prefixo da categoria (`mcp:<servidor>/<ferramenta>`, `browser:<ação>`,
   `folder:<read|write|list>`), `folder` exige `inputSchema.properties.path` e `browser`, `.url`. Substitui a lista inteira
-  num `uow.run` (lápide no que saiu, upsert do resto: nome que volta revive a linha). Tabela `agent_tools` (migration
+  num `uow.run` (advisory lock de transação por Hub primeiro, então dois PUT do mesmo Hub se serializam; lápide no que
+  saiu, upsert do resto em ordem de nome: nome que volta revive a linha). Tabela `agent_tools` (migration
   `CreateAgentTools`; `owner_user_id` desnormalizado com FK composta para `hubs (id, owner_user_id)`; `UNIQUE (hub_id, name)`;
   sem `organization_id` nem sync): metadado de software, legível, com RLS do dono do Hub (`app.user_id`) ou do próprio Hub
   (`app.hub_id`). Rate limit `agentTools` 60/h por Hub. **Corpo JSON de até 2 MiB** só nessa rota (`AGENT_TOOLS_BODY_MAX_BYTES`, 413 acima): limite por rota em `src/shared/infra/http/body-limits.ts` (`JSON_BODY_LIMITS` + `applyJsonBodyLimits`, chamado por `configureApp` antes do `init()` para valer no bootstrap e nos e2e); o resto fica no padrão de 100 kB.
@@ -1675,6 +1681,7 @@ Validadas na subida por `src/shared/infra/config/env.validation.ts` (faltou ou i
 | `AWS_ENDPOINT_URL` | endpoint do S3 (LocalStack em dev; vazio em produção) | vazio |
 | `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` | credenciais estáticas, as duas ou nenhuma (sem elas, papel IAM) | vazio |
 | `S3_FORCE_PATH_STYLE` | path-style (obrigatório no LocalStack) | `false` |
+| `S3_PUBLIC_ENDPOINT_URL` | host para o qual as URLs assinadas do S3 saem (dev com aparelho real: IP do host + `AWS_EXTERNAL_PORT`); vazio = o de `AWS_ENDPOINT_URL` | vazio |
 | `CLOUD_KMS_KEY_ID` | chave KMS (id, ARN ou `alias/...`) que envelopa a privada X25519 do servidor (módulo `cloud`) | obrigatória |
 | `EMBEDDINGS_URL` / `EMBEDDING_MODEL` | serviço de embeddings (Ollama) e o modelo (tag fixada, gravado em cada trecho) | `http://embeddings:11434` / `nomic-embed-text:v1.5` |
 | `CLOUD_LLM_DRIVER` / `CLOUD_LLM_MODEL_ID` | `bedrock`, `fake` (dev sem Bedrock) ou `openrouter` (dev, Claude real); id/perfil do Claude no Bedrock ou slug da OpenRouter (precisa de preço em `AiPricing`) | `bedrock` / `us.anthropic.claude-sonnet-5-5` |
@@ -1701,7 +1708,7 @@ Os valores do `.env.example` para os segredos são **só de desenvolvimento**; p
   está pendente); visitante em Hub alheio (pessoa de outra organização usando o Hub); configuração inicial do Hub por
   Bluetooth e idioma; rota de download em lote (hoje uma URL por versão); limpeza física do índice
   (`storage_objects`/`storage_object_versions` depois da lixeira; o runtime não tem `DELETE`); aviso de franquia perto
-  do fim (notificação); endpoint S3 público configurável para dispositivos reais em dev.
+  do fim (notificação).
 - Exclusão de conta (LGPD) precisa revogar as sessões.
 - **Nuvem ativa / KMS:** criar a chave KMS simétrica real (`us-east-1`, rotação automática ligada) e o alias de
   `CLOUD_KMS_KEY_ID`; papel IAM da API com `kms:Encrypt` e `kms:Decrypt` nela. Sem nome de produto no alias.
@@ -1711,8 +1718,7 @@ Os valores do `.env.example` para os segredos são **só de desenvolvimento**; p
   aparecem pelo feed); **executor na nuvem completo** (hoje a nuvem é só executor de **reserva** nos espaços em nuvem
   ativa, sem ferramentas; o executor principal é sempre um Hub; veja "Nuvem ativa" abaixo); API de integradores
   (o assunto como caixa de entrada de apps); WebSocket no lugar da sondagem longa do executor; reconcile do **contador**
-  `conversation_space_usage` (os triggers o mantêm, mas não há varredura que corrija uma deriva);
-  `move` que completa uma segunda cópia movida sem auditar.
+  `conversation_space_usage` (os triggers o mantêm, mas não há varredura que corrija uma deriva).
   **LISTEN:** a conexão `PgConversationChangeSignal` (com keepalive, ping de 30 s e jitter de 0–1 s ao acordar todos) **não funciona atrás de pgbouncer em modo transação** (LISTEN exige
   conexão de sessão). **Pool:** a conexão do LISTEN e o pool do pg-boss ficam fora do pool do TypeORM, então conte
   `instâncias × (DB_POOL_MAX_CONNECTIONS + 1 + JOB_QUEUE_POOL_MAX)` (hoje 10 + 1 + 4) ao dimensionar `max_connections` do
@@ -1756,19 +1762,16 @@ Os valores do `.env.example` para os segredos são **só de desenvolvimento**; p
   também deixam um agente instável (cai e volta) dar ack de novo dentro da janela e pegar mais 15 min, e assim
   repetidamente, sem a nuvem nunca responder: esse é o argumento real para responder na hora mais adiante; (b)
   `agent_issued_proposals` é só de acréscimo (runtime com SELECT/INSERT: o GRANT padrão não tem DELETE e o UPDATE foi
-  revogado), então nada sai: definir a retenção (um papel de manutenção, como a dos assuntos); (c) a varredura pode morrer de fome se ≥100 prazos mais antigos forem pulados para
-  sempre; `answers_message_id` não é imutável no banco (só pelo código); (d) lotes concorrentes de
-  `POST /hub/agent/actions` e de `PUT /hub/agent/tools` gravam linha a linha sem ordenar (deadlock possível, o cliente
-  repete); (e) o app precisa mostrar o cartão da proposta de documento numa mensagem do agente (repo do app); (f)
-  apertar o validador da ACL exige revalidar as políticas gravadas (veja "ACL" em `agents`).
+  revogado), então nada sai: definir a retenção (um papel de manutenção, como a dos assuntos); (c) o app precisa
+  mostrar o cartão da proposta de documento numa mensagem do agente (repo do app); (d) apertar o validador da ACL exige
+  revalidar as políticas gravadas (veja "ACL" em `agents`).
 - Plataforma: quarentena/aviso por e-mail ao dono e aos admins quando a equipe age numa organização ou Hub; leitura da
   auditoria da organização pelo cliente (hoje só se grava); endurecer a aprovação dupla (hoje basta outra pessoa com
   `platform.support.approve`); demais permissões de financeiro, tickets e chat (o `platform_finance` só tem `platform.billing.storage_quota` e `platform.billing.ai_budget`).
 - Recuperação de conta, limites conhecidos: (a) as escritas em `users` são por campo (`updatePasswordMaterial`,
   `updateRecoveryCode`) e a recuperação reconfere a prova sob `FOR UPDATE` (`findByIdForUpdate`), então trocar o código
-  durante uma recuperação nunca é desfeito; mas `PUT /me/password` não trava a linha, e um que passou na reautenticação
-  logo antes de uma recuperação confirmar ainda pode sobrescrever a senha recuperada (corrida estreita; a sessão dele
-  já foi revogada pela recuperação); (b) confirmação por e-mail, aviso ao dono da conta e auditoria visível da
+  durante uma recuperação nunca é desfeito; `PUT /me/password` grava sob o mesmo `FOR UPDATE` e só se a senha ainda é
+  a que a reautenticação conferiu (senão 401 `invalid-access-token`: uma recuperação no meio vence); (b) confirmação por e-mail, aviso ao dono da conta e auditoria visível da
   recuperação ficam para depois.
 - Organizações: avisar admins por notificação (convite aceito, membro saiu); exclusão de organização; papéis
   próprios (modo avançado: `role_permission` com RLS por organização, hoje o catálogo é só leitura); quem sai e volta mantém
