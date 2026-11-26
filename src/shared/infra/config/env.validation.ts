@@ -239,6 +239,15 @@ export class EnvironmentVariables {
   @IsUrl({ require_tld: false, protocols: ['http', 'https'] })
   AWS_ENDPOINT_URL?: string;
 
+  /**
+   * Host the presigned S3 URLs are signed for (dev, real devices: e.g. `http://192.168.0.10:4567`, LocalStack seen
+   * from the LAN). Unset: the URLs carry `AWS_ENDPOINT_URL` (or the AWS endpoint in production).
+   */
+  @Transform(emptyToUndefined)
+  @IsOptional()
+  @IsUrl({ require_tld: false, protocols: ['http', 'https'] })
+  S3_PUBLIC_ENDPOINT_URL?: string;
+
   @Validate(AwsCredentialPairConstraint, ['AWS_SECRET_ACCESS_KEY'])
   AWS_ACCESS_KEY_ID?: string;
 

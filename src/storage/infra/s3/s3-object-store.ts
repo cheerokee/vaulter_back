@@ -45,6 +45,12 @@ const UNHOISTABLE = new Set(['x-amz-checksum-sha256', 'x-amz-tagging']);
 export class S3ObjectStore extends ObjectStore implements OnModuleDestroy {
   private readonly logger = new Logger(S3ObjectStore.name);
   private readonly client: S3Client;
+  /**
+   * Signs the presigned URLs. The same as `client` unless `S3_PUBLIC_ENDPOINT_URL` is set (dev: a host real devices
+   * reach, since `aws:4566` only resolves inside Docker). A separate client and not a host swap afterwards: the host
+   * is part of the signature.
+   */
+  private readonly presigner: S3Client;
   private readonly bucket: string;
 
   constructor(config: ConfigService) {
@@ -52,23 +58,31 @@ export class S3ObjectStore extends ObjectStore implements OnModuleDestroy {
     this.bucket = config.getOrThrow<string>('S3_BUCKET_HUB_BRAIN');
     const accessKeyId = config.get<string>('AWS_ACCESS_KEY_ID');
     const secretAccessKey = config.get<string>('AWS_SECRET_ACCESS_KEY');
-    this.client = new S3Client({
-      region: config.getOrThrow<string>('AWS_REGION'),
-      endpoint: config.get<string>('AWS_ENDPOINT_URL') || undefined,
-      forcePathStyle: config.get<boolean>('S3_FORCE_PATH_STYLE') === true,
-      // Without static keys the SDK's default chain applies (IAM role in production).
-      credentials:
-        accessKeyId && secretAccessKey
-          ? { accessKeyId, secretAccessKey }
-          : undefined,
-      // Only the checksums we set explicitly: otherwise the SDK adds a CRC32 of the (empty) presign body.
-      requestChecksumCalculation: 'WHEN_REQUIRED',
-      responseChecksumValidation: 'WHEN_REQUIRED',
-    });
+    const clientFor = (endpoint: string | undefined) =>
+      new S3Client({
+        region: config.getOrThrow<string>('AWS_REGION'),
+        endpoint,
+        forcePathStyle: config.get<boolean>('S3_FORCE_PATH_STYLE') === true,
+        // Without static keys the SDK's default chain applies (IAM role in production).
+        credentials:
+          accessKeyId && secretAccessKey
+            ? { accessKeyId, secretAccessKey }
+            : undefined,
+        // Only the checksums we set explicitly: otherwise the SDK adds a CRC32 of the (empty) presign body.
+        requestChecksumCalculation: 'WHEN_REQUIRED',
+        responseChecksumValidation: 'WHEN_REQUIRED',
+      });
+    this.client = clientFor(
+      config.get<string>('AWS_ENDPOINT_URL') || undefined,
+    );
+    const publicEndpoint =
+      config.get<string>('S3_PUBLIC_ENDPOINT_URL') || undefined;
+    this.presigner = publicEndpoint ? clientFor(publicEndpoint) : this.client;
   }
 
   onModuleDestroy(): void {
     this.client.destroy();
+    if (this.presigner !== this.client) this.presigner.destroy();
   }
 
   async presignPut(
@@ -83,7 +97,7 @@ export class S3ObjectStore extends ObjectStore implements OnModuleDestroy {
     }
     const checksum = Buffer.from(sha256Hex, 'hex').toString('base64');
     const url = await getSignedUrl(
-      this.client,
+      this.presigner,
       new PutObjectCommand({
         Bucket: this.bucket,
         Key: key,
@@ -125,7 +139,7 @@ export class S3ObjectStore extends ObjectStore implements OnModuleDestroy {
     expiresInSeconds: number,
   ): Promise<string> {
     return getSignedUrl(
-      this.client,
+      this.presigner,
       new GetObjectCommand({
         Bucket: this.bucket,
         Key: key,
