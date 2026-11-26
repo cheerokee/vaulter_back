@@ -77,4 +77,13 @@ export class AuditLog {
       ...(entry.metadata ? { metadata: entry.metadata } : {}),
     });
   }
+
+  /** Whether the organization already recorded `action` with metadata containing `metadata` (idempotent repeats). */
+  has(
+    organizationId: string,
+    action: AuditAction,
+    metadata: Record<string, unknown>,
+  ): Promise<boolean> {
+    return this.repository.has(organizationId, action, metadata);
+  }
 }

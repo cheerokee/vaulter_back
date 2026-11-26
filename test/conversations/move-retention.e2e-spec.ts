@@ -340,6 +340,30 @@ describe('conversations: move, retention and trash (e2e)', () => {
       });
     });
 
+    it('a second copy created from the same conversation also completes after the move, audited once (repeats are not)', async () => {
+      const old = await open(olivia, spaceA, [ana]);
+      const copies: string[] = [];
+      for (let i = 0; i < 2; i++) {
+        const moved = await k.create(olivia, spaceB, {
+          movedFrom: { spaceId: spaceA, conversationId: old.id },
+        });
+        await expectStatus(Promise.resolve(moved.res), 201);
+        copies.push(moved.id);
+      }
+      for (const copy of [copies[0], copies[1], copies[1], copies[0]]) {
+        await expectStatus(move(olivia, spaceA, old.id, spaceB, copy), 204);
+      }
+      const audit: { metadata: { toConversationId: string } }[] = await (
+        await adminDataSource()
+      ).query(
+        `SELECT metadata FROM audit_logs
+          WHERE action = 'conversation.moved' AND metadata->>'conversationId' = $1
+          ORDER BY created_at, id`,
+        [old.id],
+      );
+      expect(audit.map((a) => a.metadata.toConversationId)).toEqual(copies);
+    });
+
     it('without common members: only the owner goes, and the executor is chosen again (or none)', async () => {
       const old = await open(olivia, spaceA, [bruno], { executor: true });
       const moved = await k.create(olivia, spaceB, {

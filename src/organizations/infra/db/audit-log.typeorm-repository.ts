@@ -7,7 +7,7 @@ import {
 } from '../../domain/audit-log.repository.js';
 import { AuditLogTypeormEntity } from './audit-log.entity.js';
 
-// Só INSERT (o papel de runtime nem tem UPDATE/DELETE na tabela). Nesta etapa toda ação gravada é `success`.
+// Só INSERT e leitura (o papel de runtime nem tem UPDATE/DELETE na tabela). Nesta etapa toda ação gravada é `success`.
 @Injectable()
 export class AuditLogTypeormRepository extends AuditLogRepository {
   constructor(private readonly dataSource: DataSource) {
@@ -26,5 +26,24 @@ export class AuditLogTypeormRepository extends AuditLogRepository {
         ...(entry.createdAt ? { createdAt: entry.createdAt } : {}),
       }),
     );
+  }
+
+  async has(
+    organizationId: string,
+    action: string,
+    metadata: Record<string, unknown>,
+  ): Promise<boolean> {
+    const rows: unknown[] = await runInOrganizationScope(
+      this.dataSource,
+      organizationId,
+      (m) =>
+        m.query(
+          `SELECT 1 FROM audit_logs
+            WHERE organization_id = $1 AND action = $2 AND metadata @> $3::jsonb
+            LIMIT 1`,
+          [organizationId, action, JSON.stringify(metadata)],
+        ),
+    );
+    return rows.length > 0;
   }
 }
