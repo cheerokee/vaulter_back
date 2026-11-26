@@ -76,6 +76,8 @@ export class AgentActionTypeormRepository extends AgentActionRepository {
     if (input.rows.length === 0) return [];
     const col = <T>(f: (r: (typeof input.rows)[number]) => T) =>
       input.rows.map(f);
+    // In action id order (`ORDER BY`): two concurrent batches with overlapping ids wait on the unique index in the same
+    // order, so they never deadlock.
     const inserted = await runInOrganizationScope(
       this.dataSource,
       input.organizationId,
@@ -90,6 +92,7 @@ export class AgentActionTypeormRepository extends AgentActionRepository {
                          $11::timestamptz[], $12::int[], $13::int[])
                   AS t(action_id, space_id, conversation_id, message_id, tool_name, effect, decision, started_at,
                        duration_ms, policy_version)
+            ORDER BY t.action_id
            ON CONFLICT (hub_id, action_id) DO NOTHING
            RETURNING action_id`,
           [
