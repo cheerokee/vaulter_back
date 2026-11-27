@@ -18,20 +18,16 @@ export type RetentionPurge = {
 };
 
 /**
- * The database side of the retention routine (spec §4.4.1). The implementation runs with the OWNER login: a tombstoned
- * conversation is invisible to every runtime RLS context (its last participant left), and the usage triggers must see
- * it. Every "past the window" comparison uses the database clock (`now()`).
+ * The database side of the retention routine (spec §4.4.1). The implementation runs with the runtime login in the
+ * trusted context `app.conversation_retention` (migration MaintenanceTrustedContexts): a tombstoned conversation is
+ * invisible to every other runtime context (its last participant left), and the usage triggers must see it. Every
+ * "past the window" comparison uses the database clock (`now()`).
  */
 export abstract class ConversationRetentionStore {
   /**
-   * Whether the connection's login ignores row-level security (superuser or BYPASSRLS). Without it the tables' FORCE RLS
-   * hides every row and the routine would silently purge nothing.
-   */
-  abstract bypassesRowSecurity(): Promise<boolean>;
-  /**
    * Conversations (any organization, tombstoned or not) that still hold encrypted content past the window: a message
    * body or a committed attachment tombstoned more than `retentionDays` ago, or anything of a conversation tombstoned
-   * more than `retentionDays` ago (its header included). Ordered by (space id, id): the multi-conversation order.
+   * more than `retentionDays` ago (its header included). Ordered by (organization, id); each one is purged in its own transactions.
    */
   abstract candidates(retentionDays: number): Promise<RetentionCandidate[]>;
   /**

@@ -1,9 +1,10 @@
 import { randomBytes } from 'node:crypto';
 import type { INestApplication } from '@nestjs/common';
 import request from 'supertest';
-import { DataSource } from 'typeorm';
 import type { Response } from 'supertest';
 import { ConversationRetention } from '../../src/conversations/application/conversation-retention.js';
+import { ConversationRetentionStore } from '../../src/conversations/application/ports/conversation-retention-store.js';
+import { CONVERSATION_RETENTION_BATCH_ROWS } from '../../src/conversations/domain/conversation-limits.js';
 import { ConversationRetentionSqlStore } from '../../src/conversations/infra/db/conversation-retention.sql-store.js';
 import { StorageReconcileHooks } from '../../src/shared/application/storage-reconcile-hooks.js';
 import { newId } from '../../src/shared/domain/id.js';
@@ -202,13 +203,7 @@ describe('conversations: move, retention and trash (e2e)', () => {
       .set(bearer(u.token))
       .send({ currentAuthProof });
 
-  const retention = () =>
-    adminDataSource().then((owner) =>
-      new ConversationRetention(
-        new ConversationRetentionSqlStore(owner),
-        store(),
-      ).execute(),
-    );
+  const retention = () => app.get(ConversationRetention).execute();
 
   const usedBytes = async (sp: string) =>
     (
@@ -551,8 +546,8 @@ describe('conversations: move, retention and trash (e2e)', () => {
         headers: 1,
         failed: 0,
       });
-      // Retention runs as the owner (BYPASSRLS), on rows no runtime context sees: every row it wrote got its
-      // version at commit (ConversationFeedCommitOrder).
+      // Retention runs with the runtime login in its trusted context, on rows no other runtime context sees: every row
+      // it wrote got its version at commit (ConversationFeedCommitOrder).
       const [{ pending }] = (await (
         await adminDataSource()
       ).query(
@@ -615,18 +610,6 @@ describe('conversations: move, retention and trash (e2e)', () => {
         storageBefore.trashBytes - m1Bytes - a1.size,
       );
 
-      // The preflight: the owner login ignores RLS here; the runtime login does not (FORCE RLS would hide every row).
-      expect(
-        await new ConversationRetentionSqlStore(
-          await adminDataSource(),
-        ).bypassesRowSecurity(),
-      ).toBe(true);
-      expect(
-        await new ConversationRetentionSqlStore(
-          app.get(DataSource),
-        ).bypassesRowSecurity(),
-      ).toBe(false);
-
       // Nothing more to do.
       expect(await retention()).toMatchObject({
         conversations: 0,
@@ -649,12 +632,14 @@ describe('conversations: move, retention and trash (e2e)', () => {
       await expectStatus(k.leave(olivia, spaceA, gone.id), 204);
       await backdate('conversations', gone.id, 31);
 
-      const purge = vi.spyOn(ConversationRetentionSqlStore.prototype, 'purge');
+      const sqlStore = app.get(ConversationRetentionStore);
+      if (!(sqlStore instanceof ConversationRetentionSqlStore)) {
+        throw new Error('expected the SQL retention store');
+      }
+      const purge = vi.spyOn(sqlStore, 'purge');
+      sqlStore.batchRows = 2;
       try {
-        const result = await new ConversationRetention(
-          new ConversationRetentionSqlStore(await adminDataSource(), 2),
-          store(),
-        ).execute();
+        const result = await retention();
         expect(result).toMatchObject({
           conversations: 1,
           messages: 3,
@@ -667,6 +652,7 @@ describe('conversations: move, retention and trash (e2e)', () => {
         expect(purge).toHaveBeenCalledTimes(3);
       } finally {
         purge.mockRestore();
+        sqlStore.batchRows = CONVERSATION_RETENTION_BATCH_ROWS;
       }
       const rows = await messageRows(gone.id);
       expect(rows.every((r) => r.encrypted_body === null)).toBe(true);

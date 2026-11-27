@@ -1,8 +1,16 @@
-import { Logger } from '@nestjs/common';
-import type { ObjectStore } from '../../storage/application/ports/object-store.js';
+import { Injectable, Logger, type OnModuleInit } from '@nestjs/common';
+import { JobQueue } from '../../shared/application/job-queue.js';
+import { ObjectStore } from '../../storage/application/ports/object-store.js';
 import { CONVERSATION_RETENTION_DAYS } from '../domain/conversation-limits.js';
 import { removePurgedAttachments } from './attachment-bucket.js';
-import type { ConversationRetentionStore } from './ports/conversation-retention-store.js';
+import { ConversationRetentionStore } from './ports/conversation-retention-store.js';
+
+export const CONVERSATION_RETENTION_QUEUE = 'conversations.retention';
+/**
+ * Every day at 02:00 UTC: before `storage.reconcile` (04:00 UTC), which only sweeps journal marks older than 60 min and
+ * deletes from the bucket what this run's `DeleteObjects` left behind.
+ */
+export const CONVERSATION_RETENTION_CRON = '0 2 * * *';
 
 export type ConversationRetentionResult = {
   conversations: number;
@@ -19,31 +27,45 @@ export type ConversationRetentionResult = {
 
 // Retenção dos assuntos (spec §4.4.1): mensagem, anexo ou assunto com lápide guarda o conteúdo cifrado por 30 dias
 // (relógio do banco); depois esta rotina zera os corpos e o cabeçalho (UPDATE: a linha e a lápide ficam para a
-// sincronização) e tira os anexos do bucket. Roda pelo CLI `npm run conversations:retention`, com o login DONO (veja
-// `ConversationRetentionStore`), 1x por dia (CLAUDE.md, Pendências). Um lote por transação (até
-// `CONVERSATION_RETENTION_BATCH_ROWS` linhas de um assunto; o assunto se repete enquanto o lote vier cheio: todo commit
-// que grava nos assuntos segura a trava das versões até o fim, veja `addCommitOrderedSyncVersion`); os anexos seguem a regra
-// do diário do storage: índice `purged` + marca renovada no COMMIT, e SÓ DEPOIS o `DeleteObjects` em lote (o que não
-// sair fica marcado para a varredura `storage:reconcile`, que o apaga: `purged` não referencia versão). Uma falha num
-// assunto é registrada e a rotina segue (a próxima passada tenta de novo; tudo é idempotente).
-// Fica fora do contêiner de DI de propósito: a API nunca segura a conexão do dono.
-export class ConversationRetention {
+// sincronização) e tira os anexos do bucket. Tarefa agendada do pg-boss (`conversations.retention`, 02:00 UTC, só em
+// processo com `JOB_WORKERS_ENABLED`) e o CLI `npm run conversations:retention` sob demanda, ambos com o login de
+// runtime no contexto de confiança `app.conversation_retention` (veja `ConversationRetentionStore`). Um lote por
+// transação (até `CONVERSATION_RETENTION_BATCH_ROWS` linhas de um assunto; o assunto se repete enquanto o lote vier
+// cheio: todo commit que grava nos assuntos segura a trava das versões até o fim, veja `addCommitOrderedSyncVersion`); os
+// anexos seguem a regra do diário do storage: índice `purged` + marca renovada no COMMIT, e SÓ DEPOIS o `DeleteObjects`
+// em lote (o que não sair fica marcado para a varredura `storage:reconcile`, que o apaga: `purged` não referencia
+// versão). Uma falha num assunto é registrada e a rotina segue (a próxima passada tenta de novo; tudo é idempotente,
+// inclusive uma retentativa do pg-boss ou o CLI rodando junto). O registro leva só contagens.
+@Injectable()
+export class ConversationRetention implements OnModuleInit {
   private readonly logger = new Logger(ConversationRetention.name);
+
+  private readonly retentionDays = CONVERSATION_RETENTION_DAYS;
 
   constructor(
     private readonly store: ConversationRetentionStore,
     private readonly objects: ObjectStore,
-    private readonly retentionDays = CONVERSATION_RETENTION_DAYS,
+    private readonly jobs: JobQueue,
   ) {}
 
-  /**
-   * Throws `RetentionLoginError` (before touching anything) when the login does not ignore RLS: with FORCE RLS it would
-   * see no row and report zeros, and deleting tombstoned content after 30 days is a privacy promise.
-   */
+  async onModuleInit(): Promise<void> {
+    await this.jobs.work(CONVERSATION_RETENTION_QUEUE, async () => {
+      const result = await this.execute();
+      this.logger.log(`conversation retention: ${JSON.stringify(result)}`);
+      // Some conversation failed (logged): the job fails too, so pg-boss retries (idempotent) and the failure shows.
+      if (result.failed > 0) {
+        throw new Error(
+          `conversation retention: ${result.failed} conversation(s) failed`,
+        );
+      }
+    });
+    await this.jobs.schedule(
+      CONVERSATION_RETENTION_QUEUE,
+      CONVERSATION_RETENTION_CRON,
+    );
+  }
+
   async execute(): Promise<ConversationRetentionResult> {
-    if (!(await this.store.bypassesRowSecurity())) {
-      throw new RetentionLoginError();
-    }
     const result: ConversationRetentionResult = {
       conversations: 0,
       messages: 0,
@@ -86,15 +108,5 @@ export class ConversationRetention {
       }
     }
     return result;
-  }
-}
-
-export class RetentionLoginError extends Error {
-  constructor() {
-    super(
-      'conversations:retention needs a login that ignores row-level security (superuser or BYPASSRLS); ' +
-        'see CLAUDE.md, Pendências, "Agendar npm run conversations:retention".',
-    );
-    this.name = 'RetentionLoginError';
   }
 }

@@ -12,7 +12,7 @@ import {
 export const STORAGE_RECONCILE_QUEUE = 'storage.reconcile';
 
 /**
- * Every day at 04:00 UTC (01:00 in Brasília, low traffic). `conversations:retention` (still a CLI, owner login) must
+ * Every day at 04:00 UTC (01:00 in Brasília, low traffic). `conversations.retention` (02:00 UTC) must
  * run before it and finish before 03:00 UTC: the marks it renews are only swept once they are 60 min old.
  */
 export const STORAGE_RECONCILE_CRON = '0 4 * * *';

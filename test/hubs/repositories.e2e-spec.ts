@@ -57,6 +57,11 @@ const HUB_TABLES = [
   'hub_organization',
   'hub_space',
 ] as const;
+const REGISTRY_TABLES = [
+  'hub_enrollments',
+  'hub_link_codes',
+  'hub_auth_challenges',
+] as const;
 
 // Sempre pelo papel de runtime (o DataSource da aplicação): o dono das tabelas é superusuário e ignora o RLS.
 describe('hubs repositories (e2e, app role)', () => {
@@ -1147,11 +1152,17 @@ describe('hubs repositories (e2e, app role)', () => {
       );
     });
 
-    it('the runtime role cannot DELETE from the hub tables', async () => {
-      for (const t of HUB_TABLES) {
+    it('the runtime role cannot DELETE from the hub tables (the registry tables: only expired rows, only in their cleanup context)', async () => {
+      const registry: readonly string[] = REGISTRY_TABLES;
+      for (const t of HUB_TABLES.filter((t) => !registry.includes(t))) {
         await expect(asApp({}, `DELETE FROM ${t}`)).rejects.toMatchObject({
           code: '42501',
         });
+      }
+      // GRANT DELETE, but the only DELETE policy is the one of `app.hub_registry_cleanup` (MaintenanceTrustedContexts,
+      // proven in test/shared/trusted-contexts.e2e-spec.ts): any other context deletes nothing.
+      for (const t of REGISTRY_TABLES) {
+        expect(await asApp({}, `DELETE FROM ${t}`)).toEqual([[], 0]);
       }
     });
 

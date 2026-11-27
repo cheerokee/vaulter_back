@@ -82,6 +82,9 @@ import { LinkCodeTypeormRepository } from './infra/db/link-code.typeorm-reposito
 import { HubUserSessionsController } from './infra/http/hub-user-sessions.controller.js';
 import { HubPersonSessions } from './application/hub-person-sessions.js';
 import { LoginPersonOnHubUseCase } from './application/login-person-on-hub.use-case.js';
+import { HubRegistryCleanup } from './application/hub-registry-cleanup.js';
+import { HubRegistryCleanupStore } from './application/ports/hub-registry-cleanup-store.js';
+import { HubRegistryCleanupSqlStore } from './infra/db/hub-registry-cleanup.sql-store.js';
 
 @Module({
   imports: [
@@ -114,6 +117,8 @@ import { LoginPersonOnHubUseCase } from './application/login-person-on-hub.use-c
     // Guard global de rotas @HubAuth(). O HubsModule vem antes do ThrottlingModule no AppModule: o token de Hub é
     // conferido antes do rate limit (que, por Hub, lê `request.hub`).
     { provide: APP_GUARD, useClass: HubTokenGuard },
+    HubRegistryCleanup,
+    { provide: HubRegistryCleanupStore, useClass: HubRegistryCleanupSqlStore },
     { provide: HubRepository, useClass: HubTypeormRepository },
     { provide: EnrollmentRepository, useClass: EnrollmentTypeormRepository },
     { provide: LinkCodeRepository, useClass: LinkCodeTypeormRepository },

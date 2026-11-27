@@ -6,6 +6,7 @@ import {
 } from '../../shared/domain/errors.js';
 import { newId } from '../../shared/domain/id.js';
 import type { UnitOfWork } from '../../shared/infra/db/unit-of-work.js';
+import type { JobQueue } from '../../shared/application/job-queue.js';
 import type { ObjectStore } from '../../storage/application/ports/object-store.js';
 import type { ConversationScope } from '../domain/conversation-actor.js';
 import type {
@@ -19,10 +20,7 @@ import {
   MAX_CONVERSATION_PURGE_MESSAGES,
 } from '../domain/conversation-limits.js';
 import type { ConversationAccess } from './conversation-access.js';
-import {
-  ConversationRetention,
-  RetentionLoginError,
-} from './conversation-retention.js';
+import { ConversationRetention } from './conversation-retention.js';
 import { EmptyConversationTrashUseCase } from './empty-conversation-trash.use-case.js';
 import type { ConversationRetentionStore } from './ports/conversation-retention-store.js';
 
@@ -232,7 +230,6 @@ describe('ConversationRetention', () => {
   it('one conversation at a time, S3 after each commit; a failing conversation does not stop the others', async () => {
     const trace: string[] = [];
     const store = {
-      bypassesRowSecurity: vi.fn(async () => true),
       candidates: vi.fn(async () => [a, b]),
       purge: vi.fn(async (c: typeof a) => {
         trace.push(`purge:${c === a ? 'a' : 'b'}`);
@@ -255,6 +252,7 @@ describe('ConversationRetention', () => {
     const r = await new ConversationRetention(
       as<ConversationRetentionStore>(store),
       as<ObjectStore>(objects),
+      as<JobQueue>({}),
     ).execute();
     expect(store.candidates).toHaveBeenCalledWith(30);
     expect(store.purge).toHaveBeenCalledWith(b, 30);
@@ -279,7 +277,6 @@ describe('ConversationRetention', () => {
 
   it('versions the S3 call did not delete are not counted as removed', async () => {
     const store = {
-      bypassesRowSecurity: vi.fn(async () => true),
       candidates: vi.fn(async () => [b]),
       purge: vi.fn(async () => ({
         messages: 0,
@@ -297,6 +294,7 @@ describe('ConversationRetention', () => {
     const r = await new ConversationRetention(
       as<ConversationRetentionStore>(store),
       as<ObjectStore>(objects),
+      as<JobQueue>({}),
     ).execute();
     expect(r).toMatchObject({ attachments: 1, removedVersions: 0, failed: 0 });
   });
@@ -309,7 +307,6 @@ describe('ConversationRetention', () => {
       { messages: 0, attachments: [], more: true, headerPurged: false },
     ];
     const store = {
-      bypassesRowSecurity: vi.fn(async () => true),
       candidates: vi.fn(async () => [a, b]),
       purge: vi.fn(async () => {
         const next = batches.shift()!;
@@ -326,6 +323,7 @@ describe('ConversationRetention', () => {
     const r = await new ConversationRetention(
       as<ConversationRetentionStore>(store),
       as<ObjectStore>(objects),
+      as<JobQueue>({}),
     ).execute();
     expect(trace).toEqual(['purge:2', 's3', 'purge:1', 'purge:0']);
     expect(store.purge).toHaveBeenCalledTimes(3);
@@ -337,22 +335,5 @@ describe('ConversationRetention', () => {
       headers: 1,
       failed: 0,
     });
-  });
-
-  it('a login that does not ignore RLS fails before reading anything (never a silent zero)', async () => {
-    const store = {
-      bypassesRowSecurity: vi.fn(async () => false),
-      candidates: vi.fn(async () => [a]),
-      purge: vi.fn(),
-    };
-    const objects = { deleteVersions: vi.fn() };
-    await expect(
-      new ConversationRetention(
-        as<ConversationRetentionStore>(store),
-        as<ObjectStore>(objects),
-      ).execute(),
-    ).rejects.toBeInstanceOf(RetentionLoginError);
-    expect(store.candidates).not.toHaveBeenCalled();
-    expect(store.purge).not.toHaveBeenCalled();
   });
 });

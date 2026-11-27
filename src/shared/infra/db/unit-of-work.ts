@@ -69,6 +69,16 @@ export interface UnitOfWorkContext {
   // Varredura do prazo do ack do agente (`AgentLeaseSweepJob`, só o backend, migration ConversationAgentAckLease): abre
   // a leitura das mensagens com `acked_lease_until` (só ids), em todas as organizações. Valor: 'on' ('' desliga).
   agentLeaseSweep?: string;
+  // Contextos de confiança das rotinas de manutenção (migration MaintenanceTrustedContexts; só o backend, um por rotina,
+  // cada um abre só as linhas candidatas dela; nunca junto com `organizationId`):
+  // retenção dos assuntos (`ConversationRetention`): 'scan' (achar os candidatos) ou o id de UM assunto (zerar o dele).
+  conversationRetention?: string;
+  // varredura do contador de uso dos assuntos (`ConversationUsageReconcile`): 'scan' ou o id de UM espaço.
+  conversationUsageReconcile?: string;
+  // limpeza das tabelas de cadastro do Hub (`HubRegistryCleanup`): 'on'.
+  hubRegistryCleanup?: string;
+  // retenção das propostas de documento do agente (`AgentProposalRetention`): 'on'.
+  agentProposalRetention?: string;
 }
 
 const SETTINGS = {
@@ -80,6 +90,10 @@ const SETTINGS = {
   storageReconcile: 'app.storage_reconcile',
   cloudExecutorSpaceId: 'app.cloud_executor',
   agentLeaseSweep: 'app.agent_lease_sweep',
+  conversationRetention: 'app.conversation_retention',
+  conversationUsageReconcile: 'app.conversation_usage_reconcile',
+  hubRegistryCleanup: 'app.hub_registry_cleanup',
+  agentProposalRetention: 'app.agent_proposal_retention',
 } as const satisfies Record<keyof UnitOfWorkContext, string>;
 
 // `set_config(..., true)` vale até o fim da transação: não vaza para a próxima da mesma conexão.
@@ -156,6 +170,10 @@ export class UnitOfWork {
       | 'hubSigningPublicKey'
       | 'storageReconcile'
       | 'agentLeaseSweep'
+      | 'conversationRetention'
+      | 'conversationUsageReconcile'
+      | 'hubRegistryCleanup'
+      | 'agentProposalRetention'
     >,
   ): Promise<void> {
     const manager = activeManager(this.dataSource);

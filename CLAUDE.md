@@ -25,7 +25,7 @@ npm run lint         # oxlint com checagem de tipos
 npm run typecheck    # tsc --noEmit no projeto todo (src e test); roda no CI
 npm run format       # Prettier em src/ e test/
 npm run storage:reconcile [-- <min>]   # reparo do backup sob demanda (a tarefa diária do pg-boss já roda); depois do build, no container
-npm run conversations:retention        # retenção dos assuntos (30 dias); depois do build, no container, login dono
+npm run conversations:retention        # retenção dos assuntos sob demanda (a tarefa diária do pg-boss já roda); depois do build, no container
 # embeddings reais (nuvem ativa; pulado sem a variável, o CI usa o falso):
 docker exec -e EMBEDDINGS_REAL_URL=http://embeddings:11434 vaulter-back-app npx vitest run src/cloud/infra/embeddings/ollama-embedder.real.spec.ts
 # fumaça do responder com Claude de verdade pela OpenRouter (só dev, gasta crédito; pulado sem as duas variáveis):
@@ -172,7 +172,7 @@ couber (spec de contas, §12).
   nova com `getMigrationPlans` (veja `pg-boss-schema.ts`). **Payload só com ids** (UUID ou inteiro; `send` recusa o
   resto) e falha de tarefa guardada/logada só pelo tipo do erro (nunca a mensagem). Dentro de um `uow.run`, `send` e
   `cancelQueued` entram na transação (a tarefa só existe se ela confirmar). Pelo menos uma vez: handler idempotente, que
-  reconfere sob trava. **Agendadas:** `schedule(nome, cron)` (cron de 5 campos em UTC, uma tarefa de payload vazio por ocorrência entre instâncias, `missed: 'once'`; idempotente; a linha em `pgboss.schedule` sobrevive ao código: tirar um agendamento = migration ou `unschedule`); hoje `storage.reconcile` (04:00 UTC) e `conversations.agent-lease-sweep` (a cada minuto, prazo do ack do agente). Os CLIs que sobem o `AppModule` forçam `JOB_WORKERS_ENABLED=false`. `send` com `startAfterSeconds` (atraso) e `singletonKey` (uma tarefa à espera por chave; enviar
+  reconfere sob trava. **Agendadas:** `schedule(nome, cron)` (cron de 5 campos em UTC, uma tarefa de payload vazio por ocorrência entre instâncias, `missed: 'once'`; idempotente; a linha em `pgboss.schedule` sobrevive ao código: tirar um agendamento = migration ou `unschedule`); hoje `conversations.retention` (02:00 UTC), `conversations.usage-reconcile` (03:00), `hubs.registry-cleanup` (03:15), `cloud.agent-proposal-retention` (03:30), `storage.reconcile` (04:00 UTC) e `conversations.agent-lease-sweep` (a cada minuto, prazo do ack do agente); as quatro primeiras são as rotinas de manutenção dos contextos de confiança (veja "Contextos de confiança" em Banco de dados). Os CLIs que sobem o `AppModule` forçam `JOB_WORKERS_ENABLED=false`. `send` com `startAfterSeconds` (atraso) e `singletonKey` (uma tarefa à espera por chave; enviar
   de novo substitui a que espera); `cancelQueued(nome, { spaceId })` apaga as que ainda esperam, num DELETE só guardado
   pelo estado (nunca uma em execução); `sendMany(nome, [{ payload, singletonKey, startAfterSeconds? }])` enfileira muitas num INSERT só. **Filas com
   chave** (`work(nome, handler, { oneJobPerKey: true })`, política `stately` do pg-boss, fixada quando a fila nasce;
@@ -1217,18 +1217,23 @@ registra a fonte `conversations`), `hubs` (`HubDirectory`: `ownerOf`,
     o `storage:reconcile`). `{ purgedMessages, purgedAttachments, purgedBytes, remainingAttachments, remainingMessages }`
     (até 5000 corpos, `MAX_CONVERSATION_PURGE_MESSAGES`, e 1000 anexos por pedido; o app repete enquanto algum > 0). O esvaziar do
     Gestor (backup) nunca toca os assuntos.
-  - **Retenção** (`ConversationRetention` + `ConversationRetentionSqlStore`, CLI `npm run conversations:retention`):
+  - **Retenção** (`ConversationRetention` + `ConversationRetentionSqlStore`; tarefa diária do pg-boss
+    `conversations.retention`, 02:00 UTC, e o CLI `npm run conversations:retention` sob demanda):
     tudo com lápide há mais de 30 dias (`CONVERSATION_RETENTION_DAYS`, relógio do banco; lápide da mensagem/anexo, ou a
     do assunto para tudo dele): corpos zerados (mensagem de assunto com lápide ganha a lápide do assunto, CHECK), anexos
     `purged` com marca renovada e o cabeçalho zerado; um lote por transação (até `CONVERSATION_RETENTION_BATCH_ROWS` =
     5.000 corpos + anexos de um assunto, repetido enquanto o lote vier cheio; o cabeçalho no último; assunto FOR UPDATE
     -> linhas -> contador; nunca o espaço), S3 depois do COMMIT. Os triggers de uso tiram os bytes (mensagem de assunto com lápide
-    conta como usada, não lixeira, até a retenção). **Roda com o login DONO** (`typeOrmOptions('migration')`, aberto
-    só pelo CLI; a API nunca segura essa conexão): assunto cujo último participante saiu é invisível a todo contexto de
-    runtime e o trigger de uso precisa vê-lo; o dono precisa ignorar o RLS (Pendências). **Antes de tudo confere**
-    `rolsuper OR rolbypassrls` do login (`bypassesRowSecurity`): sem isso falha com `RetentionLoginError` e o CLI sai
-    com código 1 (nunca um "nada a fazer" silencioso). Idempotente; erro num assunto é registrado, a rotina segue e o
-    CLI sai com código 1 (`failed > 0`).
+    conta como usada, não lixeira, até a retenção). **Login de runtime no contexto de confiança
+    `app.conversation_retention`** ('scan' para achar os candidatos; o id de um assunto para zerar o dele; veja
+    "Contextos de confiança" em Banco de dados): assunto cujo último participante saiu é invisível a todo outro
+    contexto, e o trigger de uso precisa vê-lo. A janela das policies é fixa em 30 dias. Idempotente; erro num assunto é
+    registrado, a rotina segue, a tarefa falha (o pg-boss tenta de novo) e o CLI sai com código 1 (`failed > 0`).
+  - **Contador de uso** (`ConversationUsageReconcile`, tarefa diária `conversations.usage-reconcile`, 03:00 UTC): reconta
+    cada espaço de `conversation_space_usage` (corpos guardados + cabeçalhos; lixeira = corpos guardados com lápide),
+    trava a linha do contador antes de somar e corrige uma deriva (log `warn` com ids e números: os triggers não deveriam
+    derivar). Contexto `app.conversation_usage_reconcile`; o trigger de guarda deixa a escrita direta só nesse contexto e
+    só no contador do espaço dele.
   - **`storage.trashBytes`** (`GET /spaces/:id`) inclui a lixeira dos assuntos, que só os donos (ou a retenção) esvaziam;
     decisão: documentar (app avisa, `docs/app/pendencias-do-app.md`) em vez de separar o número.
 - **Testes:** e2e em `test/conversations/` com a cripto real (`test/support/conversation-crypto.ts`) e os helpers de
@@ -1588,11 +1593,29 @@ sequência inteira para quem implementa o agente: `docs/hubs/hub-lifecycle.md`, 
     `DELETE`** (reforça o soft delete; a limpeza de lápides decide isso depois). Exceções documentadas: `rate_limit_hits`
     (contador técnico), o schema `pgboss` (fila de tarefas), as tabelas legíveis da nuvem ativa (`cloud_space_key_grants`,
     `cloud_files`, `cloud_chunks`; desligar apaga de verdade) e, em `conversation_key_grants`, só as cópias para o servidor (`server_recipient`, policy
-    restritiva `conversation_server_copy_delete`). As permissões vêm das migrations;
+    restritiva `conversation_server_copy_delete`), as tabelas de cadastro do Hub (`hub_enrollments`, `hub_link_codes`,
+    `hub_auth_challenges`) e `agent_issued_proposals`, essas duas últimas só no contexto de confiança da rotina (veja
+    abaixo). As permissões vêm das migrations;
     o login é criado por `.docker/postgres/init/02-app-role.sh` (idempotente);
   - **dono** (`DB_USERNAME`): migrations, CLI, compose, pgAdmin e a preparação do banco de teste.
   - Em banco **já existente** (criado antes do script), rodar uma vez:
     `docker exec vaulter-back-db sh /docker-entrypoint-initdb.d/02-app-role.sh`
+- **Contextos de confiança das rotinas de manutenção** (decisão B7 do Jonas, 26/11/2026; migration
+  `MaintenanceTrustedContexts`; **nunca** um papel com `BYPASSRLS`): rotina que precisa ver linhas que nenhum contexto de
+  pessoa/Hub vê roda com o login de runtime e uma chave própria em `UnitOfWorkContext` (só por `runWithContext`/
+  `withContext`, nunca `setContext`, nunca junto com `organizationId`, que abriria a organização inteira). Regras:
+  **um contexto por rotina** (nunca um "abre tudo"); cada policy abre **só as linhas candidatas** da rotina (a janela de
+  30 dias fica na policy: mudar a janela = migration nova); as policies alteradas dos assuntos mantêm o escape
+  `sync_commit_in_progress()`; DELETE físico só com GRANT + policy daquele contexto; **um e2e por contexto** provando que
+  ele não enxerga nada além (`test/shared/trusted-contexts.e2e-spec.ts`). Hoje:
+  | Chave | Rotina (tarefa do pg-boss) | Abre |
+  |---|---|---|
+  | `app.conversation_retention` | `conversations.retention` | 'scan': assuntos com lápide há > 30 dias, corpos e anexos vencidos; id de um assunto: ele, o conteúdo vencido dele (só zerar/`purged`, WITH CHECK) e o uso do espaço dele |
+  | `app.conversation_usage_reconcile` | `conversations.usage-reconcile` | 'scan': os contadores; id de um espaço: assuntos e mensagens dele (só leitura) e o contador dele (o trigger de guarda deixa gravar) |
+  | `app.hub_registry_cleanup` | `hubs.registry-cleanup` | DELETE de `hub_enrollments`/`hub_link_codes`/`hub_auth_challenges` vencidos há > 30 dias (as três ganharam RLS: SELECT/INSERT/UPDATE seguem abertos) |
+  | `app.agent_proposal_retention` | `cloud.agent-proposal-retention` | SELECT/DELETE de `agent_issued_proposals` com > 30 dias |
+  Os contextos mais antigos seguem o mesmo modelo: `app.storage_reconcile` (reparo do bucket) e `app.agent_lease_sweep`
+  (prazo do ack do agente). Rotina nova entra com chave, policies, tarefa e e2e próprios.
 - **Helpers de migration** (`src/shared/infra/db/migration-helpers.ts`): `addSyncVersionTrigger(qr, tabela)` (coluna
   `sync_version`, índice e trigger da sequência global; em tabela lida por um feed, só o passo anterior a
   `addCommitOrderedSyncVersion`, veja o passo 4 de "Como criar um módulo novo") e `enableOrganizationRls(qr, tabela)` (RLS com `FORCE` e
@@ -1695,9 +1718,8 @@ Os valores do `.env.example` para os segredos são **só de desenvolvimento**; p
 - JWKS público para o hub validar tokens offline.
 - Hubs: WebSocket hub ↔ backend (hoje só HTTP com sondagem); apagamento remoto do Hub; transferência de Hub
   (atualizar `hub_organization.hub_owner_user_id`); ação de admin que tira da Sala todas as liberações de uma
-  organização; consulta de status por Hub atrás de NAT (o limite é por IP); limpeza física das linhas antigas de
-  `hub_enrollments`, `hub_link_codes`, `hub_auth_challenges` e desafios falsos (o runtime não tem `DELETE`; hoje a
-  apresentação vencida só vira `expired`, e códigos/desafios usados ficam; `expireStale` roda a cada apresentação).
+  organização; consulta de status por Hub atrás de NAT (o limite é por IP). (A limpeza física de `hub_enrollments`,
+  `hub_link_codes` e `hub_auth_challenges` já roda: `hubs.registry-cleanup`, veja "Contextos de confiança".)
 - **`since` da listagem do backup × ordem de commit:** o carimbo é `clock_timestamp()` (depois do S3), não uma versão
   dada no COMMIT; a distância entre ele e o COMMIT é limitada a 5 min (`limitRemainingTime`), dentro da folga de 1 h do
   `since`. (A sincronização do Hub e os feeds dos assuntos já têm versões na ordem dos commits.)
@@ -1717,8 +1739,7 @@ Os valores do `.env.example` para os segredos são **só de desenvolvimento**; p
 - **Assuntos (`conversations`), pendências:** notificações (mensagem nova, pedido de "sim", compartilhado: hoje só
   aparecem pelo feed); **executor na nuvem completo** (hoje a nuvem é só executor de **reserva** nos espaços em nuvem
   ativa, sem ferramentas; o executor principal é sempre um Hub; veja "Nuvem ativa" abaixo); API de integradores
-  (o assunto como caixa de entrada de apps); WebSocket no lugar da sondagem longa do executor; reconcile do **contador**
-  `conversation_space_usage` (os triggers o mantêm, mas não há varredura que corrija uma deriva).
+  (o assunto como caixa de entrada de apps); WebSocket no lugar da sondagem longa do executor.
   **LISTEN:** a conexão `PgConversationChangeSignal` (com keepalive, ping de 30 s e jitter de 0–1 s ao acordar todos) **não funciona atrás de pgbouncer em modo transação** (LISTEN exige
   conexão de sessão). **Pool:** a conexão do LISTEN e o pool do pg-boss ficam fora do pool do TypeORM, então conte
   `instâncias × (DB_POOL_MAX_CONNECTIONS + 1 + JOB_QUEUE_POOL_MAX)` (hoje 10 + 1 + 4) ao dimensionar `max_connections` do
@@ -1747,22 +1768,13 @@ Os valores do `.env.example` para os segredos são **só de desenvolvimento**; p
     COMMIT dela segura o advisory lock dos assuntos (mesmo custo das cascatas documentadas); não há rota para mudar `spaces.allow_online_llm` (padrão `true`; autorizar exige `true`); a confirmação do documento por texto
     livre depende do julgamento do modelo (o botão `documentDecision` é a forma segura); o documento grava só no espaço
     do assunto (gravar num espaço mais restrito é conselho, a pessoa faz).
-- **Agendar `npm run conversations:retention`** (1x por dia, fora da aplicação, terminando antes das 03:00 UTC: a
-  tarefa `storage.reconcile` das 04:00 UTC só varre marcas com mais de 60 min e apaga do bucket o que o
-  `DeleteObjects` dela deixou). Não virou tarefa do pg-boss porque precisa ignorar o RLS (abaixo) e a API nunca segura
-  a conexão do dono: decidir entre papel de manutenção e contexto de confiança. Sem ela, o conteúdo apagado dos assuntos
-  fica para sempre (conta no uso do espaço). **Login:** roda com o dono (`DB_USERNAME`), que só ignora o RLS sendo
-  superusuário ou com `BYPASSRLS`; no Postgres gerenciado (dono sem superusuário e com `FORCE ROW LEVEL SECURITY`), criar
-  um papel de manutenção com `BYPASSRLS` para ela (ou um contexto de confiança `app.conversation_retention` nas
-  policies, como o `app.storage_reconcile`). Os candidatos saem de três índices parciais por `deleted_at` (migration
-  `MaintenanceIndexes`).
 - **Agente do PC** (spec pc-agent): (a) **prazo vencido responde ~30 s depois:** a varredura sinaliza `immediate`, mas
   `nextResponderStep` conta a janela do Hub de novo a partir do `requeued_at` (não sabe que a volta à fila foi um prazo
   vencido); decidir se a nuvem responde na hora (precisa marcar o motivo na mensagem) ou se os 30 s ficam. Os 30 s
   também deixam um agente instável (cai e volta) dar ack de novo dentro da janela e pegar mais 15 min, e assim
-  repetidamente, sem a nuvem nunca responder: esse é o argumento real para responder na hora mais adiante; (b)
-  `agent_issued_proposals` é só de acréscimo (runtime com SELECT/INSERT: o GRANT padrão não tem DELETE e o UPDATE foi
-  revogado), então nada sai: definir a retenção (um papel de manutenção, como a dos assuntos); (c) o app precisa
+  repetidamente, sem a nuvem nunca responder: esse é o argumento real para responder na hora mais adiante; (b) a
+  retenção de `agent_issued_proposals` é de 30 dias desde a emissão (`cloud.agent-proposal-retention`): uma proposta
+  mais velha deixa de valer e o agente propõe de novo (janela escolhida pelo Claude na B7, confirmar com o Jonas); (c) o app precisa
   mostrar o cartão da proposta de documento numa mensagem do agente (repo do app); (d) apertar o validador da ACL exige
   revalidar as políticas gravadas (veja "ACL" em `agents`).
 - Plataforma: quarentena/aviso por e-mail ao dono e aos admins quando a equipe age numa organização ou Hub; leitura da
