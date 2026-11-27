@@ -1774,7 +1774,7 @@ Os valores do `.env.example` para os segredos são **só de desenvolvimento**; p
   também deixam um agente instável (cai e volta) dar ack de novo dentro da janela e pegar mais 15 min, e assim
   repetidamente, sem a nuvem nunca responder: esse é o argumento real para responder na hora mais adiante; (b) a
   retenção de `agent_issued_proposals` é de 30 dias desde a emissão (`cloud.agent-proposal-retention`): uma proposta
-  mais velha deixa de valer e o agente propõe de novo (janela escolhida pelo Claude na B7, confirmar com o Jonas); (c) o app precisa
+  mais velha deixa de valer e o agente propõe de novo (janela confirmada pelo Jonas, 26/11/2026); (c) o app precisa
   mostrar o cartão da proposta de documento numa mensagem do agente (repo do app); (d) apertar o validador da ACL exige
   revalidar as políticas gravadas (veja "ACL" em `agents`).
 - Plataforma: quarentena/aviso por e-mail ao dono e aos admins quando a equipe age numa organização ou Hub; leitura da
