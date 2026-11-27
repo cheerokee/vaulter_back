@@ -12,6 +12,12 @@ import { ReconcileConversationAttachments } from './application/reconcile-conver
 import { RequestAttachmentUploadUseCase } from './application/request-attachment-upload.use-case.js';
 import { AckMessageUseCase } from './application/ack-message.use-case.js';
 import { AgentLeaseSweepJob } from './application/agent-lease-sweep.job.js';
+import { ConversationRetention } from './application/conversation-retention.js';
+import { ConversationUsageReconcile } from './application/conversation-usage-reconcile.js';
+import { ConversationRetentionStore } from './application/ports/conversation-retention-store.js';
+import { ConversationUsageReconcileStore } from './application/ports/conversation-usage-reconcile-store.js';
+import { ConversationRetentionSqlStore } from './infra/db/conversation-retention.sql-store.js';
+import { ConversationUsageReconcileSqlStore } from './infra/db/conversation-usage-reconcile.sql-store.js';
 import { AgentTurn } from './application/agent-turn.js';
 import { ChangeConversationStateUseCase } from './application/change-conversation-state.use-case.js';
 import { ChangeExecutorUseCase } from './application/change-executor.use-case.js';
@@ -80,7 +86,8 @@ import { SetCloudReserveUseCase } from './application/set-cloud-reserve.use-case
  * Exports `HubConversationScope` (the (organization, space) of a conversation a Hub executes) for the `agents` module,
  * `CloudConversationExecutor` (the cloud as reserve executor, spec active-cloud §4.3) and `AgentTurn` (the pc agent's
  * turn on a message and its ack lease, spec pc-agent §5.3) for the `cloud` module; runs the lease sweep
- * (`AgentLeaseSweepJob`, pg-boss cron);
+ * (`AgentLeaseSweepJob`), the retention (`ConversationRetention`) and the usage counter recount
+ * (`ConversationUsageReconcile`), all pg-boss crons;
  * `conversations` never imports `cloud` (the server copies are checked through `ServerKeyCopyCheck`).
  */
 @Module({
@@ -176,6 +183,16 @@ import { SetCloudReserveUseCase } from './application/set-cloud-reserve.use-case
     HubConversationScope,
     AgentTurn,
     AgentLeaseSweepJob,
+    ConversationRetention,
+    {
+      provide: ConversationRetentionStore,
+      useClass: ConversationRetentionSqlStore,
+    },
+    ConversationUsageReconcile,
+    {
+      provide: ConversationUsageReconcileStore,
+      useClass: ConversationUsageReconcileSqlStore,
+    },
   ],
   exports: [CloudConversationExecutor, HubConversationScope, AgentTurn],
 })

@@ -19,4 +19,9 @@ export abstract class AgentIssuedProposals {
     view: AgentTurnView,
     proposalIds: readonly string[],
   ): Promise<Map<string, string>>;
+  /**
+   * Deletes up to `limit` proposals older than `AGENT_PROPOSAL_RETENTION_DAYS` (database clock), in any organization,
+   * in a short transaction of its own (trusted context `app.agent_proposal_retention`); returns how many.
+   */
+  abstract deleteExpired(limit: number): Promise<number>;
 }

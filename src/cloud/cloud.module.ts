@@ -7,6 +7,7 @@ import { OrganizationsModule } from '../organizations/organizations.module.js';
 import { SpacesModule } from '../spaces/spaces.module.js';
 import { StorageModule } from '../storage/storage.module.js';
 import { AgentIssuedProposals } from './application/brain/agent-issued-proposals.js';
+import { AgentProposalRetention } from './application/brain/agent-proposal-retention.js';
 import { BrainStepCounter } from './application/brain/brain-step-counter.js';
 import { AgentIssuedProposalTypeormEntity } from './infra/db/agent-issued-proposal.entity.js';
 import { AgentIssuedProposalSqlRepository } from './infra/db/agent-issued-proposal.sql-repository.js';
@@ -219,6 +220,7 @@ export function createLanguageModel(config: ConfigService): LanguageModel {
       useClass: AgentIssuedProposalSqlRepository,
     },
     { provide: BrainComposer, useClass: BrainComposerImpl },
+    AgentProposalRetention,
     BrainStepUseCase,
     KmsKeyEnvelope,
     ServerKeyTypeormStore,
