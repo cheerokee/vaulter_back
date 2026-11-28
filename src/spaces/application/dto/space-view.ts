@@ -35,8 +35,13 @@ export type RoomHubView = { hubId: string; roleKey: SpaceRoleKey };
 /**
  * Cloud mode of the space, for every member: in `active_cloud` the app shows a permanent notice that the server reads
  * the space, and a key rotation must include the server copy. `activatedAt` is null in `encrypted_backup`.
+ * `allowOnlineLlm`: the space may go to an online language model (authorizing the active cloud requires it).
  */
-export type SpaceCloudView = { mode: CloudMode; activatedAt: Date | null };
+export type SpaceCloudView = {
+  mode: CloudMode;
+  activatedAt: Date | null;
+  allowOnlineLlm: boolean;
+};
 
 /**
  * `GET /spaces/:id`: the details, the Room hubs (every member: rotating the key needs one copy per Room hub), the

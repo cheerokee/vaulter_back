@@ -96,6 +96,19 @@ function sortedUnique(xs: readonly number[]): number[] {
 
 export const SpaceActivationRules = {
   /**
+   * Turning `allow_online_llm` off while the cloud is authorized or on (a live cycle) would leave the two in
+   * conflict: 409 `online-llm-in-use`, switch the cloud off first (decision B10).
+   */
+  assertCanDisallowOnlineLlm(live: SpaceActivation | null): void {
+    if (live) {
+      throw new ConflictError(
+        'online-llm-in-use',
+        'The active cloud is authorized or on for this space: switch it off first.',
+      );
+    }
+  },
+
+  /**
    * Authorizing: the space allows an online language model (`allow_online_llm`, spec §3) and has someone to send
    * the key (an orphan space can never be switched on). The AI budget check (> 0) joins here in Task 5.
    */

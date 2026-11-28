@@ -1,4 +1,12 @@
-import { Body, Controller, Get, HttpCode, Param, Post } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Get,
+  HttpCode,
+  Param,
+  Post,
+  Put,
+} from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { Throttle } from '@nestjs/throttler';
 import {
@@ -13,8 +21,13 @@ import {
   AuthorizeSpaceCloudUseCase,
   DeactivateSpaceCloudUseCase,
   GetSpaceCloudUseCase,
+  SetSpaceOnlineLlmUseCase,
 } from '../../application/space-cloud.use-cases.js';
-import { ActivateSpaceCloudDto, spaceCloudResponse } from './dto/cloud.dto.js';
+import {
+  ActivateSpaceCloudDto,
+  SetSpaceOnlineLlmDto,
+  spaceCloudResponse,
+} from './dto/cloud.dto.js';
 
 const perUser = () =>
   Throttle({
@@ -31,6 +44,7 @@ export class SpaceCloudController {
     private readonly authorize: AuthorizeSpaceCloudUseCase,
     private readonly activate: ActivateSpaceCloudUseCase,
     private readonly deactivate: DeactivateSpaceCloudUseCase,
+    private readonly onlineLlm: SetSpaceOnlineLlmUseCase,
   ) {}
 
   /** The live cycle (`off` | `authorized` | `active`): any member of the space or whoever decides. */
@@ -85,5 +99,21 @@ export class SpaceCloudController {
     @Param('spaceId', uuidPipe('spaceId')) spaceId: string,
   ): Promise<void> {
     await this.deactivate.execute(auth, spaceId);
+  }
+
+  /**
+   * `allow_online_llm` (decision B10): turning it off = the space manager or whoever decides; on = whoever decides.
+   * Off while the cloud is authorized or on: 409 `online-llm-in-use`.
+   */
+  @perUser()
+  @ApiBearerAuth()
+  @Put('online-llm')
+  async doSetOnlineLlm(
+    @CurrentAuth() auth: AuthContext,
+    @Param('spaceId', uuidPipe('spaceId')) spaceId: string,
+    @Body() dto: SetSpaceOnlineLlmDto,
+  ) {
+    const v = await this.onlineLlm.execute(auth, spaceId, dto.allowed);
+    return { spaceId: v.spaceId, allowOnlineLlm: v.allowOnlineLlm };
   }
 }

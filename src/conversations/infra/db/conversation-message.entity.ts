@@ -232,6 +232,13 @@ export class ConversationMessageTypeormEntity extends DeviceIdSyncableTypeormEnt
   @Column({ type: 'timestamptz', nullable: true })
   requeuedAt!: Date | null;
 
+  /**
+   * It went back to the queue because an agent's ack lease ran out (migration ConversationMessageLeaseExpired): the
+   * cloud reserve answers it at once, without the Hub's 30 s window. Cleared by every other requeue.
+   */
+  @Column({ type: 'boolean', default: false })
+  requeuedLeaseExpired!: boolean;
+
   /** "Responder pela nuvem" for this person's message (migration ConversationCloudAnswer). */
   @Column({ type: 'boolean', default: false })
   cloudAnswerRequested!: boolean;

@@ -87,6 +87,7 @@ const person = (extra: Record<string, unknown>) => ({
   ackedByCloud: false,
   cloudAnswerRequested: false,
   requeuedAt: null,
+  requeuedLeaseExpired: false,
   sentAt: new Date(NOW.getTime() - 60_000),
   ...extra,
 });

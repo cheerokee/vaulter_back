@@ -56,7 +56,8 @@ export const SpaceMapper = {
 
   // createdAt vem do domínio (explícito no insert); updatedAt e syncVersion ficam com o banco. cloud_mode,
   // cloud_activated_at e allow_online_llm nunca saem daqui (o `save` não os regrava): cloud_mode/cloud_activated_at só
-  // mudam por `SpaceRepository.setCloudMode` (fluxo do módulo `cloud`); allow_online_llm fica com o default (v1).
+  // mudam por `SpaceRepository.setCloudMode` e allow_online_llm por `SpaceRepository.setAllowOnlineLlm` (fluxos do
+  // módulo `cloud`).
   toPersistence(space: Space): Partial<SpaceTypeormEntity> {
     return {
       id: space.id,

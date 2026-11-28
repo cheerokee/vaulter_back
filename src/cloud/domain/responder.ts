@@ -83,6 +83,8 @@ export type PlannedMessage = {
   cloudAnswerRequested: boolean;
   /** When it went back to the queue (an executor that had it stopped being the executor): its Hub window restarts. */
   requeuedAt?: Date | null;
+  /** It went back to the queue because an agent's ack lease ran out: the agent had its turn, no new Hub window. */
+  requeuedLeaseExpired?: boolean;
   sentAt: Date;
 };
 
@@ -99,9 +101,11 @@ export type ResponderStep =
  * 1. A person's message the cloud acknowledged and has not answered (no message with `answerIdFor(id)`): finish it
  *    first (a run that crashed between its ack and its answer).
  * 2. Else the oldest PENDING person message: due when "responder pela nuvem" (the conversation's, its own, or a later
- *    pending message's: answering in order means taking the ones before it too), when there is no executor Hub, or
- *    `CLOUD_FALLBACK_AFTER_MS` after it became pending (its `sentAt`, or `requeuedAt` when it went back to the queue: a
- *    new executor Hub gets its own 30 s) without a Hub ack; not due yet = wait until then.
+ *    pending message's: answering in order means taking the ones before it too), when there is no executor Hub, when
+ *    it went back to the queue because an agent's ack lease ran out (`requeuedLeaseExpired`: the agent already had
+ *    its 15 min; decision B8 of 2026-11-27, so an unstable agent cannot hold the message by acking again within the
+ *    window), or `CLOUD_FALLBACK_AFTER_MS` after it became pending (its `sentAt`, or `requeuedAt` when it went back to
+ *    the queue: a new executor Hub gets its own 30 s) without a Hub ack; not due yet = wait until then.
  * `now` is the DATABASE clock (`sentAt`/`requeuedAt` are), so the window does not move with the app's clock.
  */
 export function nextResponderStep(input: {
@@ -122,6 +126,7 @@ export function nextResponderStep(input: {
   const askedNow =
     input.conversationCloudAnswer ||
     !input.hasExecutorHub ||
+    first.requeuedLeaseExpired === true ||
     pending.some((m) => m.cloudAnswerRequested);
   const pendingSince = Math.max(
     first.sentAt.getTime(),

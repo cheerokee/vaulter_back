@@ -3,6 +3,7 @@ import {
   ArrayMaxSize,
   ArrayMinSize,
   IsArray,
+  IsBoolean,
   IsInt,
   IsString,
   Matches,
@@ -49,6 +50,12 @@ export class ActivateSpaceCloudDto {
   @ValidateNested({ each: true })
   @Type(() => ServerGrantDto)
   serverGrants!: ServerGrantDto[];
+}
+
+export class SetSpaceOnlineLlmDto {
+  /** `false` = the space never goes to an online language model (the manager or whoever decides); `true` = whoever decides. */
+  @IsBoolean()
+  allowed!: boolean;
 }
 
 const iso = (d: Date | null) => (d ? d.toISOString() : null);

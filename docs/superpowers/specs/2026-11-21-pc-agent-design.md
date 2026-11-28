@@ -326,8 +326,8 @@ Decisões tomadas durante a implementação (21/11/2026) que mudam ou completam 
   nem mensagens que não respondam a uma confirmada.
 - Varredura do prazo: um instante só do banco para as duas gravações do lote, e o laço para quando um lote não tira
   nenhum prazo (nunca gira em falso).
-- Prazo vencido: a nuvem de reserva responde ~30 s depois da varredura, não na hora (a janela do Hub recomeça no
-  `requeued_at`); pendência registrada.
+- Prazo vencido: a nuvem de reserva responde na hora (decisão B8 do Jonas, 27/11/2026): a varredura marca
+  `requeued_lease_expired` e `nextResponderStep` não abre nova janela de 30 s do Hub.
 - Checagem de tamanho dos resultados (32 KiB) roda antes de contar a chamada: pedido malformado não gasta vaga. A rota
   conta a primeira chamada do passo; o compositor conta só as adicionais; no limite no meio do passo devolve o último
   texto como `final`; passo recusado pelo orçamento ou que falhou também gasta a vaga.

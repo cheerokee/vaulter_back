@@ -63,17 +63,35 @@ export class SpaceCloud {
     await this.spaces.setCloudMode(organizationId, spaceId, 'active_cloud', at);
   }
 
-  /** Back to `encrypted_backup`. The caller holds the space `FOR UPDATE`. */
+  /**
+   * Back to `encrypted_backup`, with a key rotation pending (decision B9 of 2026-11-27): the server held the space key
+   * while it was in `active_cloud`, so it counts as a member who left; the next version excludes it, and until then
+   * new backup uploads get 409 `space-key-rotation-required`. The caller holds the space `FOR UPDATE`.
+   */
   async markEncryptedBackup(
     organizationId: string,
     spaceId: string,
   ): Promise<void> {
+    const space = await this.spaces.findById(organizationId, spaceId);
+    if (space && !space.keyRotationRequired) {
+      space.markRotationRequired();
+      await this.spaces.save(space);
+    }
     await this.spaces.setCloudMode(
       organizationId,
       spaceId,
       'encrypted_backup',
       null,
     );
+  }
+
+  /** Sets `allow_online_llm` (decision B10; who may is the `cloud` module's rule). The caller holds the space FOR UPDATE. */
+  async setAllowOnlineLlm(
+    organizationId: string,
+    spaceId: string,
+    allowed: boolean,
+  ): Promise<void> {
+    await this.spaces.setAllowOnlineLlm(organizationId, spaceId, allowed);
   }
 
   /**

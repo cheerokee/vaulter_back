@@ -45,7 +45,13 @@ código e no `CLAUDE.md`).
   `{ serverGrants }` (todas as versões da chave seladas para `GET /cloud/server-key`). Na pessoal, os dois passos seguidos
   pela mesma pessoa. Espaço órfão não liga (422 `space-orphaned`).
 - [ ] **Desligar** (`POST /spaces/:spaceId/cloud/deactivate`, quem decide ou o Gestor): explicar antes que apaga do
-  servidor a cópia da chave e todo o conteúdo legível (o backup cifrado fica).
+  servidor a cópia da chave e todo o conteúdo legível (o backup cifrado fica). **Depois de desligar, o espaço fica com
+  troca de chave pendente** (`keyRotationRequired`, decisão B9: o servidor teve a chave): o app troca a chave sozinho,
+  como quando um membro sai; até lá, o backup do Hub para (envio novo 409 `space-key-rotation-required`).
+- [ ] **Modelo online por espaço** (`GET /spaces/:id` -> `cloud.allowOnlineLlm`; `PUT /spaces/:spaceId/cloud/online-llm`
+  `{ allowed }`): chave "este espaço nunca vai para IA online". Desligar: o Gestor ou quem decide; ligar: só quem decide
+  (o Gestor recebe 403). Com a nuvem autorizada ou ligada, desligar dá 409 `online-llm-in-use`: mostrar "desligue a
+  nuvem deste espaço antes". Desligado, autorizar a nuvem dá 422 `online-llm-not-allowed`.
 - [ ] **Orçamento de IA** (`GET /organizations/:id` -> `ai: { budgetConfigured, warningLevel }`, para todo membro):
   `budgetConfigured: false` = a IA na nuvem não foi contratada (autorizar dá 422 `ai-budget-required`); `warningLevel`
   75 / 90 = avisar que o orçamento do mês está acabando; 100 = a nuvem parou de responder e de indexar até o mês virar

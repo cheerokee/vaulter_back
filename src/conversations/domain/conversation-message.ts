@@ -47,6 +47,8 @@ export type ConversationMessageProps = {
   ackedLeaseUntil?: Date | null;
   /** When it last went back to the queue (an executor that acked it stopped being the executor); null if never. */
   requeuedAt?: Date | null;
+  /** The last requeue was an agent's expired ack lease (the cloud reserve answers at once). */
+  requeuedLeaseExpired?: boolean;
   sentAt: Date;
   createdAt?: Date;
   deletedAt: Date | null;
@@ -258,6 +260,9 @@ export class ConversationMessage extends Entity<ConversationMessageProps> {
   }
   get requeuedAt(): Date | null {
     return this.props.requeuedAt ?? null;
+  }
+  get requeuedLeaseExpired(): boolean {
+    return this.props.requeuedLeaseExpired ?? false;
   }
   get sentAt(): Date {
     return this.props.sentAt;

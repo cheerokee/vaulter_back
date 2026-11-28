@@ -278,7 +278,11 @@ describe('GetSpaceUseCase', () => {
       keyRotationRequired: true,
       recoveryRewrapRequired: true,
       roomHubs: [],
-      cloud: { mode: 'encrypted_backup', activatedAt: null },
+      cloud: {
+        mode: 'encrypted_backup',
+        activatedAt: null,
+        allowOnlineLlm: true,
+      },
       storage: { quotaBytes: 10_737_418_240, usedBytes: 0, trashBytes: 0 },
       createdAt: new Date('2026-10-01T00:00:00Z'),
       updatedAt: null,

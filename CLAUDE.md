@@ -1079,11 +1079,12 @@ registra a fonte `conversations`), `hubs` (`HubDirectory`: `ownerOf`,
   `conversation_message_agent_lease_read` e OR na restritiva `conversation_child_read`, com o escape do commit), assunto
   lido no contexto do Hub que confirmou, volta à fila no contexto do DONO, lotes de 100 assuntos por unit of work em
   ordem (espaço, assunto), `requeueExpiredAgentLeases` (um instante só do banco; sem resposta = `pending`,
-  `requeued_at` novo; respondida ou apagada = só o prazo sai; candidatos por cursor (assunto, Hub): uma passada vê cada
+  `requeued_at` novo, `requeued_lease_expired = true`; respondida ou apagada = só o prazo sai; candidatos por cursor (assunto, Hub): uma passada vê cada
   um uma vez, e os pulados ficam para a próxima sem esconder os de trás) e
-  `CloudReservePendingHooks` com `immediate` dentro do unit of work (a tarefa da nuvem começa na hora, mas
-  `nextResponderStep` conta os 30 s do Hub de novo a partir do `requeued_at`: a nuvem responde ~30 s depois da
-  varredura; veja Pendências, "Agente do PC"). Invariante: um prazo é sempre do executor atual
+  `CloudReservePendingHooks` com `immediate` dentro do unit of work; com a marca `requeued_lease_expired` (migration
+  `ConversationMessageLeaseExpired`), `nextResponderStep` responde **na hora**, sem nova janela de 30 s do Hub (decisão
+  B8 do Jonas, 27/11/2026: o agente já teve os 15 min, e a janela deixaria um agente instável dar ack de novo e segurar
+  o assunto sem fim); toda outra volta à fila (`requeueAckedBy`, inclusive a nuvem devolvendo) limpa a marca. Invariante: um prazo é sempre do executor atual
   (`requeueAckedBy` de um Hub limpa os prazos dele no assunto, respondidas inclusive). **Resposta do agente:** a
   mensagem de um Hub `pc` leva `answeringMessageId` (obrigatório; aparelho: recusado, 422 `validation-failed`),
   reconferido sob a trava do assunto pela mesma regra do turno (409 `brain-step-not-owned`, nada gravado: a resposta
@@ -1273,13 +1274,13 @@ registra a fonte `conversations`), `hubs` (`HubDirectory`: `ownerOf`,
   requeued_at|cloud_answer_requested`.
 - **Rotas** (todas internas, tag `cloud`; detalhes nos bullets abaixo): `GET /cloud/server-key` (usuário) e
   `GET /hub/cloud/server-key` (`@HubAuth()`) -> `{ publicKey }`; `GET /organizations/:orgId/cloud/terms`,
-  `POST .../cloud/terms/accept`; `GET /spaces/:spaceId/cloud`, `POST .../cloud/authorize|activate|deactivate`;
+  `POST .../cloud/terms/accept`; `GET /spaces/:spaceId/cloud`, `POST .../cloud/authorize|activate|deactivate`, `PUT .../cloud/online-llm`;
   `GET /organizations/:orgId/ai-usage`. Fora do módulo: `PUT /platform/organizations/:orgId/ai-budget` (`platform`),
   `POST /spaces/:id/keys` com `serverWrappedKey` (`spaces`), `PUT .../conversations/:id/cloud-reserve|cloud-answer`,
   `serverWrappedKey` em criar/trocar chave de assunto e `cloudAnswer` na mensagem (`conversations`).
 - **Erros** (problem+json): 422 `server-copy-invalid` (cópia malformada ou que não abre com a chave do servidor, sem
   oráculo), `cloud-terms-outdated`, `cloud-terms-not-accepted`, `online-llm-not-allowed`, `space-orphaned`,
-  `ai-budget-required` (orçamento 0 ao autorizar), `cloud-not-authorized`; 409 `cloud-already-active`,
+  `ai-budget-required` (orçamento 0 ao autorizar), `cloud-not-authorized`; 409 `cloud-already-active`, `online-llm-in-use`,
   `key-versions-mismatch` (ligar sem todas as versões), `key-rotation-mismatch` com `missingServer`/`unexpectedServer`
   (troca de chave de espaço ou assunto); `ai-budget-exceeded` (422, com `resetsAt`) é recusa **interna** do `AiBudget`:
   nenhuma rota HTTP a devolve hoje (indexação e respostas são tarefas; o assunto recebe um aviso). Do `storage`:
@@ -1361,12 +1362,20 @@ registra a fonte `conversations`), `hubs` (`HubDirectory`: `ownerOf`,
   decide ou o Gestor, 204, idempotente) **apaga de verdade** as cópias (`cloud_space_key_grants`, DELETE físico),
   cancela as tarefas que esperam (`CloudSpaceJobs`: toda tarefa da nuvem sobre um espaço leva `spaceId` no payload e a
   fila é registrada ali; `cancelQueued(fila, { spaceId })`), encerra o ciclo (lápide em `cloud_space_activations`, com
-  quem desligou), volta a `encrypted_backup` e roda `SpaceCloudDeactivatedHooks` (os assuntos do espaço perdem a nuvem
-  de reserva: veja "Nuvem de reserva" no módulo `conversations`). `GET /spaces/:spaceId/cloud` (membro ou quem decide) -> `state`
+  quem desligou), volta a `encrypted_backup` **com troca de chave pendente** (`keyRotationRequired`, decisão B9 do
+  Jonas, 27/11/2026: o servidor teve a chave e conta como um membro que saiu; até a troca, envio novo do backup dá 409
+  `space-key-rotation-required`; desligar um espaço só autorizado não marca) e roda `SpaceCloudDeactivatedHooks` (os
+  assuntos do espaço perdem a nuvem de reserva: veja "Nuvem de reserva" no módulo `conversations`).
+  **`allow_online_llm`** (decisão B10 do Jonas, 27/11/2026; `SetSpaceOnlineLlmUseCase`):
+  `PUT /spaces/:spaceId/cloud/online-llm` `{ allowed }` -> `{ spaceId, allowOnlineLlm }`; **desligar** = o Gestor ou quem
+  decide, **ligar** = só quem decide (Gestor sem `org.members.manage`: 403); com a nuvem autorizada ou ligada, desligar
+  é 409 `online-llm-in-use` (desligue a nuvem antes); já no valor: sem gravar; sessão de Hub: 404; auditado
+  `space.online_llm.changed`; grava só por `SpaceRepository.setAllowOnlineLlm`; `GET /spaces/:id` traz
+  `cloud.allowOnlineLlm`. `GET /spaces/:spaceId/cloud` (membro ou quem decide) -> `state`
   `off|authorized|active`. **Sessão aberta por um Hub** (`POST /hub/user-sessions`, `hubId` no `AuthContext`) nunca
   decide: aceitar o termo, autorizar, ligar e desligar dão o mesmo 404 de quem está fora (`organization-not-found` /
   `space-not-found`, `refuseHubSession`, antes de qualquer leitura; o padrão dos assuntos para o que a sessão de Hub não
-  alcança); ler o estado e o termo continua permitido. Auditoria: `organization.cloud_terms.accepted`, `space.cloud.authorized|activated|deactivated`
+  alcança); ler o estado e o termo continua permitido. Auditoria: `organization.cloud_terms.accepted`, `space.cloud.authorized|activated|deactivated`, `space.online_llm.changed`
   (só ids, versões e contagens). Travas: espaço `FOR UPDATE` -> ciclo vivo `FOR UPDATE` -> cópias -> trechos -> arquivos.
 - **Indexação** (spec §4.2; contrato do manifesto `docs/hubs/space-manifest.md`, com o vetor do UUID v5;
   `application/indexing/`): duas filas do pg-boss registradas em `CloudSpaceJobs` (`cloud.index-space`, uma por espaço
@@ -1765,14 +1774,11 @@ Os valores do `.env.example` para os segredos são **só de desenvolvimento**; p
     sinal, sem laço); instância que cai segurando uma tarefa com chave bloqueia a chave até a expiração (15 min); com
     embeddings/modelo fora do ar por muito tempo, a nuvem devolve a mensagem e olha de novo a cada 10 min (cada rodada
     são 3 tentativas; as que chegam ao modelo são pagas); o desligar roda todos os assuntos do espaço numa transação e o
-    COMMIT dela segura o advisory lock dos assuntos (mesmo custo das cascatas documentadas); não há rota para mudar `spaces.allow_online_llm` (padrão `true`; autorizar exige `true`); a confirmação do documento por texto
+    COMMIT dela segura o advisory lock dos assuntos (mesmo custo das cascatas documentadas); a confirmação do documento por texto
     livre depende do julgamento do modelo (o botão `documentDecision` é a forma segura); o documento grava só no espaço
     do assunto (gravar num espaço mais restrito é conselho, a pessoa faz).
-- **Agente do PC** (spec pc-agent): (a) **prazo vencido responde ~30 s depois:** a varredura sinaliza `immediate`, mas
-  `nextResponderStep` conta a janela do Hub de novo a partir do `requeued_at` (não sabe que a volta à fila foi um prazo
-  vencido); decidir se a nuvem responde na hora (precisa marcar o motivo na mensagem) ou se os 30 s ficam. Os 30 s
-  também deixam um agente instável (cai e volta) dar ack de novo dentro da janela e pegar mais 15 min, e assim
-  repetidamente, sem a nuvem nunca responder: esse é o argumento real para responder na hora mais adiante; (b) a
+- **Agente do PC** (spec pc-agent): (a) resolvido (decisão B8, 27/11/2026): prazo vencido = a nuvem responde na hora
+  (`requeued_lease_expired`); (b) a
   retenção de `agent_issued_proposals` é de 30 dias desde a emissão (`cloud.agent-proposal-retention`): uma proposta
   mais velha deixa de valer e o agente propõe de novo (janela confirmada pelo Jonas, 26/11/2026); (c) o app precisa
   mostrar o cartão da proposta de documento numa mensagem do agente (repo do app); (d) apertar o validador da ACL exige
@@ -1839,7 +1845,7 @@ Os valores do `.env.example` para os segredos são **só de desenvolvimento**; p
   | anexo do assunto: intenção, confirmação e apagar (`POST .../:id/attachments`, `POST .../:id/attachments/:attachmentId/confirm`, `DELETE .../:id/attachments/:attachmentId`; a URL de download fica no limite geral) | 120/h por usuário / 600/h por Hub, contador próprio por rota |
   | `POST /organizations/:orgId/cloud/terms/accept` (aceite do termo da nuvem ativa) | 30/h por usuário (`userIdTracker`) |
   | `GET /organizations/:orgId/ai-usage` (uso de IA do mês, admins) | 600/h por usuário (`userIdTracker`), contador próprio |
-  | `POST /spaces/:spaceId/cloud/authorize`, `.../activate`, `.../deactivate` (nuvem ativa) | 60/h por usuário, contador próprio por rota |
+  | `POST /spaces/:spaceId/cloud/authorize`, `.../activate`, `.../deactivate`, `PUT .../cloud/online-llm` (nuvem ativa) | 60/h por usuário, contador próprio por rota |
   | `GET /cloud/server-key`, `GET /hub/cloud/server-key`, `GET /organizations/:orgId/cloud/terms`, `GET /spaces/:spaceId/cloud` (leituras da nuvem ativa) | limite geral (300/min por IP) |
   | `GET /conversations/changes` (feed da pessoa) / `GET /hub/conversations/changes` (feed do executor, sondagem longa) | 1200/h por usuário / 1800/h por Hub (ociosa: ~144/h, um pedido a cada 25 s; cada mudança acorda e devolve) |
   Rota com `@Throttle` próprio tem contador próprio (por rota); `@ThrottleGroup(THROTTLE_GROUPS.x, tracker?)`

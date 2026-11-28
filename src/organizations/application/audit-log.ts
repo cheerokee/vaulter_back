@@ -34,6 +34,7 @@ export type AuditAction =
   | 'space.cloud.authorized'
   | 'space.cloud.activated'
   | 'space.cloud.deactivated'
+  | 'space.online_llm.changed'
   | 'hub.claimed'
   | 'hub.deregistered'
   | 'hub.organization.requested'

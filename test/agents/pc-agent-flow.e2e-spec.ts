@@ -125,7 +125,8 @@ describe('pc agent end to end (e2e)', () => {
       await (
         await db()
       ).query(
-        `SELECT pending, acked_by_hub_id, acked_by_cloud, acked_lease_until, requeued_at
+        `SELECT pending, acked_by_hub_id, acked_by_cloud, acked_lease_until, requeued_at,
+                requeued_lease_expired
            FROM conversation_messages WHERE id = $1`,
         [id],
       )
@@ -135,6 +136,7 @@ describe('pc agent end to end (e2e)', () => {
       acked_by_cloud: boolean;
       acked_lease_until: Date | null;
       requeued_at: Date | null;
+      requeued_lease_expired: boolean;
     };
 
   beforeAll(async () => {
@@ -497,14 +499,9 @@ describe('pc agent end to end (e2e)', () => {
       app
         .get(AnswerConversationJob)
         .run({ organizationId: orgId, spaceId, conversationId: conv.id });
-    // Current behavior (Task 13 concern): the job runs now, but the planner counts the Hub window again from
-    // `requeued_at` (30 s, CLOUD_FALLBACK_AFTER_MS), so the first look only reschedules: no ack, no model call. If the
-    // lease expiry ever becomes immediate in the planner too, this block is what changes.
-    const callsBefore = llm.calls.length;
-    await runCloud();
-    expect(llm.calls.length).toBe(callsBefore);
-    expect((await messageRow(again.id)).pending).toBe(true);
-    clock.offsetMs = 31_000;
+    // Decision B8: the message is marked `requeued_lease_expired`, and the planner answers it at once (no new 30 s
+    // Hub window): the first look acks and answers, with the clock not moved.
+    expect(requeued.requeued_lease_expired).toBe(true);
     await runCloud();
     expect(await messageRow(again.id)).toMatchObject({
       pending: false,

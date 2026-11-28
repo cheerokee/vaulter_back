@@ -48,6 +48,8 @@ export type CloudMessageView = {
   cloudAnswerRequested: boolean;
   /** When it last went back to the queue (database clock): the Hub window restarts there. */
   requeuedAt: Date | null;
+  /** It went back to the queue because an agent's ack lease ran out: the cloud answers it at once. */
+  requeuedLeaseExpired: boolean;
   sentAt: Date;
 };
 
@@ -311,6 +313,7 @@ function messageOf(m: ConversationMessage): CloudMessageView {
     ackedByCloud: m.ackedByCloud,
     cloudAnswerRequested: m.cloudAnswerRequested,
     requeuedAt: m.requeuedAt,
+    requeuedLeaseExpired: m.requeuedLeaseExpired,
     sentAt: m.sentAt,
   };
 }
