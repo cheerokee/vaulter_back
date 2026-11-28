@@ -231,6 +231,7 @@ describe('active cloud: term, authorize, switch on, switch off (e2e, real client
       expect(space.body.cloud).toEqual({
         mode: 'encrypted_backup',
         activatedAt: null,
+        allowOnlineLlm: true,
       });
     });
 
@@ -450,15 +451,19 @@ describe('active cloud: term, authorize, switch on, switch off (e2e, real client
         [TEST_QUEUE],
       );
       expect(jobs.map((j) => j.space_id)).toEqual([otherSpaceId]);
+      // Decision B9: the server held the key, so switching off leaves a key rotation pending.
       const [row] = await db<{
         cloud_mode: string;
         cloud_activated_at: Date | null;
-      }>(`SELECT cloud_mode, cloud_activated_at FROM spaces WHERE id = $1`, [
-        spaceId,
-      ]);
+        key_rotation_required: boolean;
+      }>(
+        `SELECT cloud_mode, cloud_activated_at, key_rotation_required FROM spaces WHERE id = $1`,
+        [spaceId],
+      );
       expect(row).toEqual({
         cloud_mode: 'encrypted_backup',
         cloud_activated_at: null,
+        key_rotation_required: true,
       });
       const cycles = await db<{
         deleted_at: Date | null;
@@ -510,6 +515,64 @@ describe('active cloud: term, authorize, switch on, switch off (e2e, real client
         [spaceId],
       );
       expect(cycles[0]!.n).toBe(2);
+    });
+
+    it('allow_online_llm (B10): off = manager or decider, on = decider only; off refused while the cloud is live', async () => {
+      const setOnlineLlm = (u: KeyedUser, allowed: unknown) =>
+        c
+          .http()
+          .put(`/spaces/${spaceId}/cloud/online-llm`)
+          .set(auth(u))
+          .send({ allowed });
+      const refusedWith = async (
+        res: Promise<{ status: number; body: { type?: string } }>,
+        code: string,
+        status: number,
+      ) => {
+        const r = await res;
+        expect(r.status).toBe(status);
+        expect(String(r.body.type)).toMatch(new RegExp(`/${code}$`));
+      };
+      const spaceCloudView = async () =>
+        (
+          await expectStatus(
+            c.http().get(`/spaces/${spaceId}`).set(auth(dave)),
+            200,
+          )
+        ).body.cloud;
+      expect((await spaceCloudView()).allowOnlineLlm).toBe(true);
+      await expectStatus(setOnlineLlm(bob, 'no'), 422);
+      // A reader cannot; the manager turns it off.
+      await expectStatus(setOnlineLlm(dave, false), 403);
+      expect((await expectStatus(setOnlineLlm(bob, false), 200)).body).toEqual({
+        spaceId,
+        allowOnlineLlm: false,
+      });
+      expect((await spaceCloudView()).allowOnlineLlm).toBe(false);
+      // Off: authorizing is refused.
+      await refusedWith(
+        authorize(carol, spaceId),
+        'online-llm-not-allowed',
+        422,
+      );
+      // Turning on: the manager without the org permission is refused; whoever decides may.
+      await expectStatus(setOnlineLlm(bob, true), 403);
+      await expectStatus(setOnlineLlm(carol, true), 200);
+      expect((await spaceCloudView()).allowOnlineLlm).toBe(true);
+      // Repeating the value writes nothing more.
+      await expectStatus(setOnlineLlm(carol, true), 200);
+      const changes = await db<{ allowed: boolean }>(
+        `SELECT (metadata->>'allowed')::boolean AS allowed FROM audit_logs
+          WHERE organization_id = $1 AND action = 'space.online_llm.changed' ORDER BY created_at, id`,
+        [orgId],
+      );
+      expect(changes.map((r) => r.allowed)).toEqual([false, true]);
+      // While the cloud is authorized, turning off is refused (switch it off first).
+      await expectStatus(authorize(carol, spaceId), 200);
+      await refusedWith(setOnlineLlm(bob, false), 'online-llm-in-use', 409);
+      await deactivate(carol, spaceId).expect(204);
+      await expectStatus(setOnlineLlm(carol, false), 200);
+      await expectStatus(setOnlineLlm(carol, true), 200);
     });
 
     it('an orphan space cannot be authorized (nobody can send the key)', async () => {

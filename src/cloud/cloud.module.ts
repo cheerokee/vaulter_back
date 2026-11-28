@@ -68,6 +68,7 @@ import {
   ActivateSpaceCloudUseCase,
   AuthorizeSpaceCloudUseCase,
   DeactivateSpaceCloudUseCase,
+  SetSpaceOnlineLlmUseCase,
   GetSpaceCloudUseCase,
 } from './application/space-cloud.use-cases.js';
 import {
@@ -189,6 +190,7 @@ export function createLanguageModel(config: ConfigService): LanguageModel {
     AuthorizeSpaceCloudUseCase,
     ActivateSpaceCloudUseCase,
     DeactivateSpaceCloudUseCase,
+    SetSpaceOnlineLlmUseCase,
     { provide: CloudFileRepository, useClass: CloudFileTypeormRepository },
     { provide: CloudChunkRepository, useClass: CloudChunkSqlRepository },
     { provide: BackupObjectOpener, useClass: SodiumBackupObjectOpener },

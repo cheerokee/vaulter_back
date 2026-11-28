@@ -92,6 +92,7 @@ export function messageToDomain(
       ackedLeaseUntil: e.ackedLeaseUntil,
       answersMessageId: e.answersMessageId,
       requeuedAt: e.requeuedAt,
+      requeuedLeaseExpired: e.requeuedLeaseExpired,
       sentAt: e.sentAt,
       createdAt: e.createdAt,
       deletedAt: e.deletedAt,

@@ -67,6 +67,18 @@ describe('responder rules', () => {
     expect(plan([m], 150_000).kind).toBe('answer');
   });
 
+  it('back in the queue because an agent lease ran out: at once, no new Hub window (B8)', () => {
+    const m = person(0, {
+      requeuedAt: at(120_000),
+      requeuedLeaseExpired: true,
+    });
+    expect(plan([m], 120_001)).toEqual({
+      kind: 'answer',
+      message: m,
+      resume: false,
+    });
+  });
+
   it('"responder pela nuvem" (conversation, message, or a later message) and no executor Hub: at once', () => {
     const first = person(0);
     expect(plan([first], 1, { cloudAnswer: true }).kind).toBe('answer');

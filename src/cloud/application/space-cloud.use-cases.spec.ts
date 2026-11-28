@@ -29,6 +29,7 @@ import {
   ActivateSpaceCloudUseCase,
   AuthorizeSpaceCloudUseCase,
   DeactivateSpaceCloudUseCase,
+  SetSpaceOnlineLlmUseCase,
 } from './space-cloud.use-cases.js';
 
 const ORG = '019a0000-0000-7000-8000-00000000000a';
@@ -123,6 +124,9 @@ function setup() {
     markActive: vi.fn(t('spaceCloud.markActive', async () => undefined)),
     markEncryptedBackup: vi.fn(
       t('spaceCloud.markEncryptedBackup', async () => undefined),
+    ),
+    setAllowOnlineLlm: vi.fn(
+      t('spaceCloud.setAllowOnlineLlm', async () => undefined),
     ),
   };
   const keyring = {
@@ -554,6 +558,97 @@ describe('DeactivateSpaceCloudUseCase', () => {
     await uc(k).execute(actor(ADMIN), SPACE);
     expect(k.activations.end).toHaveBeenCalled();
     expect(k.spaceCloud.markEncryptedBackup).not.toHaveBeenCalled();
+  });
+});
+
+describe('SetSpaceOnlineLlmUseCase (decision B10)', () => {
+  const uc = (k: ReturnType<typeof setup>) =>
+    new SetSpaceOnlineLlmUseCase(
+      k.deps.access,
+      k.deps.spaceCloud,
+      k.deps.activations,
+      k.deps.audit,
+      k.deps.uow,
+    );
+
+  it('turning off: the manager or whoever decides, with no live cycle; audited', async () => {
+    const k = setup();
+    k.access.lockAsManagerOrDecider.mockImplementationOnce(async () => space());
+    expect(await uc(k).execute(actor(MANAGER), SPACE, false)).toEqual({
+      spaceId: SPACE,
+      allowOnlineLlm: false,
+    });
+    expect(k.access.lockAsManagerOrDecider).toHaveBeenCalledWith(
+      SPACE,
+      MANAGER,
+    );
+    expect(k.access.lockAsDecider).not.toHaveBeenCalled();
+    // The space lock (mocked once, untraced) comes before the live cycle, then the write.
+    expect(k.trace).toEqual([
+      'activations.lockLive',
+      'spaceCloud.setAllowOnlineLlm',
+    ]);
+    expect(k.audit.record).toHaveBeenCalledWith({
+      organizationId: ORG,
+      userId: MANAGER,
+      action: 'space.online_llm.changed',
+      metadata: { spaceId: SPACE, allowed: false },
+    });
+  });
+
+  it('turning off while the cloud is authorized or on: 409 online-llm-in-use, nothing written', async () => {
+    const k = setup();
+    k.access.lockAsManagerOrDecider.mockImplementationOnce(async () => space());
+    k.liveOnce(authorizedActivation());
+    await expect(
+      uc(k).execute(actor(MANAGER), SPACE, false),
+    ).rejects.toMatchObject({ code: 'online-llm-in-use' });
+    expect(k.spaceCloud.setAllowOnlineLlm).not.toHaveBeenCalled();
+    expect(k.audit.record).not.toHaveBeenCalled();
+  });
+
+  it('turning on: only whoever decides', async () => {
+    const k = setup();
+    k.access.lockAsDecider.mockImplementationOnce(async () =>
+      space({ allowOnlineLlm: false }),
+    );
+    expect(await uc(k).execute(actor(ADMIN), SPACE, true)).toEqual({
+      spaceId: SPACE,
+      allowOnlineLlm: true,
+    });
+    expect(k.access.lockAsManagerOrDecider).not.toHaveBeenCalled();
+    expect(k.activations.lockLive).not.toHaveBeenCalled();
+    expect(k.spaceCloud.setAllowOnlineLlm).toHaveBeenCalledWith(
+      ORG,
+      SPACE,
+      true,
+    );
+  });
+
+  it('already at the value: returns it, writes and audits nothing', async () => {
+    const k = setup();
+    expect(await uc(k).execute(actor(ADMIN), SPACE, true)).toEqual({
+      spaceId: SPACE,
+      allowOnlineLlm: true,
+    });
+    expect(k.spaceCloud.setAllowOnlineLlm).not.toHaveBeenCalled();
+    expect(k.audit.record).not.toHaveBeenCalled();
+  });
+
+  it('a session opened through a Hub: 404 space-not-found before any lock', async () => {
+    const k = setup();
+    await expect(
+      uc(k).execute(
+        {
+          userId: ADMIN,
+          sessionId: 's',
+          hubId: '019a0000-0000-7000-8000-0000000000d1',
+        },
+        SPACE,
+        false,
+      ),
+    ).rejects.toMatchObject({ code: 'space-not-found' });
+    expect(k.trace).toEqual([]);
   });
 });
 

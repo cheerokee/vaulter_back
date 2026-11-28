@@ -42,7 +42,11 @@ export class GetSpaceUseCase {
         trashBytes: await this.usage.trashBytes(space.organizationId, space.id),
       },
       roomHubs: await this.room.roomHubs(space.organizationId, space.id),
-      cloud: { mode: space.cloudMode, activatedAt: space.cloudActivatedAt },
+      cloud: {
+        mode: space.cloudMode,
+        activatedAt: space.cloudActivatedAt,
+        allowOnlineLlm: space.allowOnlineLlm,
+      },
     };
     if (roleKey !== 'space_manager') return view;
     return {

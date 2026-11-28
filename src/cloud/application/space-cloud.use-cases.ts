@@ -209,7 +209,8 @@ export class ActivateSpaceCloudUseCase {
 // ainda esperam (`CloudSpaceJobs`), encerra o ciclo (lápide com quem desligou) e volta o espaço a `encrypted_backup`.
 // Uma tarefa já RODANDO (com a chave aberta) não grava depois disto: ela confere o espaço FOR SHARE na transação em que
 // grava (`SpaceCloud.lockActiveForWrite`), e esta segura o espaço FOR UPDATE até o COMMIT.
-// O backup cifrado não muda. Desligar um espaço autorizado e ainda não ligado cancela a autorização. Nada vivo:
+// O backup cifrado não muda, mas o espaço fica com troca de chave pendente (decisão B9, 27/11/2026: o servidor teve a
+// chave e conta como um membro que saiu; até a troca, envio novo do backup dá 409). Desligar um espaço autorizado e ainda não ligado cancela a autorização. Nada vivo:
 // idempotente (sem gravar nem auditar). Travas: espaço FOR UPDATE -> ciclo vivo FOR UPDATE -> cópias. Auditado
 // `space.cloud.deactivated`.
 @Injectable()
@@ -273,6 +274,56 @@ export class DeactivateSpaceCloudUseCase {
         filesDeleted,
         jobsCancelled,
       },
+    });
+  }
+}
+
+export type SpaceOnlineLlmView = { spaceId: string; allowOnlineLlm: boolean };
+
+// `spaces.allow_online_llm` (decisão B10 do Jonas, 27/11/2026): o espaço pode ir para um modelo de linguagem online
+// (autorizar a nuvem ativa exige ligado). Desligar (proteger) = o Gestor do espaço ou quem decide; ligar (abrir) = só
+// quem decide (`org.members.manage`, a mesma permissão que autoriza a nuvem; o Gestor sem ela: 403, admin fora da
+// organização/espaço: 404). Com um ciclo vivo (nuvem autorizada ou ligada), desligar é 409 `online-llm-in-use`:
+// desligue a nuvem antes. Sessão aberta por um Hub: o mesmo 404 de quem está fora. Já no valor pedido: devolve sem
+// gravar nem auditar. Travas: espaço FOR UPDATE -> ciclo vivo FOR UPDATE (a ordem de ligar/desligar). Auditado
+// `space.online_llm.changed` (só o id e o valor novo).
+@Injectable()
+export class SetSpaceOnlineLlmUseCase {
+  constructor(
+    private readonly access: CloudSpaceAccess,
+    private readonly spaceCloud: SpaceCloud,
+    private readonly activations: SpaceActivationRepository,
+    private readonly audit: AuditLog,
+    private readonly uow: UnitOfWork,
+  ) {}
+
+  async execute(
+    actor: Actor,
+    spaceId: string,
+    allowed: boolean,
+  ): Promise<SpaceOnlineLlmView> {
+    refuseHubSession(actor, spaceNotFound);
+    return this.uow.run(async () => {
+      const space = allowed
+        ? await this.access.lockAsDecider(spaceId, actor.userId)
+        : await this.access.lockAsManagerOrDecider(spaceId, actor.userId);
+      const orgId = space.organizationId;
+      if (space.allowOnlineLlm === allowed) {
+        return { spaceId: space.id, allowOnlineLlm: allowed };
+      }
+      if (!allowed) {
+        SpaceActivationRules.assertCanDisallowOnlineLlm(
+          await this.activations.lockLive(orgId, space.id),
+        );
+      }
+      await this.spaceCloud.setAllowOnlineLlm(orgId, space.id, allowed);
+      await this.audit.record({
+        organizationId: orgId,
+        userId: actor.userId,
+        action: 'space.online_llm.changed',
+        metadata: { spaceId: space.id, allowed },
+      });
+      return { spaceId: space.id, allowOnlineLlm: allowed };
     });
   }
 }

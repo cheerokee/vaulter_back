@@ -35,11 +35,11 @@ type Resolved = {
 
 // Varredura do prazo do ack do agente (spec pc-agent §5.3, "Prazo do ack do agente"): tarefa agendada do pg-boss, a
 // cada minuto. Um ack de Hub `pc` vencido (`acked_lease_until`, relógio do banco) sem resposta desse Hub volta a
-// `pending` (`requeued_at` novo, prazo e ack limpos), o que dispara `CloudReservePendingHooks` (motivo `requeued`,
-// `immediate`: o agente já teve os 15 min dele) dentro do mesmo unit of work, e a nuvem de reserva responde só com
-// conhecimento. Hoje a tarefa da nuvem começa na hora, mas `nextResponderStep` conta os 30 s do Hub de novo a partir do
-// `requeued_at`: a resposta sai ~30 s depois da varredura (CLAUDE.md, Pendências, "Agente do PC"). Mensagem já respondida pelo agente (mensagem dele com `answers_message_id` = ela) ou apagada: só o
-// prazo sai.
+// `pending` (`requeued_at` novo, `requeued_lease_expired = true`, prazo e ack limpos), o que dispara
+// `CloudReservePendingHooks` (motivo `requeued`, `immediate`: o agente já teve os 15 min dele) dentro do mesmo unit of
+// work, e a nuvem de reserva responde só com conhecimento, NA HORA: com a marca, `nextResponderStep` não abre uma nova
+// janela de 30 s do Hub (decisão B8, 27/11/2026). Mensagem já respondida pelo agente (mensagem dele com
+// `answers_message_id` = ela) ou apagada: só o prazo sai.
 // Depois disso o agente atrasado perde a vez como um Hub que perdeu a mensagem: passo e renovação 409
 // `brain-step-not-owned` (`AgentTurn`: a mensagem não é mais dele) e, pega pela nuvem, ack 404 `message-not-found`.
 // Como o executor perdido (`ConversationsExecutorLostHook`): os candidatos vêm do contexto `app.agent_lease_sweep` (só

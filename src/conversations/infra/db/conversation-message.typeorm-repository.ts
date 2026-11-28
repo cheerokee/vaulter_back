@@ -110,7 +110,8 @@ export class ConversationMessageTypeormRepository extends ConversationMessageRep
       m.query(
         `UPDATE conversation_messages msg
             SET pending = true, acked_at = NULL, acked_by_hub_id = NULL, acked_by_cloud = false,
-                acked_lease_until = NULL, requeued_at = clock_timestamp(), updated_at = now()
+                acked_lease_until = NULL, requeued_at = clock_timestamp(),
+                requeued_lease_expired = false, updated_at = now()
           WHERE msg.organization_id = $1 AND msg.conversation_id = $2 AND ${acked}
             AND msg.deleted_at IS NULL
             AND NOT EXISTS (
@@ -188,7 +189,8 @@ export class ConversationMessageTypeormRepository extends ConversationMessageRep
       const raw: unknown = await m.query(
         `UPDATE conversation_messages msg
             SET pending = true, acked_at = NULL, acked_by_hub_id = NULL, acked_by_cloud = false,
-                acked_lease_until = NULL, requeued_at = clock_timestamp(), updated_at = now()
+                acked_lease_until = NULL, requeued_at = clock_timestamp(),
+                requeued_lease_expired = true, updated_at = now()
           WHERE msg.organization_id = $1 AND msg.conversation_id = $2
             AND msg.acked_lease_until IS NOT NULL AND msg.acked_lease_until <= $3
             AND msg.author_user_id IS NOT NULL AND msg.deleted_at IS NULL

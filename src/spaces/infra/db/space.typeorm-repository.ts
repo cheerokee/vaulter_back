@@ -70,6 +70,21 @@ export class SpaceTypeormRepository extends SpaceRepository {
     );
   }
 
+  async setAllowOnlineLlm(
+    orgId: string,
+    spaceId: string,
+    allowed: boolean,
+  ): Promise<void> {
+    await runInOrganizationScope(this.dataSource, orgId, (m) =>
+      m
+        .getRepository(SpaceTypeormEntity)
+        .update(
+          { id: spaceId, organizationId: orgId },
+          { allowOnlineLlm: allowed },
+        ),
+    );
+  }
+
   async findById(orgId: string, spaceId: string): Promise<Space | null> {
     if (!validate(spaceId)) return null;
     const row = await runInOrganizationScope(this.dataSource, orgId, (m) =>

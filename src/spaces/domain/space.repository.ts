@@ -42,6 +42,12 @@ export abstract class SpaceRepository {
     mode: CloudMode,
     activatedAt: Date | null,
   ): Promise<void>;
+  /** The only write of `allow_online_llm` (the `save` never touches it). The caller holds the space row `FOR UPDATE`. */
+  abstract setAllowOnlineLlm(
+    orgId: string,
+    spaceId: string,
+    allowed: boolean,
+  ): Promise<void>;
   /**
    * Reads the space with `SELECT ... FOR UPDATE`. REQUIRES an active unit of work: key rotation and adding
    * members must serialize on it so nobody is left out of a new key version.

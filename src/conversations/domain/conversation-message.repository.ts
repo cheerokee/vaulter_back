@@ -61,7 +61,8 @@ export abstract class ConversationMessageRepository {
   /**
    * The agent's ack ran out (spec pc-agent §5.3): every live person's message of the conversation whose lease ended
    * (database clock, read ONCE for the whole call) and that has no answer of the agent (`answeredBy`) goes back to
-   * `pending` (`requeued_at` new, ack and lease cleared), like `requeueAckedBy`; the other leases expired at that same
+   * `pending` (`requeued_at` new, `requeued_lease_expired` set, ack and lease cleared), like `requeueAckedBy` (which
+   * clears the mark); the other leases expired at that same
    * instant (answered or tombstoned messages) are just cleared, the ack untouched. Returns the requeued ids and how many
    * leases were only cleared. Inside `UnitOfWork.run`, with the conversation locked, in a PARTICIPANT's scope.
    */

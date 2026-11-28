@@ -201,7 +201,10 @@ Perguntas que ficaram da implementação (para o Jonas):
   anti-objetivo pede nada legível depois de desligar.
 - **Quem decide** na empresa = permissão `org.members.manage` (`org_admin` hoje); na pessoal, a própria pessoa.
 - **`allow_online_llm`** é exigido ao autorizar (422 `online-llm-not-allowed`), não ligado automaticamente; o padrão é
-  `true` e ainda não há rota para mudá-lo.
+  `true`. Rota `PUT /spaces/:spaceId/cloud/online-llm` (decisão B10 do Jonas, 27/11/2026): desligar = o Gestor ou quem
+  decide; ligar = só quem decide; com a nuvem autorizada ou ligada, desligar é 409 `online-llm-in-use`.
+- **Desligar exige troca da chave do espaço** (decisão B9 do Jonas, 27/11/2026): o espaço volta a `encrypted_backup`
+  com `keyRotationRequired`, como quando um membro sai (o servidor teve a chave).
 - **Orçamento** em micro-dólares (`bigint`, padrão 0). Autorizar exige orçamento > 0 com um erro próprio, 422
   `ai-budget-required` (0 = não contratado); `ai-budget-exceeded` é a recusa interna das tarefas (nenhuma rota HTTP a
   devolve): a indexação pausa e retoma sozinha (aumento ou mês novo), e num assunto a mensagem fica `pending` para o

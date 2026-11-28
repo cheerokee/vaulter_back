@@ -33,6 +33,7 @@ export function spaceResponse(v: SpaceView | SpaceDetailsView) {
           cloud: {
             mode: v.cloud.mode,
             activatedAt: iso(v.cloud.activatedAt),
+            allowOnlineLlm: v.cloud.allowOnlineLlm,
           },
         }
       : {}),
